@@ -9,7 +9,9 @@ import {
   persistentMultipleTabManager,
   doc, setDoc, deleteDoc, onSnapshot,
 } from 'firebase/firestore';
-import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import {
+  getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged,
+} from 'firebase/auth';
 
 // ============ ★ ここを書き換え ★ ============
 // Firebase コンソール > プロジェクトの設定 > マイアプリ > SDKの設定と構成 から取得した値を貼り付けてください
@@ -25,6 +27,9 @@ const firebaseConfig = {
 // チーム共有のワークスペースID（同じIDの人同士で同じデータを共有）
 // 用途や所属に応じて自由に変更してください（例: "liebe-asia-team", "tokyo-office" など）
 export const WORKSPACE_ID = "liebe-asia-team";
+
+// 許可する Gmail アドレス（ここに無い人はサインインしてもサインアウトされる）
+const ALLOWED_EMAILS = ['kei.n412@gmail.com'];
 // =============================================
 
 const app = initializeApp(firebaseConfig);
@@ -32,20 +37,39 @@ const db = initializeFirestore(app, {
   localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
 });
 const auth = getAuth(app);
+const googleProvider = new GoogleAuthProvider();
 
-// 匿名認証（ユーザー登録不要）。一度認証されると、その端末のブラウザでは継続利用される
-export const authReady = new Promise((resolve) => {
-  onAuthStateChanged(auth, (user) => {
-    if (user) {
-      resolve(true);
-    } else {
-      signInAnonymously(auth).catch((e) => {
-        console.error('匿名認証に失敗しました:', e);
-        resolve(false);
+export async function signIn() {
+  return signInWithPopup(auth, googleProvider);
+}
+
+export async function signOutUser() {
+  return signOut(auth);
+}
+
+// 認証状態の購読。callback({ user, allowed, deniedEmail, ready })
+// - 未サインイン: { user: null, allowed: false, ready: true }
+// - 許可ユーザー: { user: {...}, allowed: true, ready: true }
+// - 非許可ユーザー: 自動サインアウト後 { user: null, allowed: false, deniedEmail, ready: true }
+export function subscribeAuth(callback) {
+  return onAuthStateChanged(auth, async (user) => {
+    if (!user) {
+      callback({ user: null, allowed: false, ready: true });
+      return;
+    }
+    const email = user.email || '';
+    if (ALLOWED_EMAILS.includes(email)) {
+      callback({
+        user: { email, displayName: user.displayName, photoURL: user.photoURL },
+        allowed: true,
+        ready: true,
       });
+    } else {
+      await signOut(auth);
+      callback({ user: null, allowed: false, deniedEmail: email, ready: true });
     }
   });
-});
+}
 
 // Claude.ai の window.storage と同じ形のAPI
 export const storage = {
