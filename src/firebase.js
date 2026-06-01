@@ -3,7 +3,12 @@
 // 詳しい手順は同梱の SETUP.md を参照してください。
 
 import { initializeApp } from 'firebase/app';
-import { getFirestore, doc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
+import {
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+  doc, setDoc, deleteDoc, onSnapshot,
+} from 'firebase/firestore';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 
 // ============ ★ ここを書き換え ★ ============
@@ -23,7 +28,9 @@ export const WORKSPACE_ID = "liebe-asia-team";
 // =============================================
 
 const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
+const db = initializeFirestore(app, {
+  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+});
 const auth = getAuth(app);
 
 // 匿名認証（ユーザー登録不要）。一度認証されると、その端末のブラウザでは継続利用される
