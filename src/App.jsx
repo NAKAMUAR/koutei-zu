@@ -481,6 +481,51 @@ function scheduleTasks(tasks, settings, projectOrder) {
   return { active: scheduled, done };
 }
 
+// 経過進捗（時間経過ベース）：slots のうち現在時刻 now より前の部分の合計時間（h）
+function elapsedHoursForSlots(slots, now) {
+  if (!slots || slots.length === 0) return 0;
+  const nowTs = now.getTime();
+  let h = 0;
+  for (const slot of slots) {
+    const dayTs = startOfDay(slot.date).getTime();
+    const startTs = dayTs + slot.startMin * 60000;
+    const endTs = dayTs + slot.endMin * 60000;
+    if (nowTs >= endTs) h += (slot.endMin - slot.startMin) / 60;
+    else if (nowTs > startTs) h += (nowTs - startTs) / 3600000;
+  }
+  return h;
+}
+// 2つの時刻の間の「営業時間（稼働時間）」を担当者ベースで合計（土日・休日・不在を除外）
+function workingHoursBetweenTs(fromTs, toTs, assignee, settings) {
+  if (toTs <= fromTs) return 0;
+  let total = 0;
+  let d = startOfDay(new Date(fromTs));
+  const lastDay = startOfDay(new Date(toTs)).getTime();
+  let guard = 0;
+  while (d.getTime() <= lastDay && guard++ < 100000) {
+    const free = dayFreeIntervals(assignee, d, settings, {}, settings.absences || []);
+    const dayTs = d.getTime();
+    for (const [s, e] of free) {
+      const segS = dayTs + s * 60000, segE = dayTs + e * 60000;
+      const lo = Math.max(segS, fromTs), hi = Math.min(segE, toTs);
+      if (hi > lo) total += (hi - lo) / 3600000;
+    }
+    d = addDays(d, 1);
+  }
+  return total;
+}
+
+// 案件の進行中タスクの最終 scheduledEnd を timestamp で返す（無ければ null）
+function projectEndTs(tasks) {
+  let best = null;
+  for (const t of tasks) {
+    if (t.status === 'done' || !t.scheduledEnd) continue;
+    const ts = startOfDay(t.scheduledEnd).getTime() + (t.scheduledEndMin || 0) * 60000;
+    if (best == null || ts > best) best = ts;
+  }
+  return best;
+}
+
 // 編集中に「フォーム由来として除外すべき既存タスクID」を集める
 function formEditIds(form) {
   const s = new Set();
@@ -618,6 +663,12 @@ export default function App() {
   const [completeTarget, setCompleteTarget] = useState(null);
   // 開始時間が移動する場合の確認モーダル
   const [startMoveConfirm, setStartMoveConfirm] = useState(null);
+  // 現在時刻ティッカー（1分ごと更新）。経過進捗・現在時刻ライン・終了超過検知に使う
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 60000);
+    return () => clearInterval(id);
+  }, []);
   const [showSettings, setShowSettings] = useState(false);
   const [selectedAssignee, setSelectedAssignee] = useState(null);
   const [auth, setAuth] = useState({ user: null, allowed: false, ready: false });
@@ -758,9 +809,15 @@ export default function App() {
   const saveSettings = async (newSettings) => {
     setSettings(newSettings);
     try {
-      const { morningStart, morningEnd, afternoonStart, afternoonEnd, startDate, startTime, lastAdvancedDate, absences } = newSettings;
-      await storage.set('settings', JSON.stringify({ morningStart, morningEnd, afternoonStart, afternoonEnd, startDate, startTime, lastAdvancedDate, absences: absences || [] }));
+      const { morningStart, morningEnd, afternoonStart, afternoonEnd, startDate, startTime, lastAdvancedDate, absences, endPromptState } = newSettings;
+      await storage.set('settings', JSON.stringify({ morningStart, morningEnd, afternoonStart, afternoonEnd, startDate, startTime, lastAdvancedDate, absences: absences || [], endPromptState: endPromptState || {} }));
     } catch (e) { console.error(e); }
+  };
+  // 終了超過ポップアップの制御状態（案件ごとの snooze / 表示済み終了予定）を更新
+  const setEndPromptFor = (projectName, patch) => {
+    const eps = { ...(settings.endPromptState || {}) };
+    eps[projectName] = { ...(eps[projectName] || {}), ...patch };
+    saveSettings({ ...settings, endPromptState: eps });
   };
 
   // 休日・不在の追加／削除
@@ -1316,6 +1373,68 @@ export default function App() {
     }));
   };
 
+  // ===== 終了予定超過ポップアップ（機能B） =====
+  // ① 完了（終了時間つき）
+  const endPromptComplete = (projectName, actualEndStr) => {
+    const ae = actualEndStr || null;
+    const completedAtMs = ae ? new Date(ae).getTime() : Date.now();
+    saveTasks(prev => normalizePriorities(prev.map(t =>
+      (t.projectName === projectName && t.status !== 'done')
+        ? { ...t, status: 'done', completedHours: t.hours, completedAt: completedAtMs, actualEnd: ae }
+        : t
+    )));
+    setView('done');
+  };
+  // ② 追加修正（視点の最後尾にステップを追加）
+  const endPromptAddRevision = (projectName, viewpointName, stepName, hours) => {
+    const h = Math.max(0, parseFloat(hours) || 0);
+    if (h <= 0) { alert('追加時間を入力してください'); return; }
+    const vpTasks = tasksRef.current.filter(t => t.projectName === projectName && t.viewpointName === viewpointName);
+    if (vpTasks.length === 0) { alert('対象の視点が見つかりません'); return; }
+    const ref = vpTasks.reduce((a, b) => ((b.createdAt || 0) > (a.createdAt || 0) ? b : a), vpTasks[0]);
+    const maxOrder = vpTasks.reduce((m, t) => Math.max(m, t.stepOrder ?? 0), 0);
+    const base = Date.now();
+    const rec = {
+      id: `task-${base}-${Math.random().toString(36).slice(2, 7)}`,
+      projectName,
+      projectNameInternal: ref.projectNameInternal || '',
+      companyName: ref.companyName || '',
+      customerContact: ref.customerContact || '',
+      viewpointName,
+      stepName: (stepName || '追加修正').trim() || '追加修正',
+      stepOrder: maxOrder + 1,
+      assignee: ref.assignee,
+      priority: ref.priority,
+      hours: h, completedHours: 0,
+      manualStart: null, status: 'pending', completedAt: null, createdAt: base,
+    };
+    saveTasks(prev => normalizePriorities([...prev, rec]));
+  };
+  // ③ 遅延（新しい終了予定に合わせて最後のステップに時間を加算＋遅延履歴）
+  const endPromptDelay = (projectName, currentEndTs, newEndTs) => {
+    if (newEndTs <= currentEndTs) { alert('新しい終了予定は現在の終了予定より後にしてください'); return; }
+    const active = tasksRef.current.filter(t => t.projectName === projectName && t.status !== 'done' && t.scheduledEnd);
+    if (active.length === 0) { alert('対象の進行中タスクがありません'); return; }
+    // 終了予定を決めている最後のステップ
+    const last = active.reduce((a, b) => {
+      const ta = startOfDay(a.scheduledEnd).getTime() + (a.scheduledEndMin || 0) * 60000;
+      const tb = startOfDay(b.scheduledEnd).getTime() + (b.scheduledEndMin || 0) * 60000;
+      return tb > ta ? b : a;
+    });
+    const addH = workingHoursBetweenTs(currentEndTs, newEndTs, last.assignee, settings);
+    if (addH <= 0) { alert('差分の稼働時間が計算できませんでした'); return; }
+    const delay = { at: Date.now(), from: currentEndTs, to: newEndTs };
+    saveTasks(prev => normalizePriorities(prev.map(t =>
+      t.id === last.id
+        ? { ...t, hours: Math.round((t.hours + addH) * 10) / 10, delays: [...(t.delays || []), delay] }
+        : t
+    )));
+  };
+  // ④ 後で（30分スヌーズ）
+  const endPromptSnooze = (projectName, endTs) => {
+    setEndPromptFor(projectName, { snoozedUntil: Date.now() + 30 * 60000, lastPromptedEnd: endTs });
+  };
+
   const setTaskCompletedHours = (id, completed) => {
     if (isNaN(completed) || completed < 0) return;
     saveTasks(prev => normalizePriorities(prev.map(t => {
@@ -1375,6 +1494,30 @@ export default function App() {
   };
 
   const scheduled = useMemo(() => scheduleTasks(tasks, settings, projectOrder), [tasks, settings, projectOrder]);
+
+  // 終了予定を過ぎた案件（機能B）。1分ごとの now と endPromptState で再評価
+  const overdueProjects = useMemo(() => {
+    const byProject = new Map();
+    for (const t of scheduled.active) {
+      const p = t.projectName || '';
+      if (!p) continue;
+      if (!byProject.has(p)) byProject.set(p, []);
+      byProject.get(p).push(t);
+    }
+    const nowTs = now.getTime();
+    const eps = settings.endPromptState || {};
+    const result = [];
+    for (const [p, ptasks] of byProject) {
+      const endTs = projectEndTs(ptasks);
+      if (endTs == null || endTs > nowTs) continue;
+      const st = eps[p] || {};
+      const snoozeActive = st.snoozedUntil && st.snoozedUntil > nowTs && st.lastPromptedEnd === endTs;
+      if (snoozeActive) continue;
+      const assignees = [...new Set(ptasks.map(t => t.assignee).filter(Boolean))];
+      result.push({ projectName: p, tasks: ptasks, endTs, endDate: new Date(endTs), assignees });
+    }
+    return result.sort((a, b) => a.endTs - b.endTs);
+  }, [scheduled.active, now, settings.endPromptState]);
   const projectList = useMemo(() => [...new Set(tasks.map(t => t.projectName))].filter(Boolean), [tasks]);
   const projectInternalList = useMemo(() => [...new Set(tasks.map(t => t.projectNameInternal))].filter(Boolean), [tasks]);
   const viewpointList = useMemo(() => [...new Set(tasks.map(t => t.viewpointName))].filter(Boolean), [tasks]);
@@ -1586,14 +1729,14 @@ export default function App() {
             moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} completeProject={completeProject} completeViewpoint={completeViewpoint}
             handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint}
             projectList={projectList} projectInternalList={projectInternalList} viewpointList={viewpointList} assigneeList={assigneeList}
-            settings={settings}
+            settings={settings} now={now}
             colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
         )}
         {view === 'calendar' && (
-          <CalendarView scheduled={scheduled} settings={settings} colors={colors} fontDisplay={fontDisplay} />
+          <CalendarView scheduled={scheduled} settings={settings} now={now} colors={colors} fontDisplay={fontDisplay} />
         )}
         {view === 'byAssignee' && (
-          <AssigneeView scheduled={scheduled} selectedAssignee={selectedAssignee} setSelectedAssignee={setSelectedAssignee}
+          <AssigneeView scheduled={scheduled} selectedAssignee={selectedAssignee} setSelectedAssignee={setSelectedAssignee} now={now}
             projectOrder={projectOrder} saveProjectOrder={saveProjectOrderPartial}
             handleEdit={handleEdit} handleEditProject={handleEditProject} handleEditViewpoint={handleEditViewpoint}
             handleAddViewpointToProject={handleAddViewpointToProject}
@@ -1652,6 +1795,14 @@ export default function App() {
             になります。このまま登録しますか？
           </p>
         </ConfirmModal>
+      )}
+
+      {overdueProjects.length > 0 && (
+        <EndPromptModal
+          projects={overdueProjects} now={now} settings={settings}
+          onComplete={endPromptComplete} onAddRevision={endPromptAddRevision}
+          onDelay={endPromptDelay} onSnooze={endPromptSnooze}
+          colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
       )}
 
     </div>
@@ -1746,7 +1897,7 @@ function NavButton({ active, onClick, icon, label, badge }) {
 }
 
 // ============ 入力ビュー ============
-function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdit, tasks, scheduled, projectOrder, saveProjectOrder, companyList, customerMaster, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, addProgress, setTaskHours, setTaskCompletedHours, completeProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, projectList, projectInternalList, viewpointList, assigneeList, settings, colors, fontJP, fontDisplay }) {
+function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdit, tasks, scheduled, projectOrder, saveProjectOrder, companyList, customerMaster, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, addProgress, setTaskHours, setTaskCompletedHours, completeProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, projectList, projectInternalList, viewpointList, assigneeList, settings, now, colors, fontJP, fontDisplay }) {
   // お客様担当者の候補：会社名を選んでいればその会社の担当者を優先表示
   const contactOptions = useMemo(() => {
     const rows = customerMaster || [];
@@ -2205,7 +2356,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
         ) : (
           <ViewpointGroupList
             groups={groupByViewpoint(filteredActive)}
-            allActive={filteredActive}
+            allActive={filteredActive} now={now}
             projectOrder={projectOrder} saveProjectOrder={saveProjectOrder}
             handleEdit={handleEdit} handleEditProject={handleEditProject} handleEditViewpoint={handleEditViewpoint}
             handleAddViewpointToProject={handleAddViewpointToProject}
@@ -2221,7 +2372,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
 }
 
 // ============ 視点グループリスト ============
-function ViewpointGroupList({ groups, allActive, projectOrder, saveProjectOrder, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, addProgress, setTaskHours, setTaskCompletedHours, completeProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, assigneeList, colors, fontJP }) {
+function ViewpointGroupList({ groups, allActive, now, projectOrder, saveProjectOrder, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, addProgress, setTaskHours, setTaskCompletedHours, completeProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, assigneeList, colors, fontJP }) {
   // 全タスクのグローバルなインデックス（移動可否判定用）
   const allSortedIds = allActive.map(t => t.id);
 
@@ -2541,7 +2692,7 @@ function ViewpointGroupList({ groups, allActive, projectOrder, saveProjectOrder,
               )}
             </div>
             {!isCollapsed && pg.viewpointGroups.map(group => (
-              <ViewpointCard key={group.key} group={group}
+              <ViewpointCard key={group.key} group={group} now={now}
                 allSortedIds={allSortedIds}
                 companyFirstIds={companyFirstIds} companyLastIds={companyLastIds}
                 handleEdit={handleEdit} handleEditViewpoint={handleEditViewpoint}
@@ -2560,9 +2711,12 @@ function ViewpointGroupList({ groups, allActive, projectOrder, saveProjectOrder,
   );
 }
 
-function ViewpointCard({ group, allSortedIds, companyFirstIds, companyLastIds, handleEdit, handleEditViewpoint, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, addProgress, setTaskHours, setTaskCompletedHours, completeProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, assigneeList, colors, fontJP }) {
+function ViewpointCard({ group, now, allSortedIds, companyFirstIds, companyLastIds, handleEdit, handleEditViewpoint, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, addProgress, setTaskHours, setTaskCompletedHours, completeProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, assigneeList, colors, fontJP }) {
   const projectColor = getProjectColor(group.projectName);
   const progressPct = group.totalHours > 0 ? (group.completedHours / group.totalHours) * 100 : 0;
+  // 経過進捗（時間経過ベース・表示用）
+  const elapsedHours = now ? group.tasks.reduce((s, t) => s + elapsedHoursForSlots(t.slots, now), 0) : 0;
+  const elapsedPct = group.totalHours > 0 ? Math.min(100, (elapsedHours / group.totalHours) * 100) : 0;
   const isMulti = group.tasks.some(t => t.stepName);
 
   const handleAssigneeChange = (val) => {
@@ -2608,7 +2762,8 @@ function ViewpointCard({ group, allSortedIds, companyFirstIds, companyLastIds, h
               }}>{group.companyName}</span>
             )}
             {group.customerContact && <span>担当: {group.customerContact}</span>}
-            <span>完了 {group.completedHours}h / 全 {group.totalHours}h</span>
+            <span style={{ color: '#9c8e5e' }}>経過 {elapsedHours.toFixed(1)}h / 全 {group.totalHours}h</span>
+            <span>完了 {group.completedHours}h</span>
             <span style={{ color: colors.accent, fontWeight: 600 }}>残 {group.remainingHours}h</span>
             {group.scheduledStart && (
               <span style={{ color: colors.accent, fontWeight: 500 }}>
@@ -2616,8 +2771,10 @@ function ViewpointCard({ group, allSortedIds, companyFirstIds, companyLastIds, h
               </span>
             )}
           </div>
-          <div style={{ height: 4, background: '#f0ebde', borderRadius: 2, overflow: 'hidden', marginTop: 6, maxWidth: 360 }}>
-            <div style={{ height: '100%', width: `${progressPct}%`, background: colors.progress, transition: 'width 0.3s' }} />
+          {/* 進捗バー：経過進捗（薄色）の上に実績（濃色）を重ねる */}
+          <div style={{ position: 'relative', height: 5, background: '#f0ebde', borderRadius: 2, overflow: 'hidden', marginTop: 6, maxWidth: 360 }}>
+            <div style={{ position: 'absolute', inset: 0, width: `${elapsedPct}%`, background: '#d8cfa6', transition: 'width 0.3s' }} title={`経過 ${elapsedHours.toFixed(1)}h`} />
+            <div style={{ position: 'absolute', inset: 0, width: `${progressPct}%`, background: colors.progress, transition: 'width 0.3s' }} title={`完了 ${group.completedHours}h`} />
           </div>
         </div>
 
@@ -2690,7 +2847,7 @@ function ViewpointCard({ group, allSortedIds, companyFirstIds, companyLastIds, h
       {group.tasks.map((task, idx) => {
         const globalIdx = allSortedIds.indexOf(task.id);
         return (
-          <StepRow key={task.id} task={task}
+          <StepRow key={task.id} task={task} now={now}
             showStepLabel={isMulti}
             onEdit={() => handleEdit(task)} onDelete={() => handleDelete(task.id)} onToggle={() => toggleStatus(task.id)}
             onMoveUp={() => moveUp(task.id)} onMoveDown={() => moveDown(task.id)}
@@ -2751,7 +2908,7 @@ function AdvanceBar({ pendingDays, pendingHours, todayUncredited, todayWorkingHo
   );
 }
 
-function StepRow({ task, showStepLabel, onEdit, onDelete, onToggle, onMoveUp, onMoveDown, onChangePriority, onAddProgress, onSetHours, onSetCompletedHours, canMoveUp, canMoveDown, isLast, colors, fontJP }) {
+function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveUp, onMoveDown, onChangePriority, onAddProgress, onSetHours, onSetCompletedHours, canMoveUp, canMoveDown, isLast, colors, fontJP }) {
   const [editingPriority, setEditingPriority] = useState(false);
   const [priorityInput, setPriorityInput] = useState(String(task.priority));
   const [customHours, setCustomHours] = useState('');
@@ -2791,6 +2948,8 @@ function StepRow({ task, showStepLabel, onEdit, onDelete, onToggle, onMoveUp, on
   const completed = task.completedHours || 0;
   const remaining = Math.max(0, task.hours - completed);
   const progressPct = task.hours > 0 ? Math.min(100, (completed / task.hours) * 100) : 0;
+  const elapsed = now ? elapsedHoursForSlots(task.slots, now) : 0;
+  const elapsedPct = task.hours > 0 ? Math.min(100, (elapsed / task.hours) * 100) : 0;
   const numStyle = {
     background: 'transparent', border: `1px dashed ${colors.border}`, color: 'inherit',
     padding: '0 6px', borderRadius: 3, cursor: 'pointer',
@@ -2887,6 +3046,7 @@ function StepRow({ task, showStepLabel, onEdit, onDelete, onToggle, onMoveUp, on
             h
             {remaining > 0 && <span style={{ color: colors.accent, fontWeight: 600, marginLeft: 4 }}>残 {remaining}h</span>}
           </span>
+          <span style={{ color: '#9c8e5e' }} title="時間経過ベースの自動進捗">経過 {elapsed.toFixed(1)}h / 全 {task.hours}h</span>
           {task.scheduledStart && (
             <span style={{ color: colors.accent, fontWeight: 500 }}>
               {fmtMD(task.scheduledStart)} {minToTime(task.scheduledStartMin)}
@@ -2900,9 +3060,15 @@ function StepRow({ task, showStepLabel, onEdit, onDelete, onToggle, onMoveUp, on
               開始時間指定あり
             </span>
           )}
+          {task.delays && task.delays.length > 0 && (
+            <span title={`遅延 ${task.delays.length}回`} style={{ fontSize: 10, padding: '1px 5px', background: '#fde0c8', color: '#9a5a12', borderRadius: 2, fontWeight: 600 }}>
+              遅延履歴あり（{task.delays.length}）
+            </span>
+          )}
         </div>
-        <div style={{ height: 4, background: '#f0ebde', borderRadius: 2, overflow: 'hidden', maxWidth: 280 }}>
-          <div style={{ height: '100%', width: `${progressPct}%`, background: colors.progress, transition: 'width 0.3s' }} />
+        <div style={{ position: 'relative', height: 5, background: '#f0ebde', borderRadius: 2, overflow: 'hidden', maxWidth: 280 }}>
+          <div style={{ position: 'absolute', inset: 0, width: `${elapsedPct}%`, background: '#d8cfa6', transition: 'width 0.3s' }} title={`経過 ${elapsed.toFixed(1)}h`} />
+          <div style={{ position: 'absolute', inset: 0, width: `${progressPct}%`, background: colors.progress, transition: 'width 0.3s' }} title={`完了 ${completed}h`} />
         </div>
       </div>
 
@@ -2949,7 +3115,7 @@ const progressBtnStyle = (colors, fontJP) => ({
 });
 
 // ============ カレンダービュー ============
-function CalendarView({ scheduled, settings, colors, fontDisplay }) {
+function CalendarView({ scheduled, settings, now, colors, fontDisplay }) {
   // 今日を基準に「過去30営業日 + 今日 + 未来42営業日」の範囲を表示。
   // 今日を初期スクロールの左端に置き、左スクロールで過去、右スクロールで未来を見られるようにする。
   const today = startOfDay(new Date());
@@ -3014,6 +3180,19 @@ function CalendarView({ scheduled, settings, colors, fontDisplay }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 現在時刻の縦ライン位置（今日の列の中の横位置）
+  let nowLineX = null;
+  if (now && !isNonWorkingDay(now)) {
+    const nowMin = now.getHours() * 60 + now.getMinutes();
+    let frac;
+    if (nowMin <= morningSlot.start) frac = 0;
+    else if (nowMin < morningSlot.end) frac = (nowMin - morningSlot.start) / (morningSlot.end - morningSlot.start) * 0.5;
+    else if (nowMin < afternoonSlot.start) frac = 0.5;
+    else if (nowMin < afternoonSlot.end) frac = 0.5 + (nowMin - afternoonSlot.start) / (afternoonSlot.end - afternoonSlot.start) * 0.5;
+    else frac = 1;
+    nowLineX = labelWidth + todayIndex * dayCellWidth + frac * dayCellWidth;
+  }
+
   if (assignees.length === 0) {
     return (
       <div style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 6, padding: 48, textAlign: 'center', color: colors.textMute }}>
@@ -3042,7 +3221,15 @@ function CalendarView({ scheduled, settings, colors, fontDisplay }) {
       `}</style>
 
       <div ref={scrollRef} className="compact-scroll" style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 6, overflow: 'auto' }}>
-        <div style={{ minWidth: labelWidth + allDates.length * dayCellWidth }}>
+        <div style={{ minWidth: labelWidth + allDates.length * dayCellWidth, position: 'relative' }}>
+          {nowLineX != null && (
+            <div title={`現在時刻 ${minToTime(now.getHours() * 60 + now.getMinutes())}`} style={{
+              position: 'absolute', top: 0, bottom: 0, left: nowLineX, width: 2,
+              background: colors.accent, zIndex: 4, pointerEvents: 'none',
+            }}>
+              <div style={{ position: 'absolute', top: 0, left: -4, width: 10, height: 10, borderRadius: '50%', background: colors.accent }} />
+            </div>
+          )}
           <div style={{ display: 'flex', borderBottom: `1px solid ${colors.border}`, background: '#fbf9f4' }}>
             <div style={{
               width: labelWidth, padding: '10px 12px', fontSize: 11, color: colors.textMute, fontWeight: 500,
@@ -3171,7 +3358,7 @@ function TaskBlock({ task, slot, heightPct, projectColor }) {
   const internal = task.projectNameInternal || '';
   const external = task.projectName || '';
   return (
-    <div title={`#${task.priority} ${internal || external}${internal && external ? ` (${external})` : ''} / ${task.viewpointName}${stepLabel}\n${minToTime(slot.startMin)}〜${minToTime(slot.endMin)} (${slot.hours}h)\n残り ${remaining}h / 全${task.hours}h${task.manualStart ? '\n※開始時間指定あり' : ''}`}
+    <div title={`#${task.priority} ${internal || external}${internal && external ? ` (${external})` : ''} / ${task.viewpointName}${stepLabel}\n${minToTime(slot.startMin)}〜${minToTime(slot.endMin)} (${slot.hours}h)\n残り ${remaining}h / 全${task.hours}h${task.manualStart ? '\n※開始時間指定あり' : ''}${task.delays && task.delays.length ? `\n※遅延履歴あり（${task.delays.length}回）` : ''}`}
       style={{
         height: `${heightPct}%`, minHeight: 0, background: projectColor, color: '#fff',
         padding: '3px 5px', fontSize: 10, lineHeight: 1.25, overflow: 'hidden',
@@ -3201,7 +3388,7 @@ function TaskBlock({ task, slot, heightPct, projectColor }) {
 }
 
 // ============ 担当者別ビュー ============
-function AssigneeView({ scheduled, selectedAssignee, setSelectedAssignee, projectOrder, saveProjectOrder, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, addProgress, setTaskHours, setTaskCompletedHours, completeProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, assigneeList, colors, fontJP, fontDisplay }) {
+function AssigneeView({ scheduled, selectedAssignee, setSelectedAssignee, now, projectOrder, saveProjectOrder, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, addProgress, setTaskHours, setTaskCompletedHours, completeProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, assigneeList, colors, fontJP, fontDisplay }) {
   const assignees = [...new Set(scheduled.active.map(t => t.assignee))];
   if (assignees.length === 0) {
     return (
@@ -3280,7 +3467,7 @@ function AssigneeView({ scheduled, selectedAssignee, setSelectedAssignee, projec
                 </div>
               </div>
             </div>
-            <ViewpointGroupList groups={groups} allActive={allActive}
+            <ViewpointGroupList groups={groups} allActive={allActive} now={now}
               projectOrder={projectOrder} saveProjectOrder={saveProjectOrder}
               handleEdit={handleEdit} handleEditProject={handleEditProject} handleEditViewpoint={handleEditViewpoint}
               handleAddViewpointToProject={handleAddViewpointToProject}
@@ -4204,6 +4391,124 @@ function QuoteModal({ projects, onSelect, onClose, colors, fontJP, fontDisplay }
               </div>
             </button>
           ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============ 終了予定超過の対応ポップアップ（機能B） ============
+function fmtOverdue(ms) {
+  const min = Math.max(0, Math.floor(ms / 60000));
+  if (min < 60) return `${min}分超過`;
+  const h = Math.floor(min / 60), m = min % 60;
+  return m === 0 ? `${h}時間超過` : `${h}時間${m}分超過`;
+}
+function EndPromptModal({ projects, now, settings, onComplete, onAddRevision, onDelay, onSnooze, colors, fontJP, fontDisplay }) {
+  // 展開中のアクション { projectName, action } と各フォーム値
+  const [active, setActive] = useState(null);
+  const [completeEnd, setCompleteEnd] = useState('');
+  const [delayEnd, setDelayEnd] = useState('');
+  const [revVp, setRevVp] = useState('');
+  const [revName, setRevName] = useState('追加修正');
+  const [revHours, setRevHours] = useState('');
+
+  const open = (proj, action) => {
+    setActive({ projectName: proj.projectName, action });
+    if (action === 'complete') setCompleteEnd(dateToDtLocal(now));
+    if (action === 'delay') setDelayEnd(dateToDtLocal(new Date(proj.endTs)));
+    if (action === 'revision') {
+      const vps = [...new Set(proj.tasks.map(t => t.viewpointName).filter(Boolean))];
+      setRevVp(vps[0] || ''); setRevName('追加修正'); setRevHours('');
+    }
+  };
+  const close = () => setActive(null);
+
+  const btn = (bg, brd, col) => ({
+    padding: '7px 12px', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, fontWeight: 600,
+    background: bg, border: `1px solid ${brd}`, color: col, whiteSpace: 'nowrap',
+  });
+  const fieldLabel = { fontSize: 11, color: colors.textMute, marginBottom: 4 };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, padding: 16 }}>
+      <div style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 8, width: '100%', maxWidth: 600, maxHeight: '85vh', display: 'flex', flexDirection: 'column', fontFamily: fontJP, boxShadow: '0 12px 48px rgba(0,0,0,0.25)' }}>
+        <div style={{ padding: '18px 22px', borderBottom: `1px solid ${colors.border}` }}>
+          <h3 style={{ fontFamily: fontDisplay, fontSize: 17, margin: 0, fontWeight: 600, color: colors.accent }}>終了予定を過ぎた案件があります</h3>
+          <p style={{ fontSize: 11, color: colors.textMute, margin: '6px 0 0 0' }}>対応を選んでください（「後で」で30分後に再表示）。</p>
+        </div>
+        <div style={{ overflowY: 'auto', padding: '8px 16px 16px', flex: 1 }}>
+          {projects.map(proj => {
+            const isOpen = active && active.projectName === proj.projectName;
+            const vps = [...new Set(proj.tasks.map(t => t.viewpointName).filter(Boolean))];
+            return (
+              <div key={proj.projectName} style={{ border: `1px solid ${colors.border}`, borderLeft: `4px solid ${getProjectColor(proj.projectName)}`, borderRadius: 6, padding: '12px 14px', marginBottom: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 14, fontWeight: 600 }}>{proj.projectName}</span>
+                  {proj.assignees.length > 0 && <span style={{ fontSize: 11, color: colors.textMute }}>担当: {proj.assignees.join('・')}</span>}
+                </div>
+                <div style={{ fontSize: 11, color: colors.textMute, marginTop: 4, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                  <span>終了予定: {fmtMD(proj.endDate)}({dayName(proj.endDate)}) {minToTime(proj.endDate.getHours() * 60 + proj.endDate.getMinutes())}</span>
+                  <span style={{ color: colors.accent, fontWeight: 600 }}>{fmtOverdue(now.getTime() - proj.endTs)}</span>
+                </div>
+                <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+                  <button type="button" onClick={() => open(proj, 'complete')} style={btn(colors.progress, colors.progress, '#fff')}>① 案件完了</button>
+                  <button type="button" onClick={() => open(proj, 'revision')} style={btn('#fff', colors.border, colors.text)}>② 追加修正</button>
+                  <button type="button" onClick={() => open(proj, 'delay')} style={btn('#fff', colors.border, colors.text)}>③ 遅延</button>
+                  <button type="button" onClick={() => onSnooze(proj.projectName, proj.endTs)} style={btn('#fff', colors.border, colors.textMute)}>④ 後で</button>
+                </div>
+
+                {isOpen && active.action === 'complete' && (
+                  <div style={{ marginTop: 12, background: '#fbf9f4', borderRadius: 5, padding: 12 }}>
+                    <div style={fieldLabel}>実際の終了時間</div>
+                    <EndTimeFields value={completeEnd} onChange={setCompleteEnd} colors={colors} fontJP={fontJP} />
+                    <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                      <button type="button" onClick={() => { onComplete(proj.projectName, completeEnd); close(); }} style={btn(colors.progress, colors.progress, '#fff')}>完了する</button>
+                      <button type="button" onClick={close} style={btn('#fff', colors.border, colors.textMute)}>やめる</button>
+                    </div>
+                  </div>
+                )}
+                {isOpen && active.action === 'revision' && (
+                  <div style={{ marginTop: 12, background: '#fbf9f4', borderRadius: 5, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                      <div>
+                        <div style={fieldLabel}>視点</div>
+                        <select value={revVp} onChange={(e) => setRevVp(e.target.value)} style={{ padding: '7px 8px', border: `1px solid ${colors.border}`, borderRadius: 4, fontFamily: fontJP, fontSize: 13 }}>
+                          {vps.map(v => <option key={v} value={v}>{v}</option>)}
+                        </select>
+                      </div>
+                      <div>
+                        <div style={fieldLabel}>ステップ名</div>
+                        <input type="text" value={revName} onChange={(e) => setRevName(e.target.value)} style={{ padding: '7px 8px', border: `1px solid ${colors.border}`, borderRadius: 4, fontFamily: fontJP, fontSize: 13 }} />
+                      </div>
+                      <div>
+                        <div style={fieldLabel}>追加時間(h)</div>
+                        <input type="number" min="0" step="0.5" value={revHours} onChange={(e) => setRevHours(e.target.value)} placeholder="例: 2" style={{ width: 70, padding: '7px 8px', border: `1px solid ${colors.border}`, borderRadius: 4, fontFamily: fontJP, fontSize: 13 }} />
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                      <button type="button" onClick={() => { onAddRevision(proj.projectName, revVp, revName, revHours); close(); }} style={btn(colors.text, colors.text, '#fff')}>追加する</button>
+                      <button type="button" onClick={close} style={btn('#fff', colors.border, colors.textMute)}>やめる</button>
+                    </div>
+                  </div>
+                )}
+                {isOpen && active.action === 'delay' && (
+                  <div style={{ marginTop: 12, background: '#fbf9f4', borderRadius: 5, padding: 12 }}>
+                    <div style={fieldLabel}>新しい終了予定（現在より後）</div>
+                    <EndTimeFields value={delayEnd} onChange={setDelayEnd} colors={colors} fontJP={fontJP} />
+                    <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                      <button type="button" onClick={() => {
+                        const nt = delayEnd ? new Date(delayEnd).getTime() : 0;
+                        if (!nt) { alert('日時を入力してください'); return; }
+                        onDelay(proj.projectName, proj.endTs, nt); close();
+                      }} style={btn(colors.text, colors.text, '#fff')}>更新する</button>
+                      <button type="button" onClick={close} style={btn('#fff', colors.border, colors.textMute)}>やめる</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
