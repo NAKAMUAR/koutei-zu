@@ -40,6 +40,13 @@ function getProjectColor(name) {
   for (let i = 0; i < name.length; i++) hash = (name.charCodeAt(i) + ((hash << 5) - hash)) | 0;
   return PROJECT_PALETTE[Math.abs(hash) % PROJECT_PALETTE.length];
 }
+// 色を白と混ぜてパステル調にする（ratio = 白の割合 0..1）。カレンダーのブロック表示用
+function pastelize(hex, ratio) {
+  const h = (hex || '#888888').replace('#', '');
+  const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
+  const mix = (c) => Math.round(c + (255 - c) * ratio);
+  return `rgb(${mix(r)}, ${mix(g)}, ${mix(b)})`;
+}
 
 const fmtMD = (d) => `${d.getMonth() + 1}/${d.getDate()}`;
 const fmtYMD = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -3999,7 +4006,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
       </div>
 
       <div style={{ marginTop: 20, fontSize: 11, color: colors.textMute }}>
-        セル内の色は案件ごと ・ 右上の #番号 が優先順位 ・ 白の斜線ストライプ＋「仮」は仮案件 ・ グレーの実線ブロックは完了済（「済」）／中止（「止」、実終了時刻から遡って表示） ・ グレーの斜線は休日・不在 ・ マウスオーバーで詳細表示 ・ クリックで案件編集フォームを開く（完了済みの案件も編集可） ・ ブロックをドラッグ＆ドロップで案件の順番を変更 ・ 左端の担当者名をドラッグ＆ドロップで担当者の表示順を変更
+        セル内の色は案件ごと（パステル・「ホワイト」工程は1段階薄い色） ・ 右上の #番号 が優先順位 ・ 斜線ストライプ＋「仮」は仮案件 ・ グレーの実線ブロックは完了済（「済」）／中止（「止」、実終了時刻から遡って表示） ・ グレーの斜線は休日・不在 ・ マウスオーバーで詳細表示 ・ クリックで案件編集フォームを開く（完了済みの案件も編集可） ・ ブロックをドラッグ＆ドロップで案件の順番を変更 ・ 左端の担当者名をドラッグ＆ドロップで担当者の表示順を変更
       </div>
     </div>
   );
@@ -4009,6 +4016,10 @@ function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact
   const [projHover, setProjHover] = useState(false);
   // 案件の並び替えドラッグは進行中ブロックのみ（完了・中止のグレーは対象外）
   const canDragProject = !!onDropProject && !done;
+  // パステル表示：通常ステップは基本パステル、「ホワイト」工程はさらに1段階薄く。完了は薄いグレー
+  const isWhiteStep = !done && (task.stepName || '').includes('ホワイト');
+  const blockBg = done ? '#d4d4cd' : pastelize(projectColor, isWhiteStep ? 0.82 : 0.6);
+  const blockText = '#3f3b32';
   const remaining = Math.max(0, task.hours - (task.completedHours || 0));
   const stepLabel = task.stepName ? ` - ${task.stepName}` : '';
   const internal = task.projectNameInternal || '';
@@ -4035,15 +4046,15 @@ function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact
       onDragLeave={canDragProject ? (() => { if (projHover) setProjHover(false); }) : undefined}
       onDrop={canDragProject ? ((e) => { e.preventDefault(); setProjHover(false); if (projDrag && projDrag !== task.projectName) onDropProject(projDrag, task.projectName); if (onProjDragStart) onProjDragStart(null); }) : undefined}
       style={{
-        height: `${heightPct}%`, minHeight: 0, background: done ? '#a6a6a0' : projectColor, color: '#fff',
-        // 仮案件は白の斜線ストライプを重ねて区別する
-        backgroundImage: tentative ? 'repeating-linear-gradient(45deg, rgba(255,255,255,0.28) 0, rgba(255,255,255,0.28) 4px, transparent 4px, transparent 9px)' : 'none',
+        height: `${heightPct}%`, minHeight: 0, background: blockBg, color: blockText,
+        // 仮案件は斜線ストライプを重ねて区別する（パステル地でも見えるよう薄い濃色）
+        backgroundImage: tentative ? 'repeating-linear-gradient(45deg, rgba(110,100,80,0.16) 0, rgba(110,100,80,0.16) 4px, transparent 4px, transparent 9px)' : 'none',
         padding: '3px 5px', fontSize: 10, lineHeight: 1.25, overflow: 'hidden',
         position: 'relative',
         cursor: onClick ? 'pointer' : 'default',
         // 上に重なるブロックとの切れ目：案件が替わる位置は太い白線、同一案件のステップ間は細い線
         boxShadow: separator === 'strong' ? 'inset 0 2px 0 #ffffff'
-          : separator === 'weak' ? 'inset 0 1px 0 rgba(255,255,255,0.45)' : 'none',
+          : separator === 'weak' ? 'inset 0 1px 0 rgba(255,255,255,0.6)' : 'none',
         // 案件並び替えドラッグ中の視覚フィードバック
         opacity: projDrag && projDrag === task.projectName ? 0.55 : 1,
         outline: projHover && projDrag && projDrag !== task.projectName ? `2px solid ${'#c1272d'}` : 'none',
