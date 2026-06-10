@@ -999,6 +999,32 @@ export default function App() {
     saveProjectOrder(merged);
   };
 
+  // カレンダーから担当者行を並び替え（従業員マスタの並び順を更新 → 全画面に反映）
+  const reorderAssigneeFromCalendar = (srcName, targetName) => {
+    if (!srcName || srcName === targetName) return;
+    const si = employeeMaster.findIndex(e => e.name === srcName);
+    const ti = employeeMaster.findIndex(e => e.name === targetName);
+    if (si < 0 || ti < 0) {
+      alert('担当者の並び替えは、従業員マスタに登録されている担当者同士でのみ行えます。\nマスタタブで従業員を登録してください。');
+      return;
+    }
+    const src = employeeMaster[si];
+    const rest = employeeMaster.filter((_, i) => i !== si);
+    const t2 = rest.findIndex(e => e.name === targetName);
+    saveEmployeeMaster([...rest.slice(0, t2), src, ...rest.slice(t2)]);
+  };
+
+  // カレンダーから案件の順番を並び替え：src 案件を target 案件の位置（直前）へ差し込む
+  const reorderProjectFromCalendar = (srcProj, targetProj) => {
+    if (!srcProj || srcProj === targetProj) return;
+    const active = tasksRef.current.filter(t => t.status !== 'done');
+    const effective = computeProjectOrder(active, projectOrder);
+    if (!effective.includes(srcProj) || !effective.includes(targetProj)) return;
+    const filtered = effective.filter(p => p !== srcProj);
+    const ti = filtered.indexOf(targetProj);
+    saveProjectOrder([...filtered.slice(0, ti), srcProj, ...filtered.slice(ti)]);
+  };
+
   // マスタの保存（楽観的に即反映 → Firestore 上書き → 他端末同期）
   const saveCustomerMaster = async (arr) => {
     setCustomerMaster(arr);
@@ -1973,7 +1999,8 @@ export default function App() {
         )}
         {view === 'calendar' && (
           <CalendarView scheduled={scheduled} settings={settings} now={now} colors={colors} fontDisplay={fontDisplay} fontJP={fontJP}
-            onEditProject={handleEditProject} assigneeOrder={assigneeOrder} />
+            onEditProject={handleEditProject} assigneeOrder={assigneeOrder}
+            onReorderAssignee={reorderAssigneeFromCalendar} onReorderProject={reorderProjectFromCalendar} />
         )}
         {view === 'byAssignee' && (
           <AssigneeView scheduled={scheduled} selectedAssignee={selectedAssignee} setSelectedAssignee={setSelectedAssignee} now={now} assigneeOrder={assigneeOrder}
@@ -3637,7 +3664,11 @@ const progressBtnStyle = (colors, fontJP) => ({
 });
 
 // ============ カレンダービュー ============
-function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditProject, fontJP, assigneeOrder }) {
+function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditProject, fontJP, assigneeOrder, onReorderAssignee, onReorderProject }) {
+  // ドラッグ＆ドロップ並び替え：担当者行（左端ラベル）と案件（タスクブロック）
+  const [rowDrag, setRowDrag] = useState(null);
+  const [rowDragOver, setRowDragOver] = useState(null);
+  const [projDrag, setProjDrag] = useState(null);
   const today = startOfDay(new Date());
   // 表示モード：1日 / 週間 / 月間 / 全期間（従来のスクロール表示）
   const [viewMode, setViewMode] = useState('scroll');
@@ -3865,14 +3896,27 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
 
           {assignees.map((assignee, ai) => (
             <div key={assignee} style={{ display: 'flex', borderBottom: ai < assignees.length - 1 ? `1px solid ${colors.border}` : 'none' }}>
-              <div style={{
-                width: labelWidth, padding: '12px', fontSize: 13, fontWeight: 500,
+              <div
+                draggable={!!onReorderAssignee}
+                onDragStart={onReorderAssignee ? ((e) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', assignee); setRowDrag(assignee); }) : undefined}
+                onDragEnd={onReorderAssignee ? (() => { setRowDrag(null); setRowDragOver(null); }) : undefined}
+                onDragOver={onReorderAssignee ? ((e) => { if (rowDrag && rowDrag !== assignee) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (rowDragOver !== assignee) setRowDragOver(assignee); } }) : undefined}
+                onDragLeave={onReorderAssignee ? (() => { if (rowDragOver === assignee) setRowDragOver(null); }) : undefined}
+                onDrop={onReorderAssignee ? ((e) => { e.preventDefault(); if (rowDrag && rowDrag !== assignee) onReorderAssignee(rowDrag, assignee); setRowDrag(null); setRowDragOver(null); }) : undefined}
+                title={onReorderAssignee ? 'ドラッグして担当者の表示順を変更（従業員マスタの並びに反映）' : undefined}
+                style={{
+                width: labelWidth, padding: '12px 8px', fontSize: 13, fontWeight: 500,
                 flexShrink: 0, borderRight: `1px solid ${colors.border}`,
-                display: 'flex', alignItems: 'center', background: '#fbf9f4',
+                display: 'flex', alignItems: 'center', gap: 5, background: '#fbf9f4',
                 boxSizing: 'border-box',
                 position: 'sticky', left: 0, zIndex: 2,
-                boxShadow: '2px 0 4px rgba(0,0,0,0.04)',
+                boxShadow: rowDragOver === assignee && rowDrag && rowDrag !== assignee
+                  ? `0 0 0 2px ${colors.accent} inset`
+                  : '2px 0 4px rgba(0,0,0,0.04)',
+                opacity: rowDrag === assignee ? 0.5 : 1,
+                cursor: onReorderAssignee ? 'grab' : 'default',
               }}>
+                {onReorderAssignee && <GripVertical size={12} style={{ color: colors.textMute, flexShrink: 0 }} />}
                 {assignee}
               </div>
               {allDates.map((d, di) => {
@@ -3909,6 +3953,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                           heightPct={(slot.hours / morningHours) * 100}
                           projectColor={getProjectColor(task.projectName)}
                           separator={si === 0 ? null : (morningItems[si - 1].task.projectName !== task.projectName ? 'strong' : 'weak')}
+                          projDrag={projDrag} onProjDragStart={onReorderProject ? setProjDrag : null} onDropProject={onReorderProject}
                           onClick={onEditProject && (() => onEditProject(task.projectName))} />
                       ))}
                     </div>
@@ -3920,6 +3965,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                           heightPct={(slot.hours / afternoonHours) * 100}
                           projectColor={getProjectColor(task.projectName)}
                           separator={si === 0 ? null : (afternoonItems[si - 1].task.projectName !== task.projectName ? 'strong' : 'weak')}
+                          projDrag={projDrag} onProjDragStart={onReorderProject ? setProjDrag : null} onDropProject={onReorderProject}
                           onClick={onEditProject && (() => onEditProject(task.projectName))} />
                       ))}
                     </div>
@@ -3953,13 +3999,16 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
       </div>
 
       <div style={{ marginTop: 20, fontSize: 11, color: colors.textMute }}>
-        セル内の色は案件ごと ・ 右上の #番号 が優先順位 ・ 白の斜線ストライプ＋「仮」は仮案件 ・ グレーの実線ブロックは完了済（「済」）／中止（「止」、実終了時刻から遡って表示） ・ グレーの斜線は休日・不在 ・ マウスオーバーで詳細表示 ・ クリックで案件編集フォームを開く（完了済みの案件も編集可）
+        セル内の色は案件ごと ・ 右上の #番号 が優先順位 ・ 白の斜線ストライプ＋「仮」は仮案件 ・ グレーの実線ブロックは完了済（「済」）／中止（「止」、実終了時刻から遡って表示） ・ グレーの斜線は休日・不在 ・ マウスオーバーで詳細表示 ・ クリックで案件編集フォームを開く（完了済みの案件も編集可） ・ ブロックをドラッグ＆ドロップで案件の順番を変更 ・ 左端の担当者名をドラッグ＆ドロップで担当者の表示順を変更
       </div>
     </div>
   );
 }
 
-function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact, separator }) {
+function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact, separator, projDrag, onProjDragStart, onDropProject }) {
+  const [projHover, setProjHover] = useState(false);
+  // 案件の並び替えドラッグは進行中ブロックのみ（完了・中止のグレーは対象外）
+  const canDragProject = !!onDropProject && !done;
   const remaining = Math.max(0, task.hours - (task.completedHours || 0));
   const stepLabel = task.stepName ? ` - ${task.stepName}` : '';
   const internal = task.projectNameInternal || '';
@@ -3975,10 +4024,16 @@ function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact
   const memoLine = task.memo ? `\n📝 ${task.memo}` : '';
   const title = done
     ? `【${cancelled ? '中止' : '完了'}】${nameLine}\n${minToTime(slot.startMin)}〜${minToTime(slot.endMin)} (${slot.hours}h)${aeStr ? `\n実終了 ${aeStr}` : ''}${memoLine}${onClick ? '\nクリックで案件を編集（終了時間の実績は完了タブで）' : '\n※終了時間（実績）は完了タブで編集できます'}`
-    : `${tentative ? '【仮】' : ''}#${task.priority} ${nameLine}\n${minToTime(slot.startMin)}〜${minToTime(slot.endMin)} (${slot.hours}h)\n残り ${remaining}h / 全${task.hours}h${memoLine}${task.manualStart ? '\n※開始時間指定あり' : ''}${task.manualEnd ? '\n※終了予定指定あり' : ''}${task.delays && task.delays.length ? `\n※遅延履歴あり（${task.delays.length}回）` : ''}${onClick ? '\nクリックで案件を編集' : ''}`;
+    : `${tentative ? '【仮】' : ''}#${task.priority} ${nameLine}\n${minToTime(slot.startMin)}〜${minToTime(slot.endMin)} (${slot.hours}h)\n残り ${remaining}h / 全${task.hours}h${memoLine}${task.manualStart ? '\n※開始時間指定あり' : ''}${task.manualEnd ? '\n※終了予定指定あり' : ''}${task.delays && task.delays.length ? `\n※遅延履歴あり（${task.delays.length}回）` : ''}${onClick ? '\nクリックで案件を編集' : ''}${canDragProject ? '\nドラッグで案件の順番を変更' : ''}`;
   return (
     <div title={title}
       onClick={onClick || undefined}
+      draggable={canDragProject}
+      onDragStart={canDragProject ? ((e) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', task.projectName); if (onProjDragStart) onProjDragStart(task.projectName); }) : undefined}
+      onDragEnd={canDragProject ? (() => { if (onProjDragStart) onProjDragStart(null); }) : undefined}
+      onDragOver={canDragProject ? ((e) => { if (projDrag && projDrag !== task.projectName) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (!projHover) setProjHover(true); } }) : undefined}
+      onDragLeave={canDragProject ? (() => { if (projHover) setProjHover(false); }) : undefined}
+      onDrop={canDragProject ? ((e) => { e.preventDefault(); setProjHover(false); if (projDrag && projDrag !== task.projectName) onDropProject(projDrag, task.projectName); if (onProjDragStart) onProjDragStart(null); }) : undefined}
       style={{
         height: `${heightPct}%`, minHeight: 0, background: done ? '#a6a6a0' : projectColor, color: '#fff',
         // 仮案件は白の斜線ストライプを重ねて区別する
@@ -3989,6 +4044,10 @@ function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact
         // 上に重なるブロックとの切れ目：案件が替わる位置は太い白線、同一案件のステップ間は細い線
         boxShadow: separator === 'strong' ? 'inset 0 2px 0 #ffffff'
           : separator === 'weak' ? 'inset 0 1px 0 rgba(255,255,255,0.45)' : 'none',
+        // 案件並び替えドラッグ中の視覚フィードバック
+        opacity: projDrag && projDrag === task.projectName ? 0.55 : 1,
+        outline: projHover && projDrag && projDrag !== task.projectName ? `2px solid ${'#c1272d'}` : 'none',
+        outlineOffset: -2,
       }}>
       {compact ? (
         // 月間表示などの狭い列：案件名1行のみ（詳細はツールチップ）
