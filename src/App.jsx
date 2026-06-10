@@ -1930,7 +1930,7 @@ export default function App() {
             handleDelete={handleDelete} toggleStatus={toggleStatus}
             moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={setDragTaskId} onDropTask={reorderTaskPriority} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} completeProject={completeProject} cancelProject={cancelProject} completeViewpoint={completeViewpoint}
             handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint}
-            projectList={projectList} projectInternalList={projectInternalList} viewpointList={viewpointList} assigneeList={assigneeList}
+            projectList={projectList} projectInternalList={projectInternalList} viewpointList={viewpointList} assigneeList={assigneeList} assigneeOrder={assigneeOrder}
             settings={settings} now={now}
             colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
         )}
@@ -2107,7 +2107,7 @@ function NavButton({ active, onClick, icon, label, badge }) {
 }
 
 // ============ 入力ビュー ============
-function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdit, tasks, scheduled, projectOrder, saveProjectOrder, companyList, customerMaster, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, projectList, projectInternalList, viewpointList, assigneeList, settings, now, colors, fontJP, fontDisplay }) {
+function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdit, tasks, scheduled, projectOrder, saveProjectOrder, companyList, customerMaster, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, projectList, projectInternalList, viewpointList, assigneeList, assigneeOrder, settings, now, colors, fontJP, fontDisplay }) {
   // お客様担当者の候補：会社名を選んでいればその会社の担当者を優先表示
   const contactOptions = useMemo(() => {
     const rows = customerMaster || [];
@@ -2183,6 +2183,8 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
         .some(v => (v || '').toLowerCase().includes(q))
     );
   }, [scheduled.active, q]);
+  // 進行中タスクのグループ表示：会社別（既定）／担当者別
+  const [listGroupMode, setListGroupMode] = useState('company');
 
   // ===== 過去案件から引用 =====
   const [quoteOpen, setQuoteOpen] = useState(false);
@@ -2542,8 +2544,16 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
           </span>
         </h2>
 
-        {/* 案件の検索 */}
+        {/* 表示切替＋案件の検索 */}
         <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button type="button" onClick={() => setListGroupMode('company')} style={tabStyle(listGroupMode === 'company', colors, fontJP)}>
+              会社別
+            </button>
+            <button type="button" onClick={() => setListGroupMode('assignee')} style={tabStyle(listGroupMode === 'assignee', colors, fontJP)}>
+              担当者別
+            </button>
+          </div>
           <div style={{ position: 'relative', flex: '1 1 280px', maxWidth: 480 }}>
             <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: colors.textMute, display: 'flex', alignItems: 'center', pointerEvents: 'none' }}>
               <Search size={15} />
@@ -2578,6 +2588,47 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
           <div style={{ background: colors.surface, border: `1px dashed ${colors.border}`, borderRadius: 6, padding: 48, textAlign: 'center', color: colors.textMute, fontSize: 13 }}>
             「{searchQuery}」に一致する案件はありません。
           </div>
+        ) : listGroupMode === 'assignee' ? (
+          // 担当者別表示：従業員マスタの並び順で担当者ごとにまとめる
+          sortAssigneesByMaster([...new Set(filteredActive.map(t => t.assignee))], assigneeOrder).map(a => {
+            const aTasks = filteredActive.filter(t => t.assignee === a);
+            const aTotal = aTasks.reduce((s, t) => s + t.hours, 0);
+            const aDone = aTasks.reduce((s, t) => s + (t.completedHours || 0), 0);
+            const aGroups = groupByViewpoint(aTasks);
+            return (
+              <section key={a} style={{ marginBottom: 28 }}>
+                <div style={{
+                  background: '#fbf9f4', border: `1px solid ${colors.border}`,
+                  borderRadius: 6, padding: '10px 16px', marginBottom: 10,
+                  display: 'flex', alignItems: 'center', gap: 12,
+                }}>
+                  <div style={{
+                    width: 30, height: 30, borderRadius: '50%',
+                    background: getProjectColor(a), color: '#fff',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontWeight: 600, fontSize: 13, flexShrink: 0,
+                  }}>{(a || '?').slice(0, 1)}</div>
+                  <div style={{ fontWeight: 600, fontSize: 14 }}>{a || '（担当者未設定）'}</div>
+                  <div style={{ fontSize: 11, color: colors.textMute }}>
+                    {aGroups.length}視点 ・ {aTasks.length}タスク ・ 完了 {aDone}h / 全 {aTotal}h ・
+                    <span style={{ color: colors.accent, fontWeight: 600 }}> 残 {aTotal - aDone}h</span>
+                  </div>
+                </div>
+                <ViewpointGroupList
+                  groups={aGroups}
+                  allActive={filteredActive} now={now}
+                  companyOrder={settings.companyOrder || []}
+                  projectOrder={projectOrder} saveProjectOrder={saveProjectOrder}
+                  handleEdit={handleEdit} handleEditProject={handleEditProject} handleEditViewpoint={handleEditViewpoint}
+                  handleAddViewpointToProject={handleAddViewpointToProject}
+                  handleDeleteViewpoint={handleDeleteViewpoint}
+                  handleDelete={handleDelete} toggleStatus={toggleStatus}
+                  moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={onDragTask} onDropTask={onDropTask} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} completeProject={completeProject} cancelProject={cancelProject} completeViewpoint={completeViewpoint}
+                  handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} assigneeList={assigneeList}
+                  colors={colors} fontJP={fontJP} />
+              </section>
+            );
+          })
         ) : (
           <ViewpointGroupList
             groups={groupByViewpoint(filteredActive)}
