@@ -458,9 +458,10 @@ function scheduleTasks(tasks, settings, projectOrder) {
   };
   // 同じ視点（担当者+案件+視点名）の前ステップ終了時刻。工程順を守るための下限
   const vpLastEnd = {};
-  // 終了予定の指定（manualEnd）による担当者ごとの下限：
-  // 指定があるタスク以降のタスクは、その時刻より前に開始しない
-  const manualEndFloor = {};
+  // 担当者ごとの「直前にスケジュールしたタスクの終了時刻」。
+  // 開始指定が無いタスクは前のタスクの終了予定に続けて並べる（手前の空き時間への穴埋めはしない）。
+  // 終了予定の指定（manualEnd）もこの下限に反映される
+  const lastEndByAssignee = {};
 
   const scheduled = sorted.map(task => {
     const fullHours = Math.max(0, task.hours || 0);
@@ -477,7 +478,7 @@ function scheduleTasks(tasks, settings, projectOrder) {
     // 起点・完了実績の下限（doneFloor）より前でも指定どおりに置く。
     // 同視点の前ステップ終了（工程順）と他タスクの占有時間は常に守る。
     let eTs = baseTsOf(assignee);
-    if (manualEndFloor[assignee] && manualEndFloor[assignee] > eTs) eTs = manualEndFloor[assignee];
+    if (lastEndByAssignee[assignee] && lastEndByAssignee[assignee] > eTs) eTs = lastEndByAssignee[assignee];
     if (task.manualStart) {
       const ms = new Date(task.manualStart);
       if (!isNaN(ms.getTime())) {
@@ -502,7 +503,7 @@ function scheduleTasks(tasks, settings, projectOrder) {
       }
     }
 
-    // eTs 以降の空き営業時間を前から順に埋める（予約済み・休日/不在は飛ばす＝穴埋め/バックフィル）
+    // eTs 以降の空き営業時間を前から順に埋める（予約済み・休日/不在は飛ばす）
     let remainingMin = durationHours * 60;
     const slots = [];
     let date = new Date(eDate);
@@ -534,9 +535,10 @@ function scheduleTasks(tasks, settings, projectOrder) {
     let endTs = endDate.getTime() + endMin * 60000;
     if (meTs) {
       endDate = meDate; endMin = meMin; endTs = meTs;
-      manualEndFloor[assignee] = Math.max(manualEndFloor[assignee] || 0, meTs);
     }
     vpLastEnd[vkey] = endTs;
+    // 次のタスク（開始指定なし）はこのタスクの終了予定に続けて配置する
+    lastEndByAssignee[assignee] = Math.max(lastEndByAssignee[assignee] || 0, endTs);
     return {
       ...task,
       scheduledStart: slots[0].date,
