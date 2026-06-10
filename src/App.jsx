@@ -102,13 +102,15 @@ function normalizeCustomerMaster(arr) {
     }
     return [...map.values()];
   }
+  // 追加フィールド（代表者名・住所・電話・URL、担当者の支店名・電話・メール等）は spread で維持する
   return arr.map(e => ({
+    ...(e || {}),
     id: (e && e.id) || genId('cust'),
     company: (e && e.company) || '',
     contacts: Array.isArray(e && e.contacts)
       ? e.contacts.map(c => typeof c === 'string'
         ? { id: genId('cc'), name: c }
-        : { id: (c && c.id) || genId('cc'), name: (c && c.name) || '' })
+        : { ...(c || {}), id: (c && c.id) || genId('cc'), name: (c && c.name) || '' })
       : [],
   }));
 }
@@ -4450,10 +4452,10 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
   const commitCustomers = (next) => { setCustomers(next); saveCustomerMaster(next); };
   const addCompany = () => commitCustomers([...customers, { id: newId('cust'), company: '', contacts: [{ id: newId('cc'), name: '' }] }]);
   const removeCompany = (cid) => commitCustomers(customers.filter(c => c.id !== cid));
-  const setCompanyName = (cid, val) => setCustomers(cs => cs.map(c => c.id === cid ? { ...c, company: val } : c));
+  const setCompanyField = (cid, field, val) => setCustomers(cs => cs.map(c => c.id === cid ? { ...c, [field]: val } : c));
   const addContact = (cid) => commitCustomers(customers.map(c => c.id === cid ? { ...c, contacts: [...(c.contacts || []), { id: newId('cc'), name: '' }] } : c));
   const removeContact = (cid, ctid) => commitCustomers(customers.map(c => c.id === cid ? { ...c, contacts: (c.contacts || []).filter(ct => ct.id !== ctid) } : c));
-  const setContactName = (cid, ctid, val) => setCustomers(cs => cs.map(c => c.id === cid ? { ...c, contacts: (c.contacts || []).map(ct => ct.id === ctid ? { ...ct, name: val } : ct) } : c));
+  const setContactField = (cid, ctid, field, val) => setCustomers(cs => cs.map(c => c.id === cid ? { ...c, contacts: (c.contacts || []).map(ct => ct.id === ctid ? { ...ct, [field]: val } : ct) } : c));
   const commitCustomersNow = () => saveCustomerMaster(customers);
 
   // 従業員マスタ
@@ -4523,13 +4525,24 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
         )}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {customers.map(c => (
+          {customers.map(c => {
+            // 会社情報の入力欄（ラベル＋テキスト）
+            const companyField = (label, field, placeholder, span = 1, type = 'text') => (
+              <div style={{ gridColumn: `span ${span}` }}>
+                <div style={labelStyle}>{label}</div>
+                <input type={type} value={c[field] || ''}
+                  onChange={(e) => setCompanyField(c.id, field, e.target.value)}
+                  onBlur={commitCustomersNow}
+                  placeholder={placeholder} style={inputStyle} />
+              </div>
+            );
+            return (
             <div key={c.id} style={{ border: `1px solid ${colors.border}`, borderRadius: 6, overflow: 'hidden' }}>
               {/* 会社名ヘッダー */}
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', background: '#f3efe4', padding: '10px 12px' }}>
                 <span style={{ fontSize: 11, fontWeight: 700, color: colors.textMute, flexShrink: 0 }}>会社</span>
                 <input type="text" value={c.company || ''}
-                  onChange={(e) => setCompanyName(c.id, e.target.value)}
+                  onChange={(e) => setCompanyField(c.id, 'company', e.target.value)}
                   onBlur={commitCustomersNow}
                   placeholder="例: リノべる株式会社"
                   style={{ ...inputStyle, flex: 1, fontWeight: 600 }} />
@@ -4539,18 +4552,50 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
                   <Trash2 size={13} /> 会社削除
                 </button>
               </div>
+              {/* 会社情報 */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, padding: 12, borderBottom: `1px solid ${colors.border}`, background: '#fbfaf6' }}>
+                {companyField('代表者名', 'representative', '例: 山田 太郎')}
+                {companyField('電話番号（代表）', 'phone', '例: 052-123-4567', 1, 'tel')}
+                {companyField('郵便番号', 'postalCode', '例: 460-0008')}
+                {companyField('住所', 'address', '例: 愛知県名古屋市中区栄1-2-3', 3)}
+                {companyField('ホームページURL', 'websiteUrl', '例: https://example.co.jp', 3, 'url')}
+                {companyField('支店住所１', 'branchAddress1', '', 2)}
+                {companyField('支店電話番号１', 'branchPhone1', '', 1, 'tel')}
+                {companyField('支店住所２', 'branchAddress2', '', 2)}
+                {companyField('支店電話番号２', 'branchPhone2', '', 1, 'tel')}
+              </div>
               {/* 担当者リスト */}
               <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
                 {(c.contacts || []).length === 0 && (
                   <div style={{ fontSize: 11, color: colors.textMute }}>担当者が未登録です。</div>
                 )}
+                {(c.contacts || []).length > 0 && (
+                  <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1fr 1fr 1.4fr 34px', gap: 8, paddingLeft: 8 }}>
+                    <div style={labelStyle}>担当者名</div>
+                    <div style={labelStyle}>支店名</div>
+                    <div style={labelStyle}>電話番号</div>
+                    <div style={labelStyle}>メールアドレス</div>
+                    <div />
+                  </div>
+                )}
                 {(c.contacts || []).map(ct => (
-                  <div key={ct.id} style={{ display: 'flex', gap: 10, alignItems: 'center', paddingLeft: 8 }}>
-                    <span style={{ fontSize: 11, color: colors.textMute, flexShrink: 0 }}>担当者</span>
+                  <div key={ct.id} style={{ display: 'grid', gridTemplateColumns: '1.1fr 1fr 1fr 1.4fr 34px', gap: 8, alignItems: 'center', paddingLeft: 8 }}>
                     <input type="text" value={ct.name || ''}
-                      onChange={(e) => setContactName(c.id, ct.id, e.target.value)}
+                      onChange={(e) => setContactField(c.id, ct.id, 'name', e.target.value)}
                       onBlur={commitCustomersNow}
-                      placeholder="例: 山田様" style={{ ...inputStyle, flex: 1 }} />
+                      placeholder="例: 山田様" style={inputStyle} />
+                    <input type="text" value={ct.branchName || ''}
+                      onChange={(e) => setContactField(c.id, ct.id, 'branchName', e.target.value)}
+                      onBlur={commitCustomersNow}
+                      placeholder="例: 名古屋支店" style={inputStyle} />
+                    <input type="tel" value={ct.phone || ''}
+                      onChange={(e) => setContactField(c.id, ct.id, 'phone', e.target.value)}
+                      onBlur={commitCustomersNow}
+                      placeholder="例: 090-1234-5678" style={inputStyle} />
+                    <input type="text" value={ct.email || ''}
+                      onChange={(e) => setContactField(c.id, ct.id, 'email', e.target.value)}
+                      onBlur={commitCustomersNow}
+                      placeholder="例: yamada@example.co.jp" style={inputStyle} />
                     <button type="button" onClick={() => removeContact(c.id, ct.id)} style={delBtnStyle} title="この担当者を削除">
                       <Trash2 size={14} />
                     </button>
@@ -4562,7 +4607,8 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
                 </button>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
         <button type="button" onClick={addCompany} style={{ ...addBtnStyle, marginTop: 16 }}>
           <Plus size={14} /> 会社を追加
