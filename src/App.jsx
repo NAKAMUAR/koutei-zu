@@ -93,10 +93,11 @@ const VIEWPOINT_PRESETS = [
   { id: 'photo', name: '写真合成', steps: ['写真合成'] },
 ];
 function makeViewpointFromPreset(preset) {
-  if (!preset) return { viewpointName: '', assignee: '', steps: [{ name: '', hours: '', completedHours: '' }] };
+  if (!preset) return { viewpointName: '', assignee: '', manualStart: '', steps: [{ name: '', hours: '', completedHours: '' }] };
   return {
     viewpointName: preset.name,
     assignee: '',
+    manualStart: '', // 視点ごとの開始時間指定（最初の未完了ステップに適用）
     steps: preset.steps.map(name => ({ name, hours: '', completedHours: '' })),
   };
 }
@@ -701,6 +702,7 @@ function formPreviewRecords(form, activeCount, taskById) {
   for (const vp of (form.viewpoints || [])) {
     const vpName = (vp.viewpointName || '').trim() || '視点';
     const vpAssignee = (vp.assignee || '').trim() || (form.assignee || '').trim();
+    const vpFirstIdx = records.length;
     for (const step of (vp.steps || [])) {
       const hoursStr = (step.hours === undefined || step.hours === null) ? '' : String(step.hours);
       const stepHours = hoursStr.trim() === '' ? 0 : parseFloat(hoursStr);
@@ -726,10 +728,11 @@ function formPreviewRecords(form, activeCount, taskById) {
       });
       seq++;
     }
+    // 視点ごとの開始時間：この視点の最初のレコードに登録・解除（buildRecords と同じ規則）
+    if (records.length > vpFirstIdx) records[vpFirstIdx].manualStart = vp.manualStart || null;
   }
-  // フォームの開始時間欄は最初のレコード、終了予定欄は最後のレコードに登録・解除（buildRecords と同じ規則）
+  // フォームの終了予定欄は最後のレコードに登録・解除（buildRecords と同じ規則）
   if (records.length > 0) {
-    records[0].manualStart = form.manualStart || null;
     records[records.length - 1].manualEnd = form.manualEnd || null;
   }
   return { records, priority };
@@ -757,14 +760,19 @@ function simulateFormSchedule(form, allTasks, settings, projectOrder) {
     if (eBest == null || eTs > eBest) { eBest = eTs; eD = t.scheduledEnd; eM = t.scheduledEndMin; }
   }
   let moved = false, requested = null;
-  if (form.manualStart) {
-    const ms = new Date(form.manualStart);
-    if (!isNaN(ms.getTime())) {
+  // 視点ごとの開始指定のうち最も早いものを「指定時刻」として押し出し判定する
+  let reqTs = null;
+  for (const vp of (form.viewpoints || [])) {
+    if (!vp.manualStart) continue;
+    const ms = new Date(vp.manualStart);
+    if (isNaN(ms.getTime())) continue;
+    const ts = startOfDay(ms).getTime() + (ms.getHours() * 60 + ms.getMinutes()) * 60000;
+    if (reqTs == null || ts < reqTs) {
+      reqTs = ts;
       requested = { date: startOfDay(ms), min: ms.getHours() * 60 + ms.getMinutes() };
-      const reqTs = requested.date.getTime() + requested.min * 60000;
-      moved = sBest > reqTs;
     }
   }
+  if (reqTs != null) moved = sBest > reqTs;
   return { startDate: sD, startMin: sM, endDate: eD, endMin: eM, moved, requested };
 }
 
@@ -1080,7 +1088,8 @@ export default function App() {
 
   // 登録/更新のエントリ：開始時間が指定どおりに置けない場合は確認モーダルを出す
   const handleSubmit = async () => {
-    if (form.projectName.trim() && form.manualStart) {
+    const hasStartPin = (form.viewpoints || []).some(v => v.manualStart);
+    if (form.projectName.trim() && hasStartPin) {
       const sim = simulateFormSchedule(form, tasksRef.current, settings, projectOrder);
       if (sim && sim.moved) {
         setStartMoveConfirm({
@@ -1122,6 +1131,7 @@ export default function App() {
 
         let order = 0;
         let vpHasStep = false;
+        const vpFirstIdx = upserts.length; // この視点のレコード開始位置（視点ごとの開始時間の適用先を探す用）
         for (const step of vp.steps) {
           const name = (step.name || '').trim();
           const hoursStr = step.hours === undefined || step.hours === null ? '' : String(step.hours);
@@ -1168,13 +1178,15 @@ export default function App() {
           order++; seq++; vpHasStep = true;
         }
         if (!vpHasStep) { return { error: `視点「${vpName}」に少なくとも1つのステップ（名称＋時間）を入力してください` }; }
+        // 視点ごとの開始時間：この視点の最初の未完了ステップに登録・解除する
+        // （他ステップの個別指定はそのまま維持）
+        const vpRecs = upserts.slice(vpFirstIdx);
+        const vpTarget = vpRecs.find(u => u.status !== 'done');
+        if (vpTarget) vpTarget.manualStart = vp.manualStart || null;
+        else if (vp.manualStart && vpRecs.length > 0) vpRecs[0].manualStart = vp.manualStart;
       }
-      // フォームの開始時間欄は「最初の未完了ステップ」、終了予定欄は「最後の未完了ステップ」の
-      // 指定として登録・解除する（他ステップの個別指定はそのまま）
+      // フォームの終了予定欄は「最後の未完了ステップ」の指定として登録・解除する
       if (upserts.length > 0) {
-        const target = upserts.find(u => u.status !== 'done');
-        if (target) target.manualStart = form.manualStart || null;
-        else if (form.manualStart) upserts[0].manualStart = form.manualStart;
         const lastActive = [...upserts].reverse().find(u => u.status !== 'done');
         if (lastActive) lastActive.manualEnd = form.manualEnd || null;
         else if (form.manualEnd) upserts[upserts.length - 1].manualEnd = form.manualEnd;
@@ -1308,13 +1320,13 @@ export default function App() {
       customerContact: task.customerContact || '',
       assignee: task.assignee,
       priority: String(task.priority),
-      manualStart: task.manualStart || '',
       manualEnd: task.manualEnd || '',
       memo: task.memo || '',
       tentative: !!task.tentative,
       viewpoints: [{
         viewpointName: task.viewpointName || '',
         assignee: task.assignee || '',
+        manualStart: task.manualStart || '',
         steps: [{
           taskId: task.id,
           name: task.stepName || task.viewpointName || '',
@@ -1340,19 +1352,22 @@ export default function App() {
       if (!vpMap.has(k)) vpMap.set(k, { viewpointName: t.viewpointName, assignee: t.assignee, steps: [] });
       vpMap.get(k).steps.push(t);
     }
-    const viewpoints = Array.from(vpMap.values()).map(v => ({
-      viewpointName: v.viewpointName,
-      assignee: v.assignee,
-      steps: v.steps
-        .slice()
-        .sort((a, b) => (a.stepOrder ?? 0) - (b.stepOrder ?? 0))
-        .map(t => ({
+    const viewpoints = Array.from(vpMap.values()).map(v => {
+      const sortedSteps = v.steps.slice().sort((a, b) => (a.stepOrder ?? 0) - (b.stepOrder ?? 0));
+      const firstActive = sortedSteps.find(t => t.status !== 'done');
+      return {
+        viewpointName: v.viewpointName,
+        assignee: v.assignee,
+        // 視点ごとの開始時間：最初の未完了ステップの指定を表示（無ければ先頭ステップ）
+        manualStart: (firstActive || sortedSteps[0])?.manualStart || '',
+        steps: sortedSteps.map(t => ({
           taskId: t.id,
           name: t.stepName || '',
           hours: String(t.hours),
           completedHours: String(t.completedHours || 0),
         })),
-    }));
+      };
+    });
     const first = projectTasks[0];
     // 優先順位は進行中タスクから採用（完了済みの古い順位は使わない）
     const priorityPool = projectTasks.filter(t => t.status !== 'done');
@@ -1364,8 +1379,7 @@ export default function App() {
       customerContact: first.customerContact || '',
       assignee: first.assignee,
       priority: priorityPool.length > 0 ? String(Math.min(...priorityPool.map(t => t.priority))) : '',
-      // 開始時間欄は最初の未完了ステップ、終了予定欄は最後の未完了ステップの指定を表示
-      manualStart: (priorityPool[0]?.manualStart) || (priorityPool.length === 0 ? (first.manualStart || '') : ''),
+      // 終了予定欄は最後の未完了ステップの指定を表示（開始時間は視点ごとの欄で扱う）
       manualEnd: (priorityPool.length > 0 ? (priorityPool[priorityPool.length - 1].manualEnd || '') : (projectTasks[projectTasks.length - 1].manualEnd || '')),
       memo: (projectTasks.find(t => t.memo) || {}).memo || '',
       tentative: projectTasks.some(t => t.tentative),
@@ -1453,6 +1467,7 @@ export default function App() {
     const viewpoints = [{
       viewpointName: group.viewpointName,
       assignee: group.assignee,
+      manualStart: first.manualStart || '',
       steps: tasksOfVp.map(t => ({
         taskId: t.id,
         name: t.stepName || '',
@@ -1468,7 +1483,6 @@ export default function App() {
       customerContact: group.customerContact || first.customerContact || '',
       assignee: group.assignee,
       priority: String(group.minPriority || first.priority),
-      manualStart: first.manualStart || '',
       viewpoints,
     });
     setEditingId(null);
@@ -1487,7 +1501,7 @@ export default function App() {
       customerContact: group.customerContact || '',
       assignee: group.assignee,
       priority: String(group.minPriority),
-      viewpoints: [{ viewpointName: group.viewpointName, assignee: group.assignee, steps: [{ name: '', hours: '', completedHours: '' }] }],
+      viewpoints: [{ viewpointName: group.viewpointName, assignee: group.assignee, manualStart: '', steps: [{ name: '', hours: '', completedHours: '' }] }],
     });
     setEditingId(null);
     setEditMode(null);
@@ -2267,14 +2281,15 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
     [form, tasks, settings, projectOrder]
   );
 
-  // 開始時間を「日付」と「時刻」に分けて扱う（datetime-localが入力しづらい環境への対策）
-  const msDate = form.manualStart ? form.manualStart.split('T')[0] : '';
-  const msTime = form.manualStart ? (form.manualStart.split('T')[1] || '') : '';
-  const setManualStart = (datePart, timePart) => {
-    if (!datePart && !timePart) { setForm({ ...form, manualStart: '' }); return; }
-    const d = datePart || fmtYMD(new Date());
-    const tm = timePart || (settings.morningStart || '08:00');
-    setForm({ ...form, manualStart: `${d}T${tm}` });
+  // 視点ごとの開始時間を「日付」と「時刻」に分けて扱う（datetime-localが入力しづらい環境への対策）
+  const setVpManualStart = (vi, datePart, timePart) => {
+    let val = '';
+    if (datePart || timePart) {
+      const d = datePart || fmtYMD(new Date());
+      const tm = timePart || (settings.morningStart || '08:00');
+      val = `${d}T${tm}`;
+    }
+    setForm({ ...form, viewpoints: form.viewpoints.map((vp, i) => i === vi ? { ...vp, manualStart: val } : vp) });
   };
 
   // 案件の検索：案件名・社内案件名・会社名・お客様担当者・制作担当者・視点名・ステップ名で絞り込み
@@ -2448,21 +2463,9 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
               placeholder="未入力なら末尾に追加" style={inputStyle} />
           </div>
           <div style={{ gridColumn: 'span 2' }}>
-            <label style={labelStyle}>開始時間（任意・最初の未完了ステップに適用・自動スケジュールより優先）</label>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-              <input type="date" value={msDate}
-                onChange={(e) => setManualStart(e.target.value, msTime)}
-                style={{ ...inputStyle, width: 'auto', flex: '0 0 160px' }} />
-              <TimeSelect value={msTime}
-                onChange={(val) => setManualStart(msDate, val)}
-                colors={colors} fontJP={fontJP} allowEmpty />
-              {form.manualStart && (
-                <button type="button" onClick={() => setForm({ ...form, manualStart: '' })}
-                  style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '8px 12px', borderRadius: 3, fontSize: 11, color: colors.textMute, cursor: 'pointer' }}>
-                  クリア
-                </button>
-              )}
-              {previewSchedule && (
+            <label style={labelStyle}>スケジュールプレビュー（開始時間の指定は下の各視点の欄で・差し込み優先）</label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', minHeight: 34 }}>
+              {previewSchedule ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600, flexWrap: 'wrap' }}>
                   <span style={{ color: previewSchedule.moved ? '#c46a16' : colors.accent }}>
                     開始予定: {fmtMD(previewSchedule.startDate)}({dayName(previewSchedule.startDate)}) {minToTime(previewSchedule.startMin)}
@@ -2472,6 +2475,8 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                     終了予定: {fmtMD(previewSchedule.endDate)}({dayName(previewSchedule.endDate)}) {minToTime(previewSchedule.endMin)}
                   </span>
                 </div>
+              ) : (
+                <span style={{ fontSize: 11, color: colors.textMute }}>視点とステップ（制作時間）を入力すると表示されます</span>
               )}
             </div>
             {previewSchedule?.moved && (
@@ -2480,7 +2485,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
               </div>
             )}
             <div style={{ fontSize: 10, color: colors.textMute, marginTop: 6 }}>
-              日付・時刻を別々に選べます（時刻だけ入力した場合は本日の日付になります） ・ 開始/終了は他タスクを含めた実際のスケジュールです
+              開始/終了は他タスクを含めた実際のスケジュールです
             </div>
           </div>
           <div style={{ gridColumn: 'span 2' }}>
@@ -2566,6 +2571,28 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                         display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, fontFamily: fontJP,
                       }}
                       title="この視点を削除"><Trash2 size={13} /> 視点削除</button>
+                  </div>
+
+                  {/* 視点ごとの開始時間（最初の未完了ステップに適用・差し込み優先） */}
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+                    padding: '8px 12px', background: '#faf7ef', borderBottom: `1px solid ${colors.border}`,
+                  }}>
+                    <span style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap' }}>
+                      開始時間（任意・この視点の最初の未完了ステップに適用・差し込み優先）
+                    </span>
+                    <input type="date" value={vp.manualStart ? vp.manualStart.split('T')[0] : ''}
+                      onChange={(e) => setVpManualStart(vi, e.target.value, vp.manualStart ? (vp.manualStart.split('T')[1] || '') : '')}
+                      style={{ ...inputStyle, width: 'auto', flex: '0 0 150px', padding: '6px 8px', fontSize: 12 }} />
+                    <TimeSelect value={vp.manualStart ? (vp.manualStart.split('T')[1] || '') : ''}
+                      onChange={(val) => setVpManualStart(vi, vp.manualStart ? vp.manualStart.split('T')[0] : '', val)}
+                      colors={colors} fontJP={fontJP} allowEmpty />
+                    {vp.manualStart && (
+                      <button type="button" onClick={() => setVpManualStart(vi, '', '')}
+                        style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '6px 10px', borderRadius: 3, fontSize: 11, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP }}>
+                        クリア
+                      </button>
+                    )}
                   </div>
 
                   {/* ステップリスト */}
