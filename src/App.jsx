@@ -9,13 +9,33 @@ function priorityColor(p) {
   return PRIORITY_COLORS[Math.min(p - 1, PRIORITY_COLORS.length - 1)];
 }
 
+// 隣り合うインデックスで色相が離れるように並べた20色（白文字が読める濃色のみ）
 const PROJECT_PALETTE = [
-  '#3a5a40', '#264653', '#bc6c25', '#5d4037',
-  '#1d3557', '#6a4c93', '#37474f', '#8d6e63',
-  '#4e342e', '#33691e', '#0d47a1', '#4527a0',
+  '#3a5a40', '#1d3557', '#bc6c25', '#6a4c93',
+  '#c62828', '#00838f', '#5d4037', '#ad1457',
+  '#33691e', '#0d47a1', '#e65100', '#4527a0',
+  '#00695c', '#8d6e63', '#264653', '#827717',
+  '#37474f', '#b71c1c', '#283593', '#4e342e',
 ];
+// 案件名 → 色の割り当て表。タスク一覧から登録順（createdAt）に重複なく振る。
+// 案件数がパレットを超えた場合のみ色が一巡して重複する。
+let PROJECT_COLOR_MAP = new Map();
+function assignProjectColors(tasks) {
+  const first = new Map(); // 案件名 → 最初に登録された時刻
+  for (const t of (tasks || [])) {
+    const p = t.projectName || '';
+    if (!p) continue;
+    const ca = t.createdAt || 0;
+    if (!first.has(p) || ca < first.get(p)) first.set(p, ca);
+  }
+  const names = [...first.keys()].sort((a, b) => (first.get(a) - first.get(b)) || a.localeCompare(b, 'ja'));
+  PROJECT_COLOR_MAP = new Map(names.map((n, i) => [n, PROJECT_PALETTE[i % PROJECT_PALETTE.length]]));
+}
 function getProjectColor(name) {
   if (!name) return '#888';
+  const assigned = PROJECT_COLOR_MAP.get(name);
+  if (assigned) return assigned;
+  // 割り当て表に無い名前（会社名・担当者名のアバター等）は従来どおりハッシュで決める
   let hash = 0;
   for (let i = 0; i < name.length; i++) hash = (name.charCodeAt(i) + ((hash << 5) - hash)) | 0;
   return PROJECT_PALETTE[Math.abs(hash) % PROJECT_PALETTE.length];
@@ -1692,7 +1712,10 @@ export default function App() {
     });
   };
 
-  const scheduled = useMemo(() => scheduleTasks(tasks, settings, projectOrder), [tasks, settings, projectOrder]);
+  const scheduled = useMemo(() => {
+    assignProjectColors(tasks); // 案件の色割り当てを更新（登録順・重複なし）
+    return scheduleTasks(tasks, settings, projectOrder);
+  }, [tasks, settings, projectOrder]);
 
   // 終了予定を過ぎた案件（機能B）。1分ごとの now と endPromptState で再評価
   const overdueProjects = useMemo(() => {
@@ -3801,6 +3824,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                         <TaskBlock key={si} task={task} slot={slot} done={done} compact={compact}
                           heightPct={(slot.hours / morningHours) * 100}
                           projectColor={getProjectColor(task.projectName)}
+                          separator={si === 0 ? null : (morningItems[si - 1].task.projectName !== task.projectName ? 'strong' : 'weak')}
                           onClick={onEditProject && (() => onEditProject(task.projectName))} />
                       ))}
                     </div>
@@ -3811,6 +3835,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                         <TaskBlock key={si} task={task} slot={slot} done={done} compact={compact}
                           heightPct={(slot.hours / afternoonHours) * 100}
                           projectColor={getProjectColor(task.projectName)}
+                          separator={si === 0 ? null : (afternoonItems[si - 1].task.projectName !== task.projectName ? 'strong' : 'weak')}
                           onClick={onEditProject && (() => onEditProject(task.projectName))} />
                       ))}
                     </div>
@@ -3850,7 +3875,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
   );
 }
 
-function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact }) {
+function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact, separator }) {
   const remaining = Math.max(0, task.hours - (task.completedHours || 0));
   const stepLabel = task.stepName ? ` - ${task.stepName}` : '';
   const internal = task.projectNameInternal || '';
@@ -3873,6 +3898,9 @@ function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact
         padding: '3px 5px', fontSize: 10, lineHeight: 1.25, overflow: 'hidden',
         position: 'relative',
         cursor: onClick ? 'pointer' : 'default',
+        // 上に重なるブロックとの切れ目：案件が替わる位置は太い白線、同一案件のステップ間は細い線
+        boxShadow: separator === 'strong' ? 'inset 0 2px 0 #ffffff'
+          : separator === 'weak' ? 'inset 0 1px 0 rgba(255,255,255,0.45)' : 'none',
       }}>
       {compact ? (
         // 月間表示などの狭い列：案件名1行のみ（詳細はツールチップ）
