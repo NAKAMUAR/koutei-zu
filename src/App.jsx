@@ -473,35 +473,12 @@ function scheduleTasks(tasks, settings, projectOrder) {
   // 終了予定の指定（manualEnd）もこの下限に反映される
   const lastEndByAssignee = {};
 
-  const scheduled = sorted.map(task => {
-    const fullHours = Math.max(0, task.hours || 0);
-    // 【0】スケジュール枠は当初の制作時間で固定（completedHours は残時間表示のみ）
-    const durationHours = fullHours;
-    const remainingHours = Math.max(0, fullHours - (task.completedHours || 0));
-
-    if (durationHours <= 0) {
-      return { ...task, scheduledStart: null, scheduledEnd: null, slots: [], remainingHours: 0 };
-    }
-
+  // eTs 以降の空き営業時間に制作時間ぶんを詰める（予約済み・休日/不在は飛ばす）。
+  // 終了予定の指定（manualEnd・開始より後の場合のみ有効）があればその時刻で打ち切る
+  const fillTaskSlots = (task, eTs) => {
     const assignee = task.assignee;
-    // 最早開始可能時刻：開始時間の指定（manualStart）があればそれを優先し、
-    // 起点・完了実績の下限（doneFloor）より前でも指定どおりに置く。
-    // 同視点の前ステップ終了（工程順）と他タスクの占有時間は常に守る。
-    let eTs = baseTsOf(assignee);
-    if (lastEndByAssignee[assignee] && lastEndByAssignee[assignee] > eTs) eTs = lastEndByAssignee[assignee];
-    if (task.manualStart) {
-      const ms = new Date(task.manualStart);
-      if (!isNaN(ms.getTime())) {
-        eTs = startOfDay(ms).getTime() + (ms.getHours() * 60 + ms.getMinutes()) * 60000;
-      }
-    }
-    const vkey = `${assignee}::${task.projectName}::${task.viewpointName}`;
-    if (vpLastEnd[vkey] && vpLastEnd[vkey] > eTs) eTs = vpLastEnd[vkey];
-
     const eDate = startOfDay(new Date(eTs));
     const eMin = Math.round((eTs - eDate.getTime()) / 60000);
-
-    // 終了予定の指定（開始より後の場合のみ有効）。スロットはこの時刻で打ち切る
     let meTs = null, meDate = null, meMin = 0;
     if (task.manualEnd) {
       const me = new Date(task.manualEnd);
@@ -512,9 +489,7 @@ function scheduleTasks(tasks, settings, projectOrder) {
         }
       }
     }
-
-    // eTs 以降の空き営業時間を前から順に埋める（予約済み・休日/不在は飛ばす）
-    let remainingMin = durationHours * 60;
+    let remainingMin = Math.max(0, task.hours || 0) * 60;
     const slots = [];
     let date = new Date(eDate);
     let guard = 0;
@@ -535,6 +510,61 @@ function scheduleTasks(tasks, settings, projectOrder) {
       }
       date = addDays(date, 1);
     }
+    return { slots, meTs, meDate, meMin };
+  };
+
+  // ===== 事前パス（差し込み）=====
+  // 開始指定（manualStart）のあるタスクを先に配置して時間を予約する。
+  // 指定なしのタスクは後からその前後の空きに分割して入るため、
+  // 例: 案件A(8〜12時)の途中に案件B(10時開始)を差し込むと A は 8〜10時＋13〜15時 に割れる。
+  // 同じ視点に未配置の前工程（開始指定なし）がある場合は工程順を守るため事前予約しない
+  const vkeyOf = (t) => `${t.assignee}::${t.projectName}::${t.viewpointName}`;
+  const pinnedResults = new Map();
+  for (const task of sorted) {
+    if (!task.manualStart || (task.hours || 0) <= 0) continue;
+    const ms = new Date(task.manualStart);
+    if (isNaN(ms.getTime())) continue;
+    const hasEarlierUnpinned = sorted.some(o =>
+      o !== task && vkeyOf(o) === vkeyOf(task) && !o.manualStart &&
+      (o.stepOrder ?? -1) < (task.stepOrder ?? -1)
+    );
+    if (hasEarlierUnpinned) continue;
+    const eTs = startOfDay(ms).getTime() + (ms.getHours() * 60 + ms.getMinutes()) * 60000;
+    pinnedResults.set(task.id, fillTaskSlots(task, eTs));
+  }
+
+  const scheduled = sorted.map(task => {
+    const fullHours = Math.max(0, task.hours || 0);
+    // 【0】スケジュール枠は当初の制作時間で固定（completedHours は残時間表示のみ）
+    const durationHours = fullHours;
+    const remainingHours = Math.max(0, fullHours - (task.completedHours || 0));
+
+    if (durationHours <= 0) {
+      return { ...task, scheduledStart: null, scheduledEnd: null, slots: [], remainingHours: 0 };
+    }
+
+    const assignee = task.assignee;
+    const vkey = vkeyOf(task);
+    let res;
+    if (pinnedResults.has(task.id)) {
+      // 開始指定あり：事前パスで予約済みの配置を使う
+      res = pinnedResults.get(task.id);
+    } else {
+      // 最早開始可能時刻：開始時間の指定（manualStart）があればそれを優先し、
+      // 起点・完了実績の下限（doneFloor）より前でも指定どおりに置く。
+      // 同視点の前ステップ終了（工程順）と他タスクの占有時間は常に守る。
+      let eTs = baseTsOf(assignee);
+      if (lastEndByAssignee[assignee] && lastEndByAssignee[assignee] > eTs) eTs = lastEndByAssignee[assignee];
+      if (task.manualStart) {
+        const ms = new Date(task.manualStart);
+        if (!isNaN(ms.getTime())) {
+          eTs = startOfDay(ms).getTime() + (ms.getHours() * 60 + ms.getMinutes()) * 60000;
+        }
+      }
+      if (vpLastEnd[vkey] && vpLastEnd[vkey] > eTs) eTs = vpLastEnd[vkey];
+      res = fillTaskSlots(task, eTs);
+    }
+    const { slots, meTs, meDate, meMin } = res;
 
     if (slots.length === 0) {
       return { ...task, scheduledStart: null, scheduledEnd: null, slots: [], remainingHours };
@@ -546,7 +576,7 @@ function scheduleTasks(tasks, settings, projectOrder) {
     if (meTs) {
       endDate = meDate; endMin = meMin; endTs = meTs;
     }
-    vpLastEnd[vkey] = endTs;
+    vpLastEnd[vkey] = Math.max(vpLastEnd[vkey] || 0, endTs);
     // 次のタスク（開始指定なし）はこのタスクの終了予定に続けて配置する
     lastEndByAssignee[assignee] = Math.max(lastEndByAssignee[assignee] || 0, endTs);
     return {
