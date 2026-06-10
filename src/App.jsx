@@ -802,6 +802,7 @@ function groupByViewpoint(tasks) {
         assignee: task.assignee,
         memo: task.memo || '',
         tentative: !!task.tentative,
+        deadline: task.deadline || '',
         tasks: [],
         minPriority: task.priority,
       };
@@ -809,6 +810,7 @@ function groupByViewpoint(tasks) {
     groups[key].tasks.push(task);
     if (!groups[key].memo && task.memo) groups[key].memo = task.memo;
     if (task.tentative) groups[key].tentative = true;
+    if (!groups[key].deadline && task.deadline) groups[key].deadline = task.deadline;
     if (task.priority < groups[key].minPriority) groups[key].minPriority = task.priority;
   }
   // 各グループ内：stepOrder → priority → createdAt の順
@@ -872,7 +874,7 @@ export default function App() {
   // 初期表示は「パース」プリセット
   const makeEmptyViewpoint = () => makeViewpointFromPreset(VIEWPOINT_PRESETS[0]);
   const emptyForm = {
-    projectName: '', projectNameInternal: '', companyName: '', customerContact: '', assignee: '', priority: '', manualStart: '', manualEnd: '', memo: '', tentative: false,
+    projectName: '', projectNameInternal: '', companyName: '', customerContact: '', assignee: '', priority: '', manualStart: '', manualEnd: '', memo: '', tentative: false, deadline: '',
     // 視点（担当タスク）の動的リスト。各視点の中にステップ（工程）を持つ
     viewpoints: [makeEmptyViewpoint()],
   };
@@ -1163,6 +1165,7 @@ export default function App() {
             priority, hours: stepHours, completedHours: stepCompleted,
             memo: (form.memo || '').trim(),
             tentative: !!form.tentative,
+            deadline: form.deadline || null,
             // ステップ個別の開始・終了指定は維持（フォームの欄は下で先頭/末尾の未完了ステップに適用）
             manualStart: existing?.manualStart || null,
             manualEnd: existing?.manualEnd || null,
@@ -1323,6 +1326,7 @@ export default function App() {
       manualEnd: task.manualEnd || '',
       memo: task.memo || '',
       tentative: !!task.tentative,
+      deadline: task.deadline || '',
       viewpoints: [{
         viewpointName: task.viewpointName || '',
         assignee: task.assignee || '',
@@ -1383,6 +1387,7 @@ export default function App() {
       manualEnd: (priorityPool.length > 0 ? (priorityPool[priorityPool.length - 1].manualEnd || '') : (projectTasks[projectTasks.length - 1].manualEnd || '')),
       memo: (projectTasks.find(t => t.memo) || {}).memo || '',
       tentative: projectTasks.some(t => t.tentative),
+      deadline: (projectTasks.find(t => t.deadline) || {}).deadline || '',
       viewpoints,
     });
     setEditingId(null);
@@ -1446,6 +1451,7 @@ export default function App() {
       customerContact: sibling?.customerContact || '',
       memo: sibling?.memo || '',
       tentative: !!sibling?.tentative,
+      deadline: sibling?.deadline || '',
       viewpoints: [makeEmptyViewpoint()],
     });
     setEditingId(null);
@@ -1483,6 +1489,7 @@ export default function App() {
       customerContact: group.customerContact || first.customerContact || '',
       assignee: group.assignee,
       priority: String(group.minPriority || first.priority),
+      deadline: first.deadline || '',
       viewpoints,
     });
     setEditingId(null);
@@ -1501,6 +1508,7 @@ export default function App() {
       customerContact: group.customerContact || '',
       assignee: group.assignee,
       priority: String(group.minPriority),
+      deadline: group.deadline || '',
       viewpoints: [{ viewpointName: group.viewpointName, assignee: group.assignee, manualStart: '', steps: [{ name: '', hours: '', completedHours: '' }] }],
     });
     setEditingId(null);
@@ -2302,8 +2310,8 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
         .some(v => (v || '').toLowerCase().includes(q))
     );
   }, [scheduled.active, q]);
-  // 進行中タスクのグループ表示：会社別（既定）／担当者別
-  const [listGroupMode, setListGroupMode] = useState('company');
+  // 進行中タスクのグループ表示：納期順（既定）／会社別（制作順）／担当者別（制作順）
+  const [listGroupMode, setListGroupMode] = useState('deadline');
   // 担当者別表示のときの担当者の絞り込み（null = 全選択）
   const [selectedListAssignee, setSelectedListAssignee] = useState(null);
 
@@ -2461,6 +2469,20 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
             <input type="number" min="1" step="1" value={form.priority}
               onChange={(e) => setForm({ ...form, priority: e.target.value })}
               placeholder="未入力なら末尾に追加" style={inputStyle} />
+          </div>
+          <div>
+            <label style={labelStyle}>納期（任意・進行中タスクの「納期順」表示に使用）</label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input type="date" value={form.deadline || ''}
+                onChange={(e) => setForm({ ...form, deadline: e.target.value })}
+                style={{ ...inputStyle, width: 'auto', flex: '0 0 160px' }} />
+              {form.deadline && (
+                <button type="button" onClick={() => setForm({ ...form, deadline: '' })}
+                  style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '8px 12px', borderRadius: 3, fontSize: 11, color: colors.textMute, cursor: 'pointer' }}>
+                  クリア
+                </button>
+              )}
+            </div>
           </div>
           <div style={{ gridColumn: 'span 2' }}>
             <label style={labelStyle}>開始時間（任意・最初の視点に適用・自動スケジュールより優先／視点ごとに変えたい場合は下の各視点の欄で）</label>
@@ -2723,10 +2745,13 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
         {/* 表示切替＋案件の検索 */}
         <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', gap: 6 }}>
-            <button type="button" onClick={() => setListGroupMode('company')} style={tabStyle(listGroupMode === 'company', colors, fontJP)}>
+            <button type="button" onClick={() => setListGroupMode('deadline')} style={tabStyle(listGroupMode === 'deadline', colors, fontJP)} title="納期の早い案件から表示（納期なしは末尾・制作順）">
+              納期順
+            </button>
+            <button type="button" onClick={() => setListGroupMode('company')} style={tabStyle(listGroupMode === 'company', colors, fontJP)} title="会社ごとに制作順で表示">
               会社別
             </button>
-            <button type="button" onClick={() => setListGroupMode('assignee')} style={tabStyle(listGroupMode === 'assignee', colors, fontJP)}>
+            <button type="button" onClick={() => setListGroupMode('assignee')} style={tabStyle(listGroupMode === 'assignee', colors, fontJP)} title="担当者ごとに制作順で表示">
               担当者別
             </button>
           </div>
@@ -2837,6 +2862,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
             groups={groupByViewpoint(filteredActive)}
             allActive={filteredActive} now={now}
             companyOrder={settings.companyOrder || []}
+            sortMode={listGroupMode === 'deadline' ? 'deadline' : 'production'}
             projectOrder={projectOrder} saveProjectOrder={saveProjectOrder}
             handleEdit={handleEdit} handleEditProject={handleEditProject} handleEditViewpoint={handleEditViewpoint}
             handleAddViewpointToProject={handleAddViewpointToProject}
@@ -2852,7 +2878,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
 }
 
 // ============ 視点グループリスト ============
-function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder, saveProjectOrder, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, assigneeList, colors, fontJP }) {
+function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder, saveProjectOrder, sortMode, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, assigneeList, colors, fontJP }) {
   // 全タスクのグローバルなインデックス（移動可否判定用）
   const allSortedIds = allActive.map(t => t.id);
 
@@ -2885,6 +2911,7 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
           customerContact: g.customerContact || '',
           memo: g.memo || '',
           tentative: !!g.tentative,
+          deadline: g.deadline || '',
           viewpointGroups: [],
           totalHours: 0,
           completedHours: 0,
@@ -2905,6 +2932,7 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
       if (!pg.customerContact && g.customerContact) pg.customerContact = g.customerContact;
       if (!pg.memo && g.memo) pg.memo = g.memo;
       if (g.tentative) pg.tentative = true;
+      if (!pg.deadline && g.deadline) pg.deadline = g.deadline;
       if (g.assignee) pg.assigneeSet.add(g.assignee);
       // 案件全体の開始＝最早の視点開始、終了＝最遅の視点終了
       if (g.scheduledStart) {
@@ -2936,7 +2964,17 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
 
   // 会社ごとに「必ず1グループ」にまとめる（同じ会社が複数箇所に割れない）。
   // 会社の並びは companyOrder ベース。会社内の案件は orderedProjectGroups の相対順（優先順位・ドラッグ）を維持。
+  // 納期順モード（sortMode === 'deadline'）では会社で分けず、納期の早い順の1リストにする
   const companySections = useMemo(() => {
+    if (sortMode === 'deadline') {
+      const sorted = [...orderedProjectGroups].sort((a, b) => {
+        const da = a.deadline || '9999-12-31';
+        const db = b.deadline || '9999-12-31';
+        if (da !== db) return da < db ? -1 : 1;
+        return 0; // 同じ納期・納期なし同士は制作順を維持（stable sort）
+      });
+      return [{ companyName: '', projects: sorted, remaining: sorted.reduce((s, pg) => s + (pg.totalHours - pg.completedHours), 0) }];
+    }
     const map = new Map();
     for (const pg of orderedProjectGroups) {
       const c = pg.companyName || '';
@@ -2946,7 +2984,7 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
       sec.remaining += (pg.totalHours - pg.completedHours);
     }
     return [...map.values()].sort((a, b) => compareCompanyDisplay(a.companyName, b.companyName, companyOrder));
-  }, [orderedProjectGroups, companyOrder]);
+  }, [orderedProjectGroups, companyOrder, sortMode]);
 
   // 実際に表示される案件の並び（会社グループを連結した順）。ドラッグ並べ替えの基準にする
   const displayedProjectNames = useMemo(
@@ -3044,7 +3082,8 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
         const isCollapsed = collapsed.has(pg.projectName);
         const remaining = pg.totalHours - pg.completedHours;
         const pcolor = getProjectColor(pg.projectName);
-        const draggable = !!saveProjectOrder;
+        // 納期順モードでは並び順は納期で決まるため手動並び替えは無効
+        const draggable = !!saveProjectOrder && sortMode !== 'deadline';
         const isDragSource = dragSource === pg.projectName;
         const isDragOver = dragOver === pg.projectName && dragSource && dragSource !== pg.projectName;
         const isFirstInSection = secIdx === 0;
@@ -3089,6 +3128,13 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
                   borderRadius: 2, padding: '2px 6px', flexShrink: 0,
                 }} title="仮案件（仮予定）です。編集フォームで本登録に切り替えられます">仮</span>
               )}
+              {sortMode === 'deadline' && pg.companyName && (
+                <span style={{
+                  fontSize: 10, fontWeight: 600, color: '#fff',
+                  background: getProjectColor(pg.companyName), borderRadius: 10,
+                  padding: '1px 8px', flexShrink: 0,
+                }}>{pg.companyName}</span>
+              )}
               {pg.projectNameInternal ? (
                 <>
                   <span style={{ fontSize: 14, fontWeight: 600, color: colors.text, cursor: 'pointer' }} onClick={() => toggle(pg.projectName)}>{pg.projectNameInternal}</span>
@@ -3102,6 +3148,21 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
                   お客様: {pg.customerContact}
                 </span>
               )}
+              {pg.deadline && (() => {
+                const todayYmd = fmtYMD(new Date());
+                const endYmd = pg.scheduledEnd ? fmtYMD(pg.scheduledEnd) : null;
+                const danger = todayYmd > pg.deadline || (endYmd && endYmd > pg.deadline);
+                const d = new Date(pg.deadline + 'T00:00:00');
+                return (
+                  <span title={danger ? '納期を過ぎている、または終了予定が納期を超えています' : '納期'} style={{
+                    fontSize: 11, fontWeight: 700, flexShrink: 0,
+                    color: danger ? '#fff' : '#7a8471',
+                    background: danger ? '#c1272d' : '#eef2ea',
+                    border: danger ? 'none' : '1px solid #c9d4c2',
+                    borderRadius: 2, padding: '1px 7px',
+                  }}>納期 {fmtMD(d)}（{dayName(d)}）{danger ? ' ⚠' : ''}</span>
+                );
+              })()}
               {pg.memo && (
                 <span title={pg.memo} style={{
                   fontSize: 11, color: '#8a7a4a', background: '#faf5e4', border: '1px solid #e8dcb8',
@@ -4383,7 +4444,7 @@ function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact
   }
   const cancelled = !!task.cancelled;
   const tentative = !done && !!task.tentative;
-  const memoLine = task.memo ? `\n📝 ${task.memo}` : '';
+  const memoLine = (task.deadline ? `\n納期 ${(() => { const d = new Date(task.deadline + 'T00:00:00'); return isNaN(d.getTime()) ? task.deadline : `${d.getMonth() + 1}/${d.getDate()}`; })()}` : '') + (task.memo ? `\n📝 ${task.memo}` : '');
   const title = done
     ? `【${cancelled ? '中止' : '完了'}】${nameLine}\n${minToTime(slot.startMin)}〜${minToTime(slot.endMin)} (${slot.hours}h)${aeStr ? `\n実終了 ${aeStr}` : ''}${memoLine}${onClick ? '\nクリックで案件を編集（終了時間の実績は完了タブで）' : '\n※終了時間（実績）は完了タブで編集できます'}`
     : `${tentative ? '【仮】' : ''}#${task.priority} ${nameLine}\n${minToTime(slot.startMin)}〜${minToTime(slot.endMin)} (${slot.hours}h)\n残り ${remaining}h / 全${task.hours}h${memoLine}${task.manualStart ? '\n※開始時間指定あり' : ''}${task.manualEnd ? '\n※終了予定指定あり' : ''}${task.delays && task.delays.length ? `\n※遅延履歴あり（${task.delays.length}回）` : ''}${onClick ? '\nクリックで案件を編集' : ''}${canDragProject ? '\nドラッグで案件の順番を変更' : ''}`;
