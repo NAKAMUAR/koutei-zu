@@ -1666,6 +1666,32 @@ export default function App() {
     saveTasks(prev => normalizePriorities(prev.map(t => t.id === id ? { ...t, priority: np } : t)));
   };
 
+  // ドラッグ＆ドロップで優先順位を変更：src を同じ会社内で target の位置（直前）へ差し込む
+  const [dragTaskId, setDragTaskId] = useState(null);
+  const reorderTaskPriority = (srcId, targetId) => {
+    if (!srcId || srcId === targetId) return;
+    const src = tasksRef.current.find(t => t.id === srcId);
+    const tgt = tasksRef.current.find(t => t.id === targetId);
+    if (!src || !tgt) return;
+    if ((src.companyName || '') !== (tgt.companyName || '')) {
+      alert('優先順位は会社ごとの番号のため、同じ会社のタスク同士でのみ並び替えできます');
+      return;
+    }
+    saveTasks(prev => {
+      const company = src.companyName || '';
+      const sorted = prev.filter(t => t.status !== 'done' && (t.companyName || '') === company)
+        .sort((a, b) => (a.priority - b.priority) || (a.createdAt - b.createdAt));
+      const moving = sorted.find(t => t.id === srcId);
+      if (!moving) return prev;
+      const rest = sorted.filter(t => t.id !== srcId);
+      const ti = rest.findIndex(t => t.id === targetId);
+      if (ti < 0) return prev;
+      const newSeq = [...rest.slice(0, ti), moving, ...rest.slice(ti)];
+      const prMap = new Map(newSeq.map((t, i) => [t.id, i + 1]));
+      return normalizePriorities(prev.map(t => prMap.has(t.id) ? { ...t, priority: prMap.get(t.id) } : t));
+    });
+  };
+
   const scheduled = useMemo(() => scheduleTasks(tasks, settings, projectOrder), [tasks, settings, projectOrder]);
 
   // 終了予定を過ぎた案件（機能B）。1分ごとの now と endPromptState で再評価
@@ -1902,7 +1928,7 @@ export default function App() {
             handleAddViewpointToProject={handleAddViewpointToProject}
             handleDeleteViewpoint={handleDeleteViewpoint}
             handleDelete={handleDelete} toggleStatus={toggleStatus}
-            moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} completeProject={completeProject} cancelProject={cancelProject} completeViewpoint={completeViewpoint}
+            moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={setDragTaskId} onDropTask={reorderTaskPriority} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} completeProject={completeProject} cancelProject={cancelProject} completeViewpoint={completeViewpoint}
             handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint}
             projectList={projectList} projectInternalList={projectInternalList} viewpointList={viewpointList} assigneeList={assigneeList}
             settings={settings} now={now}
@@ -1920,7 +1946,7 @@ export default function App() {
             handleAddViewpointToProject={handleAddViewpointToProject}
             handleDeleteViewpoint={handleDeleteViewpoint}
             handleDelete={handleDelete} toggleStatus={toggleStatus}
-            moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} completeProject={completeProject} cancelProject={cancelProject} completeViewpoint={completeViewpoint}
+            moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={setDragTaskId} onDropTask={reorderTaskPriority} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} completeProject={completeProject} cancelProject={cancelProject} completeViewpoint={completeViewpoint}
             handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} assigneeList={assigneeList}
             colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
         )}
@@ -2081,7 +2107,7 @@ function NavButton({ active, onClick, icon, label, badge }) {
 }
 
 // ============ 入力ビュー ============
-function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdit, tasks, scheduled, projectOrder, saveProjectOrder, companyList, customerMaster, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, projectList, projectInternalList, viewpointList, assigneeList, settings, now, colors, fontJP, fontDisplay }) {
+function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdit, tasks, scheduled, projectOrder, saveProjectOrder, companyList, customerMaster, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, projectList, projectInternalList, viewpointList, assigneeList, settings, now, colors, fontJP, fontDisplay }) {
   // お客様担当者の候補：会社名を選んでいればその会社の担当者を優先表示
   const contactOptions = useMemo(() => {
     const rows = customerMaster || [];
@@ -2562,7 +2588,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
             handleAddViewpointToProject={handleAddViewpointToProject}
             handleDeleteViewpoint={handleDeleteViewpoint}
             handleDelete={handleDelete} toggleStatus={toggleStatus}
-            moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} completeProject={completeProject} cancelProject={cancelProject} completeViewpoint={completeViewpoint}
+            moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={onDragTask} onDropTask={onDropTask} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} completeProject={completeProject} cancelProject={cancelProject} completeViewpoint={completeViewpoint}
             handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} assigneeList={assigneeList}
             colors={colors} fontJP={fontJP} />
         )}
@@ -2572,7 +2598,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
 }
 
 // ============ 視点グループリスト ============
-function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder, saveProjectOrder, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, assigneeList, colors, fontJP }) {
+function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder, saveProjectOrder, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, assigneeList, colors, fontJP }) {
   // 全タスクのグローバルなインデックス（移動可否判定用）
   const allSortedIds = allActive.map(t => t.id);
 
@@ -2914,7 +2940,7 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
                 handleEdit={handleEdit} handleEditViewpoint={handleEditViewpoint}
                 handleDeleteViewpoint={handleDeleteViewpoint}
                 handleDelete={handleDelete} toggleStatus={toggleStatus}
-                moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} completeProject={completeProject} cancelProject={cancelProject} completeViewpoint={completeViewpoint}
+                moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={onDragTask} onDropTask={onDropTask} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} completeProject={completeProject} cancelProject={cancelProject} completeViewpoint={completeViewpoint}
                 handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} assigneeList={assigneeList}
                 colors={colors} fontJP={fontJP} />
             ))}
@@ -2927,7 +2953,7 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
   );
 }
 
-function ViewpointCard({ group, now, allSortedIds, companyFirstIds, companyLastIds, handleEdit, handleEditViewpoint, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, assigneeList, colors, fontJP }) {
+function ViewpointCard({ group, now, allSortedIds, companyFirstIds, companyLastIds, handleEdit, handleEditViewpoint, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, assigneeList, colors, fontJP }) {
   const projectColor = getProjectColor(group.projectName);
   const progressPct = group.totalHours > 0 ? (group.completedHours / group.totalHours) * 100 : 0;
   // 経過進捗（時間経過ベース・表示用）
@@ -3068,6 +3094,7 @@ function ViewpointCard({ group, now, allSortedIds, companyFirstIds, companyLastI
             onEdit={() => handleEdit(task)} onDelete={() => handleDelete(task.id)} onToggle={() => toggleStatus(task.id)}
             onMoveUp={() => moveUp(task.id)} onMoveDown={() => moveDown(task.id)}
             onChangePriority={(v) => changePriority(task.id, v)}
+            dragTaskId={dragTaskId} onDragTask={onDragTask} onDropTask={onDropTask}
             onAddProgress={(d) => addProgress(task.id, d)}
             onSetHours={(h) => setTaskHours(task.id, h)}
             onSetCompletedHours={(c) => setTaskCompletedHours(task.id, c)}
@@ -3126,9 +3153,10 @@ function AdvanceBar({ pendingDays, pendingHours, todayUncredited, todayWorkingHo
   );
 }
 
-function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveUp, onMoveDown, onChangePriority, onAddProgress, onSetHours, onSetCompletedHours, onSetManualStart, onSetManualEnd, canMoveUp, canMoveDown, isLast, colors, fontJP }) {
+function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveUp, onMoveDown, onChangePriority, dragTaskId, onDragTask, onDropTask, onAddProgress, onSetHours, onSetCompletedHours, onSetManualStart, onSetManualEnd, canMoveUp, canMoveDown, isLast, colors, fontJP }) {
   const [editingPriority, setEditingPriority] = useState(false);
   const [priorityInput, setPriorityInput] = useState(String(task.priority));
+  const [dragHover, setDragHover] = useState(false);
   const [editingStart, setEditingStart] = useState(false);
   const [startInput, setStartInput] = useState('');
   const [editingEnd, setEditingEnd] = useState(false);
@@ -3219,12 +3247,33 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
     : showStepLabel ? '（ステップ未分類）' : '内容詳細';
 
   return (
-    <div style={{
+    <div
+      onDragOver={(e) => { if (onDropTask && dragTaskId && dragTaskId !== task.id) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (!dragHover) setDragHover(true); } }}
+      onDragLeave={() => { if (dragHover) setDragHover(false); }}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragHover(false);
+        const src = e.dataTransfer.getData('text/plain') || dragTaskId;
+        if (src && onDropTask) onDropTask(src, task.id);
+        if (onDragTask) onDragTask(null);
+      }}
+      style={{
       display: 'flex', alignItems: 'center', gap: 12,
       padding: '12px 18px',
       borderBottom: isLast ? 'none' : `1px solid ${colors.border}`,
       background: '#fff',
+      opacity: dragTaskId === task.id ? 0.5 : 1,
+      boxShadow: dragHover && dragTaskId && dragTaskId !== task.id ? `0 0 0 2px ${colors.accent} inset` : 'none',
     }}>
+      {onDropTask && (
+        <span draggable
+          onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', task.id); if (onDragTask) onDragTask(task.id); }}
+          onDragEnd={() => { if (onDragTask) onDragTask(null); }}
+          title="ドラッグして優先順位を変更（同じ会社内の好きな位置へ）"
+          style={{ cursor: 'grab', color: colors.textMute, display: 'flex', flexShrink: 0 }}>
+          <GripVertical size={13} />
+        </span>
+      )}
       <button onClick={onToggle}
         style={{
           width: 18, height: 18, border: `1.5px solid ${colors.border}`,
@@ -3807,7 +3856,7 @@ function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact
 }
 
 // ============ 担当者別ビュー ============
-function AssigneeView({ scheduled, selectedAssignee, setSelectedAssignee, now, assigneeOrder, companyOrder, projectOrder, saveProjectOrder, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, assigneeList, colors, fontJP, fontDisplay }) {
+function AssigneeView({ scheduled, selectedAssignee, setSelectedAssignee, now, assigneeOrder, companyOrder, projectOrder, saveProjectOrder, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, assigneeList, colors, fontJP, fontDisplay }) {
   const assignees = sortAssigneesByMaster([...new Set(scheduled.active.map(t => t.assignee))], assigneeOrder);
   if (assignees.length === 0) {
     return (
@@ -3893,7 +3942,7 @@ function AssigneeView({ scheduled, selectedAssignee, setSelectedAssignee, now, a
               handleAddViewpointToProject={handleAddViewpointToProject}
               handleDeleteViewpoint={handleDeleteViewpoint}
               handleDelete={handleDelete} toggleStatus={toggleStatus}
-              moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} completeProject={completeProject} cancelProject={cancelProject} completeViewpoint={completeViewpoint}
+              moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={onDragTask} onDropTask={onDropTask} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} completeProject={completeProject} cancelProject={cancelProject} completeViewpoint={completeViewpoint}
               handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} assigneeList={assigneeList}
               colors={colors} fontJP={fontJP} />
           </section>
