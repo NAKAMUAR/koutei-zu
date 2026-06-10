@@ -3864,6 +3864,138 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
         )}
       </div>
 
+      {viewMode === 'day' ? (() => {
+        // 1日表示：時間が横に流れるタイムライン形式（30分刻みの時間軸 × 担当者行）
+        const dayDate = allDates[0];
+        const ymd = fmtYMD(dayDate);
+        const dayStart = morningSlot.start, dayEnd = afternoonSlot.end;
+        const totalMin = dayEnd - dayStart;
+        const halfHours = [];
+        for (let m = dayStart; m < dayEnd; m += 30) halfHours.push(m);
+        const timeColW = `calc((100% - ${labelWidth}px) / ${halfHours.length})`;
+        const rowH = 88;
+        let dayNowFrac = null;
+        if (now && isSameDay(dayDate, now)) {
+          const nm = now.getHours() * 60 + now.getMinutes();
+          if (nm >= dayStart && nm <= dayEnd) dayNowFrac = (nm - dayStart) / totalMin;
+        }
+        const lunchLeft = ((morningSlot.end - dayStart) / totalMin) * 100;
+        const lunchWidth = ((afternoonSlot.start - morningSlot.end) / totalMin) * 100;
+        return (
+          <div className="compact-scroll" style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 6, overflow: 'auto' }}>
+            <div style={{ minWidth: 760, position: 'relative' }}>
+              {dayNowFrac != null && (
+                <div title={`現在時刻 ${minToTime(now.getHours() * 60 + now.getMinutes())}`} style={{
+                  position: 'absolute', top: 0, bottom: 0,
+                  left: `calc(${labelWidth}px + (100% - ${labelWidth}px) * ${dayNowFrac})`,
+                  width: 2, background: colors.accent, zIndex: 4, pointerEvents: 'none',
+                }}>
+                  <div style={{ position: 'absolute', top: 0, left: -4, width: 10, height: 10, borderRadius: '50%', background: colors.accent }} />
+                </div>
+              )}
+              {/* 時間ヘッダー（30分刻み） */}
+              <div style={{ display: 'flex', borderBottom: `1px solid ${colors.border}`, background: '#fbf9f4' }}>
+                <div style={{
+                  width: labelWidth, padding: '10px 12px', fontSize: 11, color: colors.textMute, fontWeight: 500,
+                  flexShrink: 0, borderRight: `1px solid ${colors.border}`, boxSizing: 'border-box',
+                  position: 'sticky', left: 0, zIndex: 3, background: '#fbf9f4',
+                }}>担当</div>
+                {halfHours.map((m, i) => (
+                  <div key={m} style={{
+                    width: timeColW, flexShrink: 0, padding: '8px 0 6px', fontSize: 10, color: colors.textMute,
+                    boxSizing: 'border-box',
+                    borderRight: i < halfHours.length - 1 ? `1px ${(m + 30) % 60 === 0 ? 'solid' : 'dashed'} ${colors.border}` : 'none',
+                  }}>
+                    <span style={{ paddingLeft: 4 }}>{minToTime(m)}</span>
+                  </div>
+                ))}
+              </div>
+              {/* 担当者行（ブロックは開始〜終了の位置に横配置） */}
+              {assignees.map((assignee, ai) => {
+                const items = (matrix[assignee] && matrix[assignee][ymd]) || [];
+                const abs = dayAbsence(assignee, dayDate, settings.absences || []);
+                const absLabel = (settings.absences || []).find(x => x && x.assignee === assignee && x.startDate <= ymd && x.endDate >= ymd && x.label)?.label || '';
+                return (
+                  <div key={assignee} style={{ display: 'flex', borderBottom: ai < assignees.length - 1 ? `1px solid ${colors.border}` : 'none' }}>
+                    <div
+                      draggable={!!onReorderAssignee}
+                      onDragStart={onReorderAssignee ? ((e) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', assignee); setRowDrag(assignee); }) : undefined}
+                      onDragEnd={onReorderAssignee ? (() => { setRowDrag(null); setRowDragOver(null); }) : undefined}
+                      onDragOver={onReorderAssignee ? ((e) => { if (rowDrag && rowDrag !== assignee) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (rowDragOver !== assignee) setRowDragOver(assignee); } }) : undefined}
+                      onDragLeave={onReorderAssignee ? (() => { if (rowDragOver === assignee) setRowDragOver(null); }) : undefined}
+                      onDrop={onReorderAssignee ? ((e) => { e.preventDefault(); if (rowDrag && rowDrag !== assignee) onReorderAssignee(rowDrag, assignee); setRowDrag(null); setRowDragOver(null); }) : undefined}
+                      title={onReorderAssignee ? 'ドラッグして担当者の表示順を変更（従業員マスタの並びに反映）' : undefined}
+                      style={{
+                        width: labelWidth, padding: '12px 8px', fontSize: 13, fontWeight: 500,
+                        flexShrink: 0, borderRight: `1px solid ${colors.border}`,
+                        display: 'flex', alignItems: 'center', gap: 5, background: '#fbf9f4',
+                        boxSizing: 'border-box', position: 'sticky', left: 0, zIndex: 2,
+                        boxShadow: rowDragOver === assignee && rowDrag && rowDrag !== assignee
+                          ? `0 0 0 2px ${colors.accent} inset` : '2px 0 4px rgba(0,0,0,0.04)',
+                        opacity: rowDrag === assignee ? 0.5 : 1,
+                        cursor: onReorderAssignee ? 'grab' : 'default',
+                      }}>
+                      {onReorderAssignee && <GripVertical size={12} style={{ color: colors.textMute, flexShrink: 0 }} />}
+                      {assignee}
+                    </div>
+                    <div style={{ flex: 1, position: 'relative', height: rowH, background: '#fff' }}>
+                      {/* 30分グリッド線 */}
+                      {halfHours.map((m, i) => i > 0 && (
+                        <div key={m} style={{
+                          position: 'absolute', top: 0, bottom: 0,
+                          left: `${((m - dayStart) / totalMin) * 100}%`, width: 1,
+                          background: m % 60 === 0 ? '#ece4d2' : '#f5f0e3',
+                        }} />
+                      ))}
+                      {/* 昼休み */}
+                      <div style={{
+                        position: 'absolute', top: 0, bottom: 0,
+                        left: `${lunchLeft}%`, width: `${lunchWidth}%`,
+                        background: 'repeating-linear-gradient(45deg, #f3efe4, #f3efe4 4px, #faf7ee 4px, #faf7ee 8px)',
+                      }} />
+                      {/* 終日不在 */}
+                      {abs.allDay && (
+                        <div title={absLabel ? `休み（${absLabel}）` : '休み'} style={{
+                          position: 'absolute', inset: 0, zIndex: 2,
+                          background: 'repeating-linear-gradient(45deg, #e3e3e0, #e3e3e0 5px, #efefec 5px, #efefec 10px)',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          color: '#8a8a82', fontWeight: 700, fontSize: 13,
+                        }}>休{absLabel && <span style={{ fontSize: 10, fontWeight: 500 }}>（{absLabel}）</span>}</div>
+                      )}
+                      {/* 時間帯不在 */}
+                      {!abs.allDay && abs.intervals.map(([s, e], k) => {
+                        const cs = Math.max(s, dayStart), ce = Math.min(e, dayEnd);
+                        if (ce <= cs) return null;
+                        return (
+                          <div key={k} title={absLabel ? `不在（${absLabel}）` : '不在'} style={{
+                            position: 'absolute', top: 0, bottom: 0, zIndex: 2,
+                            left: `${((cs - dayStart) / totalMin) * 100}%`, width: `${((ce - cs) / totalMin) * 100}%`,
+                            background: 'repeating-linear-gradient(45deg, #e3e3e0, #e3e3e0 4px, #efefec 4px, #efefec 8px)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            color: '#8a8a82', fontSize: 9, fontWeight: 600, overflow: 'hidden',
+                          }}>{absLabel || '不在'}</div>
+                        );
+                      })}
+                      {/* タスクブロック */}
+                      {items.map(({ task, slot, done }, si) => {
+                        const s = Math.max(slot.startMin, dayStart), e = Math.min(slot.endMin, dayEnd);
+                        if (e <= s) return null;
+                        return (
+                          <TaskBlock key={si} task={task} slot={slot} done={done}
+                            projectColor={getProjectColor(task.projectName)}
+                            timeline={{ left: `${((s - dayStart) / totalMin) * 100}%`, width: `${((e - s) / totalMin) * 100}%` }}
+                            projDrag={projDrag} onProjDragStart={onReorderProject ? setProjDrag : null} onDropProject={onReorderProject}
+                            onClick={onEditProject && (() => onEditProject(task.projectName))} />
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })() : (
       <div ref={scrollRef} className="compact-scroll" style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 6, overflow: 'auto' }}>
         <div style={{ minWidth: isFlexWidth ? undefined : labelWidth + allDates.length * dayCellWidth, position: 'relative' }}>
           {nowLineX != null && (
@@ -4007,6 +4139,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
           ))}
         </div>
       </div>
+      )}
 
       <div style={{ marginTop: 20, fontSize: 11, color: colors.textMute }}>
         セル内の色は案件ごと（パステル・「ホワイト」工程は1段階薄い色） ・ 右上の #番号 が優先順位 ・ 斜線ストライプ＋「仮」は仮案件 ・ グレーの実線ブロックは完了済（「済」）／中止（「止」、実終了時刻から遡って表示） ・ グレーの斜線は休日・不在 ・ マウスオーバーで詳細表示 ・ クリックで案件編集フォームを開く（完了済みの案件も編集可） ・ ブロックをドラッグ＆ドロップで案件の順番を変更 ・ 左端の担当者名をドラッグ＆ドロップで担当者の表示順を変更
@@ -4015,7 +4148,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
   );
 }
 
-function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact, separator, projDrag, onProjDragStart, onDropProject }) {
+function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact, separator, projDrag, onProjDragStart, onDropProject, timeline }) {
   const [projHover, setProjHover] = useState(false);
   // 案件の並び替えドラッグは進行中ブロックのみ（完了・中止のグレーは対象外）
   const canDragProject = !!onDropProject && !done;
@@ -4049,19 +4182,26 @@ function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact
       onDragLeave={canDragProject ? (() => { if (projHover) setProjHover(false); }) : undefined}
       onDrop={canDragProject ? ((e) => { e.preventDefault(); setProjHover(false); if (projDrag && projDrag !== task.projectName) onDropProject(projDrag, task.projectName); if (onProjDragStart) onProjDragStart(null); }) : undefined}
       style={{
-        height: `${heightPct}%`, minHeight: 0, background: blockBg, color: blockText,
+        background: blockBg, color: blockText,
         // 仮案件は斜線ストライプを重ねて区別する（パステル地でも見えるよう薄い濃色）
         backgroundImage: tentative ? 'repeating-linear-gradient(45deg, rgba(110,100,80,0.16) 0, rgba(110,100,80,0.16) 4px, transparent 4px, transparent 9px)' : 'none',
-        padding: '3px 5px', fontSize: 10, lineHeight: 1.25, overflow: 'hidden',
-        position: 'relative',
+        fontSize: 10, lineHeight: 1.25, overflow: 'hidden',
         cursor: onClick ? 'pointer' : 'default',
-        // 上に重なるブロックとの切れ目：案件が替わる位置は太い白線、同一案件のステップ間は細い線
-        boxShadow: separator === 'strong' ? 'inset 0 2px 0 #ffffff'
-          : separator === 'weak' ? 'inset 0 1px 0 rgba(255,255,255,0.6)' : 'none',
         // 案件並び替えドラッグ中の視覚フィードバック
         opacity: projDrag && projDrag === task.projectName ? 0.55 : 1,
         outline: projHover && projDrag && projDrag !== task.projectName ? `2px solid ${'#c1272d'}` : 'none',
         outlineOffset: -2,
+        ...(timeline ? {
+          // 横タイムライン配置（1日表示）：開始〜終了の位置に絶対配置
+          position: 'absolute', left: timeline.left, width: `calc(${timeline.width} - 2px)`,
+          top: 5, bottom: 5, borderRadius: 3, padding: '3px 6px',
+          border: '1px solid rgba(255,255,255,0.9)', boxSizing: 'border-box',
+        } : {
+          height: `${heightPct}%`, minHeight: 0, padding: '3px 5px', position: 'relative',
+          // 上に重なるブロックとの切れ目：案件が替わる位置は太い白線、同一案件のステップ間は細い線
+          boxShadow: separator === 'strong' ? 'inset 0 2px 0 #ffffff'
+            : separator === 'weak' ? 'inset 0 1px 0 rgba(255,255,255,0.6)' : 'none',
+        }),
       }}>
       {compact ? (
         // 月間表示などの狭い列：案件名1行のみ（詳細はツールチップ）
