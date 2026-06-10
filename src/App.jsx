@@ -1807,7 +1807,8 @@ export default function App() {
             colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
         )}
         {view === 'calendar' && (
-          <CalendarView scheduled={scheduled} settings={settings} now={now} colors={colors} fontDisplay={fontDisplay} />
+          <CalendarView scheduled={scheduled} settings={settings} now={now} colors={colors} fontDisplay={fontDisplay}
+            onEditProject={handleEditProject} onOpenDone={() => setView('done')} />
         )}
         {view === 'byAssignee' && (
           <AssigneeView scheduled={scheduled} selectedAssignee={selectedAssignee} setSelectedAssignee={setSelectedAssignee} now={now}
@@ -3201,7 +3202,7 @@ const progressBtnStyle = (colors, fontJP) => ({
 });
 
 // ============ カレンダービュー ============
-function CalendarView({ scheduled, settings, now, colors, fontDisplay }) {
+function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditProject, onOpenDone }) {
   // 今日を基準に「過去30営業日 + 今日 + 未来42営業日」の範囲を表示。
   // 今日を初期スクロールの左端に置き、左スクロールで過去、右スクロールで未来を見られるようにする。
   const today = startOfDay(new Date());
@@ -3397,7 +3398,8 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay }) {
                       {morningItems.map(({ task, slot, done }, si) => (
                         <TaskBlock key={si} task={task} slot={slot} done={done}
                           heightPct={(slot.hours / morningHours) * 100}
-                          projectColor={getProjectColor(task.projectName)} />
+                          projectColor={getProjectColor(task.projectName)}
+                          onClick={done ? onOpenDone : (onEditProject && (() => onEditProject(task.projectName)))} />
                       ))}
                     </div>
                     <div style={{ width: '50%', display: 'flex', flexDirection: 'column', boxSizing: 'border-box',
@@ -3406,7 +3408,8 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay }) {
                       {!isWorkSat && afternoonItems.map(({ task, slot, done }, si) => (
                         <TaskBlock key={si} task={task} slot={slot} done={done}
                           heightPct={(slot.hours / afternoonHours) * 100}
-                          projectColor={getProjectColor(task.projectName)} />
+                          projectColor={getProjectColor(task.projectName)}
+                          onClick={done ? onOpenDone : (onEditProject && (() => onEditProject(task.projectName)))} />
                       ))}
                     </div>
                     {/* 休日・不在のグレー表示 */}
@@ -3439,13 +3442,13 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay }) {
       </div>
 
       <div style={{ marginTop: 20, fontSize: 11, color: colors.textMute }}>
-        セル内の色は案件ごと ・ 右上の #番号 が優先順位 ・ グレーの実線ブロックは完了済（実終了時刻から遡って表示） ・ グレーの斜線は休日・不在 ・ マウスオーバーで詳細表示
+        セル内の色は案件ごと ・ 右上の #番号 が優先順位 ・ グレーの実線ブロックは完了済（実終了時刻から遡って表示） ・ グレーの斜線は休日・不在 ・ マウスオーバーで詳細表示 ・ クリックで編集（進行中→案件編集フォーム／完了→完了タブ）
       </div>
     </div>
   );
 }
 
-function TaskBlock({ task, slot, heightPct, projectColor, done }) {
+function TaskBlock({ task, slot, heightPct, projectColor, done, onClick }) {
   const remaining = Math.max(0, task.hours - (task.completedHours || 0));
   const stepLabel = task.stepName ? ` - ${task.stepName}` : '';
   const internal = task.projectNameInternal || '';
@@ -3457,14 +3460,16 @@ function TaskBlock({ task, slot, heightPct, projectColor, done }) {
     if (!isNaN(d.getTime())) aeStr = `${d.getMonth() + 1}/${d.getDate()} ${minToTime(d.getHours() * 60 + d.getMinutes())}`;
   }
   const title = done
-    ? `【完了】${nameLine}\n${minToTime(slot.startMin)}〜${minToTime(slot.endMin)} (${slot.hours}h)${aeStr ? `\n実終了 ${aeStr}` : ''}\n※終了時間（実績）は完了タブで編集できます`
-    : `#${task.priority} ${nameLine}\n${minToTime(slot.startMin)}〜${minToTime(slot.endMin)} (${slot.hours}h)\n残り ${remaining}h / 全${task.hours}h${task.manualStart ? '\n※開始時間指定あり' : ''}${task.delays && task.delays.length ? `\n※遅延履歴あり（${task.delays.length}回）` : ''}`;
+    ? `【完了】${nameLine}\n${minToTime(slot.startMin)}〜${minToTime(slot.endMin)} (${slot.hours}h)${aeStr ? `\n実終了 ${aeStr}` : ''}${onClick ? '\nクリックで完了タブを開く（終了時間の実績を編集）' : '\n※終了時間（実績）は完了タブで編集できます'}`
+    : `#${task.priority} ${nameLine}\n${minToTime(slot.startMin)}〜${minToTime(slot.endMin)} (${slot.hours}h)\n残り ${remaining}h / 全${task.hours}h${task.manualStart ? '\n※開始時間指定あり' : ''}${task.delays && task.delays.length ? `\n※遅延履歴あり（${task.delays.length}回）` : ''}${onClick ? '\nクリックで案件を編集' : ''}`;
   return (
     <div title={title}
+      onClick={onClick || undefined}
       style={{
         height: `${heightPct}%`, minHeight: 0, background: done ? '#a6a6a0' : projectColor, color: '#fff',
         padding: '3px 5px', fontSize: 10, lineHeight: 1.25, overflow: 'hidden',
         position: 'relative',
+        cursor: onClick ? 'pointer' : 'default',
       }}>
       {internal && (
         <div style={{ fontSize: 10, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', paddingRight: 18 }}>
