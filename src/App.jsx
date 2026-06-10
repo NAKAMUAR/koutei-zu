@@ -501,6 +501,54 @@ function scheduleTasks(tasks, settings, projectOrder) {
   return { active: scheduled, done };
 }
 
+// 完了タスクのカレンダー表示用スロット：実終了時刻（actualEnd、無ければ completedAt）から
+// 制作時間ぶん営業時間を遡って配置する。同担当者の完了タスク同士は重ならないよう後ろから詰める
+function buildDoneSlots(doneTasks, settings) {
+  const out = [];
+  const busy = {};
+  const addBusy = (assignee, date, s, e) => {
+    if (!busy[assignee]) busy[assignee] = new Map();
+    const ymd = fmtYMD(date);
+    if (!busy[assignee].has(ymd)) busy[assignee].set(ymd, []);
+    busy[assignee].get(ymd).push([s, e]);
+  };
+  const items = [];
+  for (const t of doneTasks) {
+    if (!(t.hours > 0)) continue;
+    let end = null;
+    if (t.actualEnd) { const d = new Date(t.actualEnd); if (!isNaN(d.getTime())) end = d; }
+    if (!end && t.completedAt) { const d = new Date(t.completedAt); if (!isNaN(d.getTime())) end = d; }
+    if (!end) continue;
+    items.push({ t, end });
+  }
+  // 終了時刻の遅いものから後ろ詰め。同時刻完了は後工程ほど終了側に置く
+  items.sort((a, b) => (b.end - a.end) || ((b.t.stepOrder || 0) - (a.t.stepOrder || 0)) || ((b.t.createdAt || 0) - (a.t.createdAt || 0)));
+  for (const { t, end } of items) {
+    let remainingMin = t.hours * 60;
+    const slots = [];
+    let date = startOfDay(end);
+    const endDate = new Date(date);
+    const endMin = end.getHours() * 60 + end.getMinutes();
+    let guard = 0;
+    while (remainingMin > 0 && guard++ < 1000) {
+      const free = dayFreeIntervals(t.assignee, date, settings, busy, settings.absences || []);
+      const isLast = isSameDay(date, endDate);
+      for (let i = free.length - 1; i >= 0 && remainingMin > 0; i--) {
+        const fs = free[i][0];
+        const fe = isLast ? Math.min(free[i][1], endMin) : free[i][1];
+        if (fe <= fs) continue;
+        const use = Math.min(remainingMin, fe - fs);
+        slots.unshift({ date: new Date(date), startMin: fe - use, endMin: fe, hours: use / 60 });
+        addBusy(t.assignee, date, fe - use, fe);
+        remainingMin -= use;
+      }
+      date = addDays(date, -1);
+    }
+    for (const slot of slots) out.push({ task: t, slot, done: true });
+  }
+  return out;
+}
+
 // 経過進捗（時間経過ベース）：slots のうち現在時刻 now より前の部分の合計時間（h）
 function elapsedHoursForSlots(slots, now) {
   if (!slots || slots.length === 0) return 0;
@@ -3185,7 +3233,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay }) {
   const afternoonHours = (afternoonSlot.end - afternoonSlot.start) / 60;
   const hoursPerDay = getHoursPerDay(settings);
 
-  const assignees = [...new Set(scheduled.active.map(t => t.assignee))];
+  const assignees = [...new Set([...scheduled.active.map(t => t.assignee), ...scheduled.done.map(t => t.assignee)])];
 
   const matrix = {};
   for (const task of scheduled.active) {
@@ -3195,6 +3243,13 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay }) {
       if (!matrix[task.assignee][key]) matrix[task.assignee][key] = [];
       matrix[task.assignee][key].push({ task, slot });
     }
+  }
+  // 完了タスクもグレーで表示（実終了時刻から遡って配置）
+  for (const item of buildDoneSlots(scheduled.done, settings)) {
+    const key = fmtYMD(item.slot.date);
+    if (!matrix[item.task.assignee]) matrix[item.task.assignee] = {};
+    if (!matrix[item.task.assignee][key]) matrix[item.task.assignee][key] = [];
+    matrix[item.task.assignee][key].push(item);
   }
   // 各セル内のタスクは開始時刻順に
   for (const a in matrix) {
@@ -3339,8 +3394,8 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay }) {
                     display: 'flex', flexDirection: 'row',
                   }}>
                     <div style={{ width: '50%', display: 'flex', flexDirection: 'column', borderRight: `1px dashed ${colors.border}`, boxSizing: 'border-box' }}>
-                      {morningItems.map(({ task, slot }, si) => (
-                        <TaskBlock key={si} task={task} slot={slot}
+                      {morningItems.map(({ task, slot, done }, si) => (
+                        <TaskBlock key={si} task={task} slot={slot} done={done}
                           heightPct={(slot.hours / morningHours) * 100}
                           projectColor={getProjectColor(task.projectName)} />
                       ))}
@@ -3348,8 +3403,8 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay }) {
                     <div style={{ width: '50%', display: 'flex', flexDirection: 'column', boxSizing: 'border-box',
                       background: isWorkSat ? 'repeating-linear-gradient(45deg, #f5f0e3, #f5f0e3 4px, #fbf9f4 4px, #fbf9f4 8px)' : 'transparent',
                     }}>
-                      {!isWorkSat && afternoonItems.map(({ task, slot }, si) => (
-                        <TaskBlock key={si} task={task} slot={slot}
+                      {!isWorkSat && afternoonItems.map(({ task, slot, done }, si) => (
+                        <TaskBlock key={si} task={task} slot={slot} done={done}
                           heightPct={(slot.hours / afternoonHours) * 100}
                           projectColor={getProjectColor(task.projectName)} />
                       ))}
@@ -3384,21 +3439,30 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay }) {
       </div>
 
       <div style={{ marginTop: 20, fontSize: 11, color: colors.textMute }}>
-        セル内の色は案件ごと ・ 右上の #番号 が優先順位 ・ グレーの斜線は休日・不在 ・ マウスオーバーで詳細表示
+        セル内の色は案件ごと ・ 右上の #番号 が優先順位 ・ グレーの実線ブロックは完了済（実終了時刻から遡って表示） ・ グレーの斜線は休日・不在 ・ マウスオーバーで詳細表示
       </div>
     </div>
   );
 }
 
-function TaskBlock({ task, slot, heightPct, projectColor }) {
+function TaskBlock({ task, slot, heightPct, projectColor, done }) {
   const remaining = Math.max(0, task.hours - (task.completedHours || 0));
   const stepLabel = task.stepName ? ` - ${task.stepName}` : '';
   const internal = task.projectNameInternal || '';
   const external = task.projectName || '';
+  const nameLine = `${internal || external}${internal && external ? ` (${external})` : ''} / ${task.viewpointName}${stepLabel}`;
+  let aeStr = '';
+  if (done && task.actualEnd) {
+    const d = new Date(task.actualEnd);
+    if (!isNaN(d.getTime())) aeStr = `${d.getMonth() + 1}/${d.getDate()} ${minToTime(d.getHours() * 60 + d.getMinutes())}`;
+  }
+  const title = done
+    ? `【完了】${nameLine}\n${minToTime(slot.startMin)}〜${minToTime(slot.endMin)} (${slot.hours}h)${aeStr ? `\n実終了 ${aeStr}` : ''}\n※終了時間（実績）は完了タブで編集できます`
+    : `#${task.priority} ${nameLine}\n${minToTime(slot.startMin)}〜${minToTime(slot.endMin)} (${slot.hours}h)\n残り ${remaining}h / 全${task.hours}h${task.manualStart ? '\n※開始時間指定あり' : ''}${task.delays && task.delays.length ? `\n※遅延履歴あり（${task.delays.length}回）` : ''}`;
   return (
-    <div title={`#${task.priority} ${internal || external}${internal && external ? ` (${external})` : ''} / ${task.viewpointName}${stepLabel}\n${minToTime(slot.startMin)}〜${minToTime(slot.endMin)} (${slot.hours}h)\n残り ${remaining}h / 全${task.hours}h${task.manualStart ? '\n※開始時間指定あり' : ''}${task.delays && task.delays.length ? `\n※遅延履歴あり（${task.delays.length}回）` : ''}`}
+    <div title={title}
       style={{
-        height: `${heightPct}%`, minHeight: 0, background: projectColor, color: '#fff',
+        height: `${heightPct}%`, minHeight: 0, background: done ? '#a6a6a0' : projectColor, color: '#fff',
         padding: '3px 5px', fontSize: 10, lineHeight: 1.25, overflow: 'hidden',
         position: 'relative',
       }}>
@@ -3417,10 +3481,10 @@ function TaskBlock({ task, slot, heightPct, projectColor }) {
       </div>
       <div style={{
         position: 'absolute', top: 2, right: 2,
-        background: priorityColor(task.priority), color: '#fff',
+        background: done ? '#7d7d76' : priorityColor(task.priority), color: '#fff',
         fontSize: 8, fontWeight: 700, padding: '0 3px', borderRadius: 2,
         border: '1px solid rgba(255,255,255,0.7)',
-      }}>#{task.priority}</div>
+      }}>{done ? '済' : `#${task.priority}`}</div>
     </div>
   );
 }
