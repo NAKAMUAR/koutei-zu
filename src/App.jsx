@@ -704,6 +704,16 @@ function simulateFormSchedule(form, allTasks, settings, projectOrder) {
   return { startDate: sD, startMin: sM, endDate: eD, endMin: eM, moved, requested };
 }
 
+// 担当者の表示順：従業員マスタの並び順 → マスタ未登録は末尾（出現順を維持）
+function sortAssigneesByMaster(names, masterNames) {
+  const idx = new Map((masterNames || []).map((n, i) => [n, i]));
+  return [...names].sort((a, b) => {
+    const ia = idx.has(a) ? idx.get(a) : Infinity;
+    const ib = idx.has(b) ? idx.get(b) : Infinity;
+    return ia - ib; // 同点（両方未登録）は安定ソートで出現順を維持
+  });
+}
+
 // ============ 視点ごとにグループ化 ============
 function groupByViewpoint(tasks) {
   const groups = {};
@@ -1683,6 +1693,8 @@ export default function App() {
   const projectInternalList = useMemo(() => [...new Set(tasks.map(t => t.projectNameInternal))].filter(Boolean), [tasks]);
   const viewpointList = useMemo(() => [...new Set(tasks.map(t => t.viewpointName))].filter(Boolean), [tasks]);
   // 制作担当者の候補：従業員マスタ ＋ 既存タスクの担当者
+  // 従業員マスタの並び順 ＝ 担当者の表示順（カレンダー・担当者別・サマリー等）
+  const assigneeOrder = useMemo(() => employeeMaster.map(e => e.name).filter(Boolean), [employeeMaster]);
   const assigneeList = useMemo(
     () => [...new Set([...employeeMaster.map(e => e.name), ...tasks.map(t => t.assignee)])].filter(Boolean),
     [tasks, employeeMaster]
@@ -1896,10 +1908,10 @@ export default function App() {
         )}
         {view === 'calendar' && (
           <CalendarView scheduled={scheduled} settings={settings} now={now} colors={colors} fontDisplay={fontDisplay} fontJP={fontJP}
-            onEditProject={handleEditProject} />
+            onEditProject={handleEditProject} assigneeOrder={assigneeOrder} />
         )}
         {view === 'byAssignee' && (
-          <AssigneeView scheduled={scheduled} selectedAssignee={selectedAssignee} setSelectedAssignee={setSelectedAssignee} now={now}
+          <AssigneeView scheduled={scheduled} selectedAssignee={selectedAssignee} setSelectedAssignee={setSelectedAssignee} now={now} assigneeOrder={assigneeOrder}
             companyOrder={settings.companyOrder || []}
             projectOrder={projectOrder} saveProjectOrder={saveProjectOrderPartial}
             handleEdit={handleEdit} handleEditProject={handleEditProject} handleEditViewpoint={handleEditViewpoint}
@@ -1911,7 +1923,7 @@ export default function App() {
             colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
         )}
         {view === 'message' && (
-          <MessageView scheduled={scheduled} settings={settings} colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
+          <MessageView scheduled={scheduled} settings={settings} colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} assigneeOrder={assigneeOrder} />
         )}
         {view === 'done' && (
           <DoneView scheduled={scheduled} toggleStatus={toggleStatus} handleDelete={handleDelete}
@@ -3416,7 +3428,7 @@ const progressBtnStyle = (colors, fontJP) => ({
 });
 
 // ============ カレンダービュー ============
-function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditProject, fontJP }) {
+function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditProject, fontJP, assigneeOrder }) {
   const today = startOfDay(new Date());
   // 表示モード：1日 / 週間 / 月間 / 全期間（従来のスクロール表示）
   const [viewMode, setViewMode] = useState('scroll');
@@ -3429,9 +3441,10 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
     while (isNonWorkingDay(d)) d = addDays(d, 1);
     allDates.push(d);
   } else if (viewMode === 'week') {
+    // 週間表示は今週＋翌週の2週間分の営業日
     const dow = (anchor.getDay() + 6) % 7; // 月曜=0
     const mon = addDays(startOfDay(anchor), -dow);
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 14; i++) {
       const d = addDays(mon, i);
       if (!isNonWorkingDay(d)) allDates.push(d);
     }
@@ -3486,7 +3499,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
   const afternoonHours = (afternoonSlot.end - afternoonSlot.start) / 60;
   const hoursPerDay = getHoursPerDay(settings);
 
-  const assignees = [...new Set([...scheduled.active.map(t => t.assignee), ...scheduled.done.map(t => t.assignee)])];
+  const assignees = sortAssigneesByMaster([...new Set([...scheduled.active.map(t => t.assignee), ...scheduled.done.map(t => t.assignee)])], assigneeOrder);
 
   const matrix = {};
   for (const task of scheduled.active) {
@@ -3517,7 +3530,8 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
   const dayCellWidth = viewMode === 'month' ? 110 : 240;
   const colWidth = isFlexWidth ? `calc((100% - ${labelWidth}px) / ${allDates.length})` : dayCellWidth;
   const rowHeight = viewMode === 'day' ? 150 : 100;
-  const compact = viewMode === 'month';
+  // 列が狭い月間・週間（2週間分）はブロックを案件名1行のコンパクト表示にする
+  const compact = viewMode === 'month' || viewMode === 'week';
 
   // 初期スクロール位置を「今日が左端」に設定（全期間・月間のみ。モード/期間の切替時に再設定）
   const scrollRef = useRef(null);
@@ -3791,8 +3805,8 @@ function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact
 }
 
 // ============ 担当者別ビュー ============
-function AssigneeView({ scheduled, selectedAssignee, setSelectedAssignee, now, companyOrder, projectOrder, saveProjectOrder, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, assigneeList, colors, fontJP, fontDisplay }) {
-  const assignees = [...new Set(scheduled.active.map(t => t.assignee))];
+function AssigneeView({ scheduled, selectedAssignee, setSelectedAssignee, now, assigneeOrder, companyOrder, projectOrder, saveProjectOrder, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, assigneeList, colors, fontJP, fontDisplay }) {
+  const assignees = sortAssigneesByMaster([...new Set(scheduled.active.map(t => t.assignee))], assigneeOrder);
   if (assignees.length === 0) {
     return (
       <div style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 6, padding: 48, textAlign: 'center', color: colors.textMute }}>
@@ -3898,7 +3912,7 @@ const tabStyle = (active, colors, fontJP) => ({
 });
 
 // ============ メッセージビュー ============
-function MessageView({ scheduled, settings, colors, fontJP, fontDisplay }) {
+function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigneeOrder }) {
   const today = startOfDay(new Date());
   const weekEnd = addDays(today, 7);
 
@@ -4219,7 +4233,7 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay }) {
 
         <Section icon="📊" title="今週の予定（担当者別）">
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16 }}>
-            {Object.entries(weekTasksByAssignee).map(([assignee, items]) => (
+            {sortAssigneesByMaster(Object.keys(weekTasksByAssignee), assigneeOrder).map((assignee) => { const items = weekTasksByAssignee[assignee]; return (
               <div key={assignee} style={{ background: '#fbf9f4', borderRadius: 4, padding: 14 }}>
                 <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <span>{assignee}</span>
@@ -4243,7 +4257,7 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay }) {
                   })}
                 </ul>
               </div>
-            ))}
+            ); })}
           </div>
         </Section>
 
@@ -4447,6 +4461,16 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
   const setEmployeeField = (id, field, val) => setEmployees(es => es.map(e => e.id === id ? { ...e, [field]: val } : e));
   const commitEmployees = () => saveEmployeeMaster(employees);
   const removeEmployee = (id) => { const next = employees.filter(e => e.id !== id); setEmployees(next); saveEmployeeMaster(next); };
+  // 並び順の変更（この順がカレンダー・担当者別・サマリーの表示順になる）
+  const moveEmployee = (id, dir) => {
+    const i = employees.findIndex(e => e.id === id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= employees.length) return;
+    const next = [...employees];
+    [next[i], next[j]] = [next[j], next[i]];
+    setEmployees(next);
+    saveEmployeeMaster(next);
+  };
 
   const inputStyle = {
     width: '100%', padding: '8px 10px', boxSizing: 'border-box',
@@ -4536,11 +4560,13 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
       <section style={cardStyle}>
         <h2 style={{ fontFamily: fontDisplay, fontSize: 18, margin: '0 0 4px 0', fontWeight: 500 }}>従業員マスタ</h2>
         <p style={{ fontSize: 12, color: colors.textMute, margin: '0 0 16px 0' }}>
-          制作担当者（従業員）を登録します。案件入力時の「担当者」の候補に表示されます。
+          制作担当者（従業員）を登録します。案件入力時の「担当者」の候補に表示されます。<br />
+          ここでの並び順が、カレンダー・担当者別・サマリーの担当者の表示順になります（▲▼で変更）。
         </p>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '0 2px' }}>
+            <div style={{ width: 26, flexShrink: 0, ...labelStyle }}>順</div>
             <div style={{ flex: '1 1 0', ...labelStyle }}>氏名</div>
             <div style={{ flex: '1 1 0', ...labelStyle }}>役割・備考</div>
             <div style={{ width: 34, flexShrink: 0 }} />
@@ -4550,8 +4576,28 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
               まだ登録がありません。「＋ 従業員を追加」から登録してください。
             </div>
           )}
-          {employees.map(e => (
+          {employees.map((e, ei) => (
             <div key={e.id} style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2, width: 26, flexShrink: 0 }}>
+                <button type="button" onClick={() => moveEmployee(e.id, -1)} disabled={ei === 0}
+                  style={{
+                    background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 2,
+                    padding: '1px 4px', cursor: ei === 0 ? 'not-allowed' : 'pointer',
+                    color: ei === 0 ? '#ccc' : colors.textMute,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }} title="上へ（表示順を前にする）">
+                  <ChevronUp size={11} />
+                </button>
+                <button type="button" onClick={() => moveEmployee(e.id, 1)} disabled={ei === employees.length - 1}
+                  style={{
+                    background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 2,
+                    padding: '1px 4px', cursor: ei === employees.length - 1 ? 'not-allowed' : 'pointer',
+                    color: ei === employees.length - 1 ? '#ccc' : colors.textMute,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }} title="下へ（表示順を後にする）">
+                  <ChevronDown size={11} />
+                </button>
+              </div>
               <input type="text" value={e.name || ''}
                 onChange={(ev) => setEmployeeField(e.id, 'name', ev.target.value)}
                 onBlur={commitEmployees}
