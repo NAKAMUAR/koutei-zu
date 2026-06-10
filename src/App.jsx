@@ -121,6 +121,8 @@ const DEFAULT_SETTINGS = {
   startDate: fmtYMD(new Date()),
   startTime: '08:00',
   absences: [],
+  // 会社グループの表示順（暫定の固定順）。表示順設定ページで編集可
+  companyOrder: ['CG工房', 'リノべる株式会社', 'オフィスコム', '田中建設', 'SUMUS', '玉善', 'オフショア（その他）'],
 };
 
 function getDailySlots(settings) {
@@ -273,6 +275,24 @@ function companyRank(name) {
   const idx = COMPANY_PRESETS.indexOf(c);
   if (idx >= 0) return idx;                       // プリセットの並び順
   return 7000;                                    // プリセット外の会社
+}
+
+// 進行中タスク一覧の「会社グループの表示順」用ランク。
+// companyOrder（settings 保存の会社名配列）に従い、未登録は名前順でオフショアの手前、未分類は最後。
+function companyDisplayRank(name, companyOrder) {
+  const c = (name || '').trim();
+  if (c === '') return { tier: 4, idx: 0 };                  // 未分類 → 最後
+  if (c === 'オフショア（その他）') return { tier: 3, idx: 0 }; // 登録会社群の最後
+  const order = (companyOrder || []).map(x => (x || '').trim());
+  const idx = order.indexOf(c);
+  if (idx >= 0) return { tier: 1, idx };                     // companyOrder の順
+  return { tier: 2, idx: 0 };                                // 未登録 → 名前順
+}
+function compareCompanyDisplay(a, b, companyOrder) {
+  const ra = companyDisplayRank(a, companyOrder), rb = companyDisplayRank(b, companyOrder);
+  if (ra.tier !== rb.tier) return ra.tier - rb.tier;
+  if (ra.tier === 1) return ra.idx - rb.idx;
+  return (a || '').localeCompare(b || '', 'ja');
 }
 
 // 会社の並び順（スケジュール・表示の会社の登場順）を決める。
@@ -809,9 +829,13 @@ export default function App() {
   const saveSettings = async (newSettings) => {
     setSettings(newSettings);
     try {
-      const { morningStart, morningEnd, afternoonStart, afternoonEnd, startDate, startTime, lastAdvancedDate, absences, endPromptState } = newSettings;
-      await storage.set('settings', JSON.stringify({ morningStart, morningEnd, afternoonStart, afternoonEnd, startDate, startTime, lastAdvancedDate, absences: absences || [], endPromptState: endPromptState || {} }));
+      const { morningStart, morningEnd, afternoonStart, afternoonEnd, startDate, startTime, lastAdvancedDate, absences, endPromptState, companyOrder } = newSettings;
+      await storage.set('settings', JSON.stringify({ morningStart, morningEnd, afternoonStart, afternoonEnd, startDate, startTime, lastAdvancedDate, absences: absences || [], endPromptState: endPromptState || {}, companyOrder: companyOrder || [] }));
     } catch (e) { console.error(e); }
+  };
+  // 会社の表示順を保存
+  const saveCompanyOrder = (order) => {
+    saveSettings({ ...settings, companyOrder: order });
   };
   // 終了超過ポップアップの制御状態（案件ごとの snooze / 表示済み終了予定）を更新
   const setEndPromptFor = (projectName, patch) => {
@@ -1639,6 +1663,7 @@ export default function App() {
     { id: 'message', icon: <MessageSquare size={15} />, label: 'サマリー' },
     { id: 'done', icon: <CheckCircle2 size={15} />, label: '完了' },
     { id: 'master', icon: <Folder size={15} />, label: 'マスタ' },
+    { id: 'companyOrder', icon: <GripVertical size={15} />, label: '表示順設定' },
   ];
 
   return (
@@ -1737,6 +1762,7 @@ export default function App() {
         )}
         {view === 'byAssignee' && (
           <AssigneeView scheduled={scheduled} selectedAssignee={selectedAssignee} setSelectedAssignee={setSelectedAssignee} now={now}
+            companyOrder={settings.companyOrder || []}
             projectOrder={projectOrder} saveProjectOrder={saveProjectOrderPartial}
             handleEdit={handleEdit} handleEditProject={handleEditProject} handleEditViewpoint={handleEditViewpoint}
             handleAddViewpointToProject={handleAddViewpointToProject}
@@ -1758,6 +1784,12 @@ export default function App() {
           <MasterView
             customerMaster={customerMaster} saveCustomerMaster={saveCustomerMaster}
             employeeMaster={employeeMaster} saveEmployeeMaster={saveEmployeeMaster}
+            colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
+        )}
+        {view === 'companyOrder' && (
+          <CompanyOrderView
+            companyOrder={settings.companyOrder || []} saveCompanyOrder={saveCompanyOrder}
+            usedCompanies={[...new Set(tasks.map(t => (t.companyName || '').trim()).filter(Boolean))]}
             colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
         )}
       </main>
@@ -2357,6 +2389,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
           <ViewpointGroupList
             groups={groupByViewpoint(filteredActive)}
             allActive={filteredActive} now={now}
+            companyOrder={settings.companyOrder || []}
             projectOrder={projectOrder} saveProjectOrder={saveProjectOrder}
             handleEdit={handleEdit} handleEditProject={handleEditProject} handleEditViewpoint={handleEditViewpoint}
             handleAddViewpointToProject={handleAddViewpointToProject}
@@ -2372,7 +2405,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
 }
 
 // ============ 視点グループリスト ============
-function ViewpointGroupList({ groups, allActive, now, projectOrder, saveProjectOrder, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, addProgress, setTaskHours, setTaskCompletedHours, completeProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, assigneeList, colors, fontJP }) {
+function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder, saveProjectOrder, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, addProgress, setTaskHours, setTaskCompletedHours, completeProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, assigneeList, colors, fontJP }) {
   // 全タスクのグローバルなインデックス（移動可否判定用）
   const allSortedIds = allActive.map(t => t.id);
 
@@ -2450,21 +2483,25 @@ function ViewpointGroupList({ groups, allActive, now, projectOrder, saveProjectO
     return [...projectGroups].sort((a, b) => (projOf(a) - projOf(b)));
   }, [projectGroups, projectOrder, allActive]);
 
-  // 会社ごとのセクション（連続する同一会社の案件を1グループに）にまとめる
+  // 会社ごとに「必ず1グループ」にまとめる（同じ会社が複数箇所に割れない）。
+  // 会社の並びは companyOrder ベース。会社内の案件は orderedProjectGroups の相対順（優先順位・ドラッグ）を維持。
   const companySections = useMemo(() => {
-    const sections = [];
-    let cur = null;
+    const map = new Map();
     for (const pg of orderedProjectGroups) {
       const c = pg.companyName || '';
-      if (!cur || cur.companyName !== c) {
-        cur = { companyName: c, projects: [], remaining: 0 };
-        sections.push(cur);
-      }
-      cur.projects.push(pg);
-      cur.remaining += (pg.totalHours - pg.completedHours);
+      if (!map.has(c)) map.set(c, { companyName: c, projects: [], remaining: 0 });
+      const sec = map.get(c);
+      sec.projects.push(pg);
+      sec.remaining += (pg.totalHours - pg.completedHours);
     }
-    return sections;
-  }, [orderedProjectGroups]);
+    return [...map.values()].sort((a, b) => compareCompanyDisplay(a.companyName, b.companyName, companyOrder));
+  }, [orderedProjectGroups, companyOrder]);
+
+  // 実際に表示される案件の並び（会社グループを連結した順）。ドラッグ並べ替えの基準にする
+  const displayedProjectNames = useMemo(
+    () => companySections.flatMap(s => s.projects.map(p => p.projectName)),
+    [companySections]
+  );
 
   // ドラッグ＆ドロップの状態（マウス／デスクトップ）
   const [dragSource, setDragSource] = useState(null);
@@ -2472,7 +2509,7 @@ function ViewpointGroupList({ groups, allActive, now, projectOrder, saveProjectO
 
   // 並び替え：source を target の手前に挿入した新しい順序を返す
   const computeReorder = (sourceName, targetName) => {
-    const currentOrder = orderedProjectGroups.map(p => p.projectName);
+    const currentOrder = [...displayedProjectNames];
     if (sourceName === targetName) return currentOrder;
     const filtered = currentOrder.filter(n => n !== sourceName);
     const targetIdx = filtered.indexOf(targetName);
@@ -2504,7 +2541,7 @@ function ViewpointGroupList({ groups, allActive, now, projectOrder, saveProjectO
   // タッチ／スマホ向け：↑↓ボタンで1つ動かす
   const moveProject = (name, dir) => {
     if (!saveProjectOrder) return;
-    const order = orderedProjectGroups.map(p => p.projectName);
+    const order = [...displayedProjectNames];
     const idx = order.indexOf(name);
     if (idx < 0) return;
     if (dir === 'up' && idx === 0) return;
@@ -3388,7 +3425,7 @@ function TaskBlock({ task, slot, heightPct, projectColor }) {
 }
 
 // ============ 担当者別ビュー ============
-function AssigneeView({ scheduled, selectedAssignee, setSelectedAssignee, now, projectOrder, saveProjectOrder, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, addProgress, setTaskHours, setTaskCompletedHours, completeProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, assigneeList, colors, fontJP, fontDisplay }) {
+function AssigneeView({ scheduled, selectedAssignee, setSelectedAssignee, now, companyOrder, projectOrder, saveProjectOrder, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, addProgress, setTaskHours, setTaskCompletedHours, completeProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, assigneeList, colors, fontJP, fontDisplay }) {
   const assignees = [...new Set(scheduled.active.map(t => t.assignee))];
   if (assignees.length === 0) {
     return (
@@ -3468,6 +3505,7 @@ function AssigneeView({ scheduled, selectedAssignee, setSelectedAssignee, now, p
               </div>
             </div>
             <ViewpointGroupList groups={groups} allActive={allActive} now={now}
+              companyOrder={companyOrder}
               projectOrder={projectOrder} saveProjectOrder={saveProjectOrder}
               handleEdit={handleEdit} handleEditProject={handleEditProject} handleEditViewpoint={handleEditViewpoint}
               handleAddViewpointToProject={handleAddViewpointToProject}
@@ -4511,6 +4549,130 @@ function EndPromptModal({ projects, now, settings, onComplete, onAddRevision, on
           })}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ============ 会社の表示順設定ページ（機能③） ============
+function CompanyOrderView({ companyOrder, saveCompanyOrder, usedCompanies, colors, fontJP, fontDisplay }) {
+  const order = (companyOrder || []).map(c => (c || '').trim()).filter(Boolean);
+  // タスクに存在するが未登録の会社
+  const unregistered = usedCompanies.filter(c => !order.includes(c)).sort((a, b) => a.localeCompare(b, 'ja'));
+  const [newName, setNewName] = useState('');
+  const [dragSrc, setDragSrc] = useState(null);
+  const [dragOver, setDragOver] = useState(null);
+
+  const move = (name, dir) => {
+    const idx = order.indexOf(name);
+    if (idx < 0) return;
+    const sw = dir === 'up' ? idx - 1 : idx + 1;
+    if (sw < 0 || sw >= order.length) return;
+    const next = [...order];
+    [next[idx], next[sw]] = [next[sw], next[idx]];
+    saveCompanyOrder(next);
+  };
+  const reorder = (src, target) => {
+    if (src === target) return;
+    const filtered = order.filter(n => n !== src);
+    const ti = filtered.indexOf(target);
+    const next = ti < 0 ? [...filtered, src] : [...filtered.slice(0, ti), src, ...filtered.slice(ti)];
+    saveCompanyOrder(next);
+  };
+  const add = (name) => {
+    const n = (name || '').trim();
+    if (!n) return;
+    if (order.includes(n)) { alert('すでに登録されています'); return; }
+    saveCompanyOrder([...order, n]);
+    setNewName('');
+  };
+  const remove = (name) => saveCompanyOrder(order.filter(n => n !== name));
+
+  const rowBase = {
+    display: 'flex', alignItems: 'center', gap: 10, background: '#fff',
+    border: `1px solid ${colors.border}`, borderRadius: 5, padding: '9px 12px',
+  };
+  const miniBtn = (disabled) => ({
+    background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 2, padding: '1px 5px',
+    cursor: disabled ? 'not-allowed' : 'pointer', color: disabled ? '#ccc' : colors.textMute, display: 'flex',
+  });
+
+  return (
+    <div style={{ maxWidth: 620 }}>
+      <h2 style={{ fontFamily: fontDisplay, fontSize: 20, margin: '0 0 6px 0', fontWeight: 500 }}>会社の表示順</h2>
+      <p style={{ fontSize: 12, color: colors.textMute, margin: '0 0 18px 0' }}>
+        進行中タスク・担当者別の「会社グループ」の上からの並び順を設定します。ドラッグまたは↑↓で並び替え。
+        スケジュール計算（カレンダー等）には影響しません。
+      </p>
+
+      <div style={{ background: colors.surface, border: `1px solid ${colors.border}`, borderRadius: 6, padding: 18, marginBottom: 20 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 10 }}>並び順（登録済み）</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {order.length === 0 && <div style={{ fontSize: 12, color: colors.textMute }}>登録された会社がありません。</div>}
+          {order.map((c, i) => (
+            <div key={c}
+              draggable
+              onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; setDragSrc(c); }}
+              onDragOver={(e) => { if (dragSrc && dragSrc !== c) { e.preventDefault(); setDragOver(c); } }}
+              onDrop={(e) => { e.preventDefault(); if (dragSrc) reorder(dragSrc, c); setDragSrc(null); setDragOver(null); }}
+              onDragEnd={() => { setDragSrc(null); setDragOver(null); }}
+              style={{
+                ...rowBase,
+                opacity: dragSrc === c ? 0.5 : 1,
+                boxShadow: dragOver === c && dragSrc && dragSrc !== c ? `0 0 0 2px ${colors.accent} inset` : 'none',
+              }}>
+              <span style={{ cursor: 'grab', color: colors.textMute, display: 'flex' }}><GripVertical size={14} /></span>
+              <span style={{
+                width: 22, height: 22, borderRadius: '50%', flexShrink: 0, background: getProjectColor(c), color: '#fff',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700,
+              }}>{i + 1}</span>
+              <span style={{ fontSize: 13, fontWeight: 500 }}>{c}</span>
+              <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <button type="button" onClick={() => move(c, 'up')} disabled={i === 0} style={miniBtn(i === 0)} title="上へ"><ChevronUp size={11} /></button>
+                  <button type="button" onClick={() => move(c, 'down')} disabled={i === order.length - 1} style={miniBtn(i === order.length - 1)} title="下へ"><ChevronDown size={11} /></button>
+                </div>
+                <button type="button" onClick={() => remove(c)} title="リストから外す"
+                  style={{ background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 3, padding: 6, cursor: 'pointer', color: colors.textMute, display: 'flex' }}>
+                  <Trash2 size={13} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+          <input type="text" value={newName} onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') add(newName); }}
+            placeholder="会社名を入力（まだ案件が無い会社も登録可）"
+            style={{ flex: 1, padding: '8px 10px', border: `1px solid ${colors.border}`, borderRadius: 4, fontFamily: fontJP, fontSize: 13, boxSizing: 'border-box' }} />
+          <button type="button" onClick={() => add(newName)}
+            style={{ background: colors.accentSoft, border: `1px solid ${colors.accent}`, color: colors.accent, fontWeight: 600, padding: '8px 14px', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+            <Plus size={14} /> 会社を追加
+          </button>
+        </div>
+      </div>
+
+      {unregistered.length > 0 && (
+        <div style={{ background: colors.surface, border: `1px solid ${colors.border}`, borderRadius: 6, padding: 18 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>未登録の会社（案件に存在）</div>
+          <div style={{ fontSize: 11, color: colors.textMute, marginBottom: 10 }}>
+            並び順に未登録のため、登録済みの後ろ（オフショアより前・名前順）に表示されます。「登録」で並び順に加えられます。
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {unregistered.map(c => (
+              <div key={c} style={rowBase}>
+                <span style={{ width: 22, height: 22, borderRadius: '50%', flexShrink: 0, background: getProjectColor(c), color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>—</span>
+                <span style={{ fontSize: 13 }}>{c}</span>
+                <span style={{ fontSize: 10, color: colors.textMute, background: '#eceae3', borderRadius: 8, padding: '1px 7px' }}>未登録</span>
+                <button type="button" onClick={() => add(c)} title="並び順に登録"
+                  style={{ marginLeft: 'auto', background: '#fff', border: `1px solid ${colors.accent}`, color: colors.accent, fontWeight: 600, padding: '5px 12px', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12 }}>
+                  登録
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
