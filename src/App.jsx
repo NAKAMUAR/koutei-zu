@@ -2463,8 +2463,29 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
               placeholder="未入力なら末尾に追加" style={inputStyle} />
           </div>
           <div style={{ gridColumn: 'span 2' }}>
-            <label style={labelStyle}>スケジュールプレビュー（開始時間の指定は下の各視点の欄で・差し込み優先）</label>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', minHeight: 34 }}>
+            <label style={labelStyle}>開始時間（任意・最初の視点に適用・自動スケジュールより優先／視点ごとに変えたい場合は下の各視点の欄で）</label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              {(() => {
+                const vp0 = form.viewpoints[0] || {};
+                const d0 = vp0.manualStart ? vp0.manualStart.split('T')[0] : '';
+                const t0 = vp0.manualStart ? (vp0.manualStart.split('T')[1] || '') : '';
+                return (
+                  <>
+                    <input type="date" value={d0}
+                      onChange={(e) => setVpManualStart(0, e.target.value, t0)}
+                      style={{ ...inputStyle, width: 'auto', flex: '0 0 160px' }} />
+                    <TimeSelect value={t0}
+                      onChange={(val) => setVpManualStart(0, d0, val)}
+                      colors={colors} fontJP={fontJP} allowEmpty />
+                    {vp0.manualStart && (
+                      <button type="button" onClick={() => setVpManualStart(0, '', '')}
+                        style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '8px 12px', borderRadius: 3, fontSize: 11, color: colors.textMute, cursor: 'pointer' }}>
+                        クリア
+                      </button>
+                    )}
+                  </>
+                );
+              })()}
               {previewSchedule ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600, flexWrap: 'wrap' }}>
                   <span style={{ color: previewSchedule.moved ? '#c46a16' : colors.accent }}>
@@ -2475,9 +2496,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                     終了予定: {fmtMD(previewSchedule.endDate)}({dayName(previewSchedule.endDate)}) {minToTime(previewSchedule.endMin)}
                   </span>
                 </div>
-              ) : (
-                <span style={{ fontSize: 11, color: colors.textMute }}>視点とステップ（制作時間）を入力すると表示されます</span>
-              )}
+              ) : null}
             </div>
             {previewSchedule?.moved && (
               <div style={{ fontSize: 11, color: '#c46a16', marginTop: 6, fontWeight: 500 }}>
@@ -2485,7 +2504,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
               </div>
             )}
             <div style={{ fontSize: 10, color: colors.textMute, marginTop: 6 }}>
-              開始/終了は他タスクを含めた実際のスケジュールです
+              日付・時刻を別々に選べます（時刻だけ入力した場合は本日の日付になります） ・ 開始/終了予定は他タスクを含めた実際のスケジュールです
             </div>
           </div>
           <div style={{ gridColumn: 'span 2' }}>
