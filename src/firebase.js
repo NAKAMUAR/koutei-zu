@@ -5,9 +5,9 @@
 import { initializeApp } from 'firebase/app';
 import {
   initializeFirestore,
-  persistentLocalCache,
-  persistentMultipleTabManager,
+  memoryLocalCache,
   doc, setDoc, deleteDoc, onSnapshot,
+  collection, writeBatch, getDocs,
 } from 'firebase/firestore';
 import {
   getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged,
@@ -33,9 +33,13 @@ const ALLOWED_EMAILS = ['kei.n412@gmail.com'];
 // =============================================
 
 const app = initializeApp(firebaseConfig);
+// このプロジェクトの Firestore データベース名は "default"（カッコなし、Enterprise edition）。
+// デフォルトの "(default)" を参照しても見つからないため、明示的に指定する。
+// メモリキャッシュ：端末間で表示が乖離しないよう、毎回サーバから取得する。
+const DATABASE_ID = 'default';
 const db = initializeFirestore(app, {
-  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
-});
+  localCache: memoryLocalCache(),
+}, DATABASE_ID);
 const auth = getAuth(app);
 const googleProvider = new GoogleAuthProvider();
 
@@ -70,6 +74,58 @@ export function subscribeAuth(callback) {
     }
   });
 }
+
+// タスク：1件 = 1 Firestore ドキュメント（複数端末での同時編集に強い）
+export const tasksStore = {
+  subscribe(callback, onError) {
+    const colRef = collection(db, 'workspaces', WORKSPACE_ID, 'tasks');
+    return onSnapshot(colRef, (snap) => {
+      const arr = [];
+      snap.forEach(d => arr.push(d.data()));
+      callback(arr);
+    }, (err) => {
+      console.error('タスク購読エラー:', err);
+      if (onError) onError(err);
+    });
+  },
+  async upsert(task) {
+    const ref = doc(db, 'workspaces', WORKSPACE_ID, 'tasks', task.id);
+    await setDoc(ref, task);
+  },
+  async remove(taskId) {
+    const ref = doc(db, 'workspaces', WORKSPACE_ID, 'tasks', taskId);
+    await deleteDoc(ref);
+  },
+  // upserts: Task[], deletes: string[]
+  async batch(upserts, deletes) {
+    const list = upserts || [];
+    const del = deletes || [];
+    if (list.length === 0 && del.length === 0) return;
+    // Firestore のバッチ上限（500件）を超える場合は分割
+    const chunkSize = 450;
+    for (let i = 0; i < list.length || i < del.length; i += chunkSize) {
+      const batch = writeBatch(db);
+      const upChunk = list.slice(i, i + chunkSize);
+      const delChunk = del.slice(i, i + chunkSize);
+      for (const t of upChunk) {
+        const ref = doc(db, 'workspaces', WORKSPACE_ID, 'tasks', t.id);
+        batch.set(ref, t);
+      }
+      for (const id of delChunk) {
+        const ref = doc(db, 'workspaces', WORKSPACE_ID, 'tasks', id);
+        batch.delete(ref);
+      }
+      await batch.commit();
+    }
+  },
+  async listAll() {
+    const colRef = collection(db, 'workspaces', WORKSPACE_ID, 'tasks');
+    const snap = await getDocs(colRef);
+    const arr = [];
+    snap.forEach(d => arr.push(d.data()));
+    return arr;
+  },
+};
 
 // Claude.ai の window.storage と同じ形のAPI
 export const storage = {
