@@ -750,11 +750,15 @@ function groupByViewpoint(tasks) {
         customerContact: task.customerContact || '',
         viewpointName: task.viewpointName,
         assignee: task.assignee,
+        memo: task.memo || '',
+        tentative: !!task.tentative,
         tasks: [],
         minPriority: task.priority,
       };
     }
     groups[key].tasks.push(task);
+    if (!groups[key].memo && task.memo) groups[key].memo = task.memo;
+    if (task.tentative) groups[key].tentative = true;
     if (task.priority < groups[key].minPriority) groups[key].minPriority = task.priority;
   }
   // 各グループ内：stepOrder → priority → createdAt の順
@@ -818,7 +822,7 @@ export default function App() {
   // 初期表示は「パース」プリセット
   const makeEmptyViewpoint = () => makeViewpointFromPreset(VIEWPOINT_PRESETS[0]);
   const emptyForm = {
-    projectName: '', projectNameInternal: '', companyName: '', customerContact: '', assignee: '', priority: '', manualStart: '', manualEnd: '',
+    projectName: '', projectNameInternal: '', companyName: '', customerContact: '', assignee: '', priority: '', manualStart: '', manualEnd: '', memo: '', tentative: false,
     // 視点（担当タスク）の動的リスト。各視点の中にステップ（工程）を持つ
     viewpoints: [makeEmptyViewpoint()],
   };
@@ -1079,6 +1083,8 @@ export default function App() {
             stepName: name, stepOrder: order,
             assignee: vpAssignee,
             priority, hours: stepHours, completedHours: stepCompleted,
+            memo: (form.memo || '').trim(),
+            tentative: !!form.tentative,
             // ステップ個別の開始・終了指定は維持（フォームの欄は下で先頭/末尾の未完了ステップに適用）
             manualStart: existing?.manualStart || null,
             manualEnd: existing?.manualEnd || null,
@@ -1236,6 +1242,8 @@ export default function App() {
       priority: String(task.priority),
       manualStart: task.manualStart || '',
       manualEnd: task.manualEnd || '',
+      memo: task.memo || '',
+      tentative: !!task.tentative,
       viewpoints: [{
         viewpointName: task.viewpointName || '',
         assignee: task.assignee || '',
@@ -1291,6 +1299,8 @@ export default function App() {
       // 開始時間欄は最初の未完了ステップ、終了予定欄は最後の未完了ステップの指定を表示
       manualStart: (priorityPool[0]?.manualStart) || (priorityPool.length === 0 ? (first.manualStart || '') : ''),
       manualEnd: (priorityPool.length > 0 ? (priorityPool[priorityPool.length - 1].manualEnd || '') : (projectTasks[projectTasks.length - 1].manualEnd || '')),
+      memo: (projectTasks.find(t => t.memo) || {}).memo || '',
+      tentative: projectTasks.some(t => t.tentative),
       viewpoints,
     });
     setEditingId(null);
@@ -1352,6 +1362,8 @@ export default function App() {
       projectNameInternal: projectNameInternal || '',
       companyName: sibling?.companyName || '',
       customerContact: sibling?.customerContact || '',
+      memo: sibling?.memo || '',
+      tentative: !!sibling?.tentative,
       viewpoints: [makeEmptyViewpoint()],
     });
     setEditingId(null);
@@ -2202,7 +2214,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
   const filteredActive = useMemo(() => {
     if (!q) return scheduled.active;
     return scheduled.active.filter(t =>
-      [t.projectName, t.projectNameInternal, t.companyName, t.customerContact, t.assignee, t.viewpointName, t.stepName]
+      [t.projectName, t.projectNameInternal, t.companyName, t.customerContact, t.assignee, t.viewpointName, t.stepName, t.memo]
         .some(v => (v || '').toLowerCase().includes(q))
     );
   }, [scheduled.active, q]);
@@ -2415,6 +2427,30 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
             </div>
             <div style={{ fontSize: 10, color: colors.textMute, marginTop: 6 }}>
               指定するとこの案件の終了がこの時刻になり、同じ担当者の次のタスクはこの時刻から開始します（制作時間ぶんの作業がこの時刻を超える場合は打ち切り）
+            </div>
+          </div>
+          <div style={{ gridColumn: 'span 2' }}>
+            <label style={labelStyle}>メモ（任意・一覧の案件ヘッダーとカレンダーのツールチップに表示）</label>
+            <textarea value={form.memo || ''}
+              onChange={(e) => setForm({ ...form, memo: e.target.value })}
+              placeholder="例: 6/20 受注確定予定。確定したら本登録に切り替える"
+              rows={2}
+              style={{ ...inputStyle, resize: 'vertical', minHeight: 40 }} />
+          </div>
+          <div style={{ gridColumn: 'span 2' }}>
+            <label style={{
+              display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer',
+              background: form.tentative ? '#fdf3e7' : '#fff', border: `1px solid ${form.tentative ? '#c46a16' : colors.border}`,
+              borderRadius: 4, padding: '9px 14px', fontSize: 13, fontFamily: fontJP,
+              color: form.tentative ? '#c46a16' : colors.text, fontWeight: form.tentative ? 700 : 400,
+            }}>
+              <input type="checkbox" checked={!!form.tentative}
+                onChange={(e) => setForm({ ...form, tentative: e.target.checked })}
+                style={{ width: 15, height: 15, accentColor: '#c46a16', cursor: 'pointer' }} />
+              仮案件（仮予定）として登録する
+            </label>
+            <div style={{ fontSize: 10, color: colors.textMute, marginTop: 6 }}>
+              スケジュールの枠は通常どおり確保されます。一覧・カレンダーに「仮」マークが付き、編集でチェックを外せば本登録になります
             </div>
           </div>
         </div>
@@ -2732,6 +2768,8 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
           projectNameInternal: g.projectNameInternal || '',
           companyName: g.companyName || '',
           customerContact: g.customerContact || '',
+          memo: g.memo || '',
+          tentative: !!g.tentative,
           viewpointGroups: [],
           totalHours: 0,
           completedHours: 0,
@@ -2750,6 +2788,8 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
       if (!pg.projectNameInternal && g.projectNameInternal) pg.projectNameInternal = g.projectNameInternal;
       if (!pg.companyName && g.companyName) pg.companyName = g.companyName;
       if (!pg.customerContact && g.customerContact) pg.customerContact = g.customerContact;
+      if (!pg.memo && g.memo) pg.memo = g.memo;
+      if (g.tentative) pg.tentative = true;
       if (g.assignee) pg.assigneeSet.add(g.assignee);
       // 案件全体の開始＝最早の視点開始、終了＝最遅の視点終了
       if (g.scheduledStart) {
@@ -2928,6 +2968,12 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
                 title={isCollapsed ? '展開' : '折りたたみ'}>
                 {isCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
               </button>
+              {pg.tentative && (
+                <span style={{
+                  fontSize: 10, fontWeight: 700, color: '#fff', background: '#c46a16',
+                  borderRadius: 2, padding: '2px 6px', flexShrink: 0,
+                }} title="仮案件（仮予定）です。編集フォームで本登録に切り替えられます">仮</span>
+              )}
               {pg.projectNameInternal ? (
                 <>
                   <span style={{ fontSize: 14, fontWeight: 600, color: colors.text, cursor: 'pointer' }} onClick={() => toggle(pg.projectName)}>{pg.projectNameInternal}</span>
@@ -2940,6 +2986,13 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
                 <span style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', flexShrink: 0 }}>
                   お客様: {pg.customerContact}
                 </span>
+              )}
+              {pg.memo && (
+                <span title={pg.memo} style={{
+                  fontSize: 11, color: '#8a7a4a', background: '#faf5e4', border: '1px solid #e8dcb8',
+                  borderRadius: 2, padding: '1px 6px',
+                  maxWidth: 260, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                }}>📝 {pg.memo}</span>
               )}
               <span style={{ marginLeft: 'auto', fontSize: 11, color: colors.textMute, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end' }}>
                 {pg.assignees && pg.assignees.length > 0 && (
@@ -3898,7 +3951,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
       </div>
 
       <div style={{ marginTop: 20, fontSize: 11, color: colors.textMute }}>
-        セル内の色は案件ごと ・ 右上の #番号 が優先順位 ・ グレーの実線ブロックは完了済（「済」）／中止（「止」、実終了時刻から遡って表示） ・ グレーの斜線は休日・不在 ・ マウスオーバーで詳細表示 ・ クリックで案件編集フォームを開く（完了済みの案件も編集可）
+        セル内の色は案件ごと ・ 右上の #番号 が優先順位 ・ 白の斜線ストライプ＋「仮」は仮案件 ・ グレーの実線ブロックは完了済（「済」）／中止（「止」、実終了時刻から遡って表示） ・ グレーの斜線は休日・不在 ・ マウスオーバーで詳細表示 ・ クリックで案件編集フォームを開く（完了済みの案件も編集可）
       </div>
     </div>
   );
@@ -3916,14 +3969,18 @@ function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact
     if (!isNaN(d.getTime())) aeStr = `${d.getMonth() + 1}/${d.getDate()} ${minToTime(d.getHours() * 60 + d.getMinutes())}`;
   }
   const cancelled = !!task.cancelled;
+  const tentative = !done && !!task.tentative;
+  const memoLine = task.memo ? `\n📝 ${task.memo}` : '';
   const title = done
-    ? `【${cancelled ? '中止' : '完了'}】${nameLine}\n${minToTime(slot.startMin)}〜${minToTime(slot.endMin)} (${slot.hours}h)${aeStr ? `\n実終了 ${aeStr}` : ''}${onClick ? '\nクリックで案件を編集（終了時間の実績は完了タブで）' : '\n※終了時間（実績）は完了タブで編集できます'}`
-    : `#${task.priority} ${nameLine}\n${minToTime(slot.startMin)}〜${minToTime(slot.endMin)} (${slot.hours}h)\n残り ${remaining}h / 全${task.hours}h${task.manualStart ? '\n※開始時間指定あり' : ''}${task.manualEnd ? '\n※終了予定指定あり' : ''}${task.delays && task.delays.length ? `\n※遅延履歴あり（${task.delays.length}回）` : ''}${onClick ? '\nクリックで案件を編集' : ''}`;
+    ? `【${cancelled ? '中止' : '完了'}】${nameLine}\n${minToTime(slot.startMin)}〜${minToTime(slot.endMin)} (${slot.hours}h)${aeStr ? `\n実終了 ${aeStr}` : ''}${memoLine}${onClick ? '\nクリックで案件を編集（終了時間の実績は完了タブで）' : '\n※終了時間（実績）は完了タブで編集できます'}`
+    : `${tentative ? '【仮】' : ''}#${task.priority} ${nameLine}\n${minToTime(slot.startMin)}〜${minToTime(slot.endMin)} (${slot.hours}h)\n残り ${remaining}h / 全${task.hours}h${memoLine}${task.manualStart ? '\n※開始時間指定あり' : ''}${task.manualEnd ? '\n※終了予定指定あり' : ''}${task.delays && task.delays.length ? `\n※遅延履歴あり（${task.delays.length}回）` : ''}${onClick ? '\nクリックで案件を編集' : ''}`;
   return (
     <div title={title}
       onClick={onClick || undefined}
       style={{
         height: `${heightPct}%`, minHeight: 0, background: done ? '#a6a6a0' : projectColor, color: '#fff',
+        // 仮案件は白の斜線ストライプを重ねて区別する
+        backgroundImage: tentative ? 'repeating-linear-gradient(45deg, rgba(255,255,255,0.28) 0, rgba(255,255,255,0.28) 4px, transparent 4px, transparent 9px)' : 'none',
         padding: '3px 5px', fontSize: 10, lineHeight: 1.25, overflow: 'hidden',
         position: 'relative',
         cursor: onClick ? 'pointer' : 'default',
@@ -3955,10 +4012,10 @@ function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact
       )}
       <div style={{
         position: 'absolute', top: 2, right: 2,
-        background: done ? (cancelled ? '#a05252' : '#7d7d76') : priorityColor(task.priority), color: '#fff',
+        background: done ? (cancelled ? '#a05252' : '#7d7d76') : (tentative ? '#c46a16' : priorityColor(task.priority)), color: '#fff',
         fontSize: 8, fontWeight: 700, padding: '0 3px', borderRadius: 2,
         border: '1px solid rgba(255,255,255,0.7)',
-      }}>{done ? (cancelled ? '止' : '済') : `#${task.priority}`}</div>
+      }}>{done ? (cancelled ? '止' : '済') : (tentative ? `仮#${task.priority}` : `#${task.priority}`)}</div>
     </div>
   );
 }
