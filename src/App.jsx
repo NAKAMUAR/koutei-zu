@@ -431,14 +431,17 @@ function scheduleTasks(tasks, settings, projectOrder) {
   const active = tasks.filter(t => t.status !== 'done');
   const done = tasks.filter(t => t.status === 'done');
 
-  // 作業順 ＝ 案件の並び順（既定は会社ごと・手動ドラッグで会社を跨いで変更可）→ 案件内は優先順位 → 登録順
+  // 作業順 ＝ 案件の並び順（既定は会社ごと・手動ドラッグで会社を跨いで変更可）→ 案件内は優先順位
+  // → ホワイト工程を全視点ぶん先に（視点名に関わらずホワイト優先）→ 登録順
+  // 例: IN1(白/カラー)+IN2(白/カラー) → IN1白 → IN2白 → IN1カラー → IN2カラー
   const projOrder = computeProjectOrder(active, projectOrder);
   const projIdx = new Map(projOrder.map((n, i) => [n, i]));
   const projOf = (t) => projIdx.has(t.projectName || '') ? projIdx.get(t.projectName || '') : Infinity;
+  const phaseOf = (t) => ((t.stepName || '').includes('ホワイト') ? 0 : 1);
   const sorted = [...active].sort((a, b) => {
     const pa = projOf(a), pb = projOf(b);
     if (pa !== pb) return pa - pb;
-    return (a.priority - b.priority) || (a.createdAt - b.createdAt);
+    return (a.priority - b.priority) || (phaseOf(a) - phaseOf(b)) || (a.createdAt - b.createdAt);
   });
 
   // 完了タスクの実終了時刻（担当者ごとの最遅）→ その担当者の着手可能の下限（遅れを反映）
