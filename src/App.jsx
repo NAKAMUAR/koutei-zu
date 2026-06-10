@@ -4471,6 +4471,19 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
     setEmployees(next);
     saveEmployeeMaster(next);
   };
+  // ドラッグ＆ドロップで並び替え（つまみ部分をドラッグ → 行へドロップ）
+  const [empDragSrc, setEmpDragSrc] = useState(null);
+  const [empDragOver, setEmpDragOver] = useState(null);
+  const reorderEmployees = (srcId, targetId) => {
+    if (!srcId || srcId === targetId) return;
+    const src = employees.find(e => e.id === srcId);
+    if (!src) return;
+    const rest = employees.filter(e => e.id !== srcId);
+    const ti = rest.findIndex(e => e.id === targetId);
+    const next = ti < 0 ? [...rest, src] : [...rest.slice(0, ti), src, ...rest.slice(ti)];
+    setEmployees(next);
+    saveEmployeeMaster(next);
+  };
 
   const inputStyle = {
     width: '100%', padding: '8px 10px', boxSizing: 'border-box',
@@ -4561,12 +4574,12 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
         <h2 style={{ fontFamily: fontDisplay, fontSize: 18, margin: '0 0 4px 0', fontWeight: 500 }}>従業員マスタ</h2>
         <p style={{ fontSize: 12, color: colors.textMute, margin: '0 0 16px 0' }}>
           制作担当者（従業員）を登録します。案件入力時の「担当者」の候補に表示されます。<br />
-          ここでの並び順が、カレンダー・担当者別・サマリーの担当者の表示順になります（▲▼で変更）。
+          ここでの並び順が、カレンダー・担当者別・サマリーの担当者の表示順になります（つまみをドラッグ＆ドロップ、または▲▼で変更）。
         </p>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '0 2px' }}>
-            <div style={{ width: 26, flexShrink: 0, ...labelStyle }}>順</div>
+            <div style={{ width: 48, flexShrink: 0, ...labelStyle }}>順</div>
             <div style={{ flex: '1 1 0', ...labelStyle }}>氏名</div>
             <div style={{ flex: '1 1 0', ...labelStyle }}>役割・備考</div>
             <div style={{ width: 34, flexShrink: 0 }} />
@@ -4577,26 +4590,44 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
             </div>
           )}
           {employees.map((e, ei) => (
-            <div key={e.id} style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 2, width: 26, flexShrink: 0 }}>
-                <button type="button" onClick={() => moveEmployee(e.id, -1)} disabled={ei === 0}
-                  style={{
-                    background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 2,
-                    padding: '1px 4px', cursor: ei === 0 ? 'not-allowed' : 'pointer',
-                    color: ei === 0 ? '#ccc' : colors.textMute,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  }} title="上へ（表示順を前にする）">
-                  <ChevronUp size={11} />
-                </button>
-                <button type="button" onClick={() => moveEmployee(e.id, 1)} disabled={ei === employees.length - 1}
-                  style={{
-                    background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 2,
-                    padding: '1px 4px', cursor: ei === employees.length - 1 ? 'not-allowed' : 'pointer',
-                    color: ei === employees.length - 1 ? '#ccc' : colors.textMute,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  }} title="下へ（表示順を後にする）">
-                  <ChevronDown size={11} />
-                </button>
+            <div key={e.id}
+              onDragOver={(ev) => { if (empDragSrc && empDragSrc !== e.id) { ev.preventDefault(); ev.dataTransfer.dropEffect = 'move'; if (empDragOver !== e.id) setEmpDragOver(e.id); } }}
+              onDragLeave={() => { if (empDragOver === e.id) setEmpDragOver(null); }}
+              onDrop={(ev) => { ev.preventDefault(); if (empDragSrc) reorderEmployees(empDragSrc, e.id); setEmpDragSrc(null); setEmpDragOver(null); }}
+              style={{
+                display: 'flex', gap: 10, alignItems: 'center',
+                borderRadius: 4, padding: 2,
+                opacity: empDragSrc === e.id ? 0.5 : 1,
+                boxShadow: empDragOver === e.id && empDragSrc && empDragSrc !== e.id ? `0 0 0 2px ${colors.accent} inset` : 'none',
+              }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, width: 48, flexShrink: 0 }}>
+                <span draggable
+                  onDragStart={(ev) => { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', e.id); setEmpDragSrc(e.id); }}
+                  onDragEnd={() => { setEmpDragSrc(null); setEmpDragOver(null); }}
+                  title="ドラッグして並び替え"
+                  style={{ cursor: 'grab', color: colors.textMute, display: 'flex' }}>
+                  <GripVertical size={14} />
+                </span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <button type="button" onClick={() => moveEmployee(e.id, -1)} disabled={ei === 0}
+                    style={{
+                      background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 2,
+                      padding: '1px 4px', cursor: ei === 0 ? 'not-allowed' : 'pointer',
+                      color: ei === 0 ? '#ccc' : colors.textMute,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }} title="上へ（表示順を前にする）">
+                    <ChevronUp size={11} />
+                  </button>
+                  <button type="button" onClick={() => moveEmployee(e.id, 1)} disabled={ei === employees.length - 1}
+                    style={{
+                      background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 2,
+                      padding: '1px 4px', cursor: ei === employees.length - 1 ? 'not-allowed' : 'pointer',
+                      color: ei === employees.length - 1 ? '#ccc' : colors.textMute,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }} title="下へ（表示順を後にする）">
+                    <ChevronDown size={11} />
+                  </button>
+                </div>
               </div>
               <input type="text" value={e.name || ''}
                 onChange={(ev) => setEmployeeField(e.id, 'name', ev.target.value)}
