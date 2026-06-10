@@ -593,7 +593,8 @@ function simulateFormSchedule(form, allTasks, settings, projectOrder) {
   const activeCount = allTasks.filter(t => t.status !== 'done' && !editIds.has(t.id)).length;
   const { records } = formPreviewRecords(form, activeCount);
   if (records.length === 0) return null;
-  const others = allTasks.filter(t => t.status !== 'done' && !editIds.has(t.id));
+  // 完了タスクも含めて渡す（doneFloor を実スケジュールと同条件で効かせる）。除外は編集中レコードのみ
+  const others = allTasks.filter(t => !editIds.has(t.id));
   const result = scheduleTasks([...others, ...records], settings, projectOrder);
   const pids = new Set(records.map(r => r.id));
   const ps = result.active.filter(t => pids.has(t.id) && t.scheduledStart);
