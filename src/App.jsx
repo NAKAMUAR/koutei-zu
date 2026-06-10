@@ -1895,7 +1895,7 @@ export default function App() {
             colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
         )}
         {view === 'calendar' && (
-          <CalendarView scheduled={scheduled} settings={settings} now={now} colors={colors} fontDisplay={fontDisplay}
+          <CalendarView scheduled={scheduled} settings={settings} now={now} colors={colors} fontDisplay={fontDisplay} fontJP={fontJP}
             onEditProject={handleEditProject} />
         )}
         {view === 'byAssignee' && (
@@ -3416,30 +3416,68 @@ const progressBtnStyle = (colors, fontJP) => ({
 });
 
 // ============ カレンダービュー ============
-function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditProject }) {
-  // 今日を基準に「過去30営業日 + 今日 + 未来42営業日」の範囲を表示。
-  // 今日を初期スクロールの左端に置き、左スクロールで過去、右スクロールで未来を見られるようにする。
+function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditProject, fontJP }) {
   const today = startOfDay(new Date());
-  const pastDates = [];
-  {
+  // 表示モード：1日 / 週間 / 月間 / 全期間（従来のスクロール表示）
+  const [viewMode, setViewMode] = useState('scroll');
+  const [anchor, setAnchor] = useState(today);
+
+  // モードごとに表示する営業日の列を決める
+  const allDates = [];
+  if (viewMode === 'day') {
+    let d = startOfDay(anchor);
+    while (isNonWorkingDay(d)) d = addDays(d, 1);
+    allDates.push(d);
+  } else if (viewMode === 'week') {
+    const dow = (anchor.getDay() + 6) % 7; // 月曜=0
+    const mon = addDays(startOfDay(anchor), -dow);
+    for (let i = 0; i < 6; i++) {
+      const d = addDays(mon, i);
+      if (!isNonWorkingDay(d)) allDates.push(d);
+    }
+  } else if (viewMode === 'month') {
+    const y = anchor.getFullYear(), m = anchor.getMonth();
+    for (let d = startOfDay(new Date(y, m, 1)); d.getMonth() === m; d = addDays(d, 1)) {
+      if (!isNonWorkingDay(d)) allDates.push(new Date(d));
+    }
+  } else {
+    // 全期間：過去30営業日 + 今日 + 未来42営業日（今日を初期スクロールの左端に置く）
     let cursor = new Date(today);
     let count = 0;
+    const past = [];
     while (count < 30) {
       cursor = addDays(cursor, -1);
-      if (!isNonWorkingDay(cursor)) { pastDates.unshift(new Date(cursor)); count++; }
+      if (!isNonWorkingDay(cursor)) { past.unshift(new Date(cursor)); count++; }
     }
-  }
-  const futureDates = [];
-  {
-    let cursor = new Date(today);
-    let count = 0;
-    while (count < 42 && futureDates.length < 70) {
-      if (!isNonWorkingDay(cursor)) { futureDates.push(new Date(cursor)); count++; }
+    allDates.push(...past);
+    cursor = new Date(today);
+    count = 0;
+    while (count < 42) {
+      if (!isNonWorkingDay(cursor)) { allDates.push(new Date(cursor)); count++; }
       cursor = addDays(cursor, 1);
     }
   }
-  const allDates = [...pastDates, ...futureDates];
-  const todayIndex = pastDates.length; // futureDates の先頭＝今日
+  const todayIndex = allDates.findIndex(d => isSameDay(d, today));
+
+  // ナビゲーション（1日・週間・月間モード）
+  const goStep = (dir) => {
+    if (viewMode === 'day') {
+      let d = addDays(startOfDay(anchor), dir);
+      while (isNonWorkingDay(d)) d = addDays(d, dir);
+      setAnchor(d);
+    } else if (viewMode === 'week') {
+      setAnchor(addDays(startOfDay(anchor), dir * 7));
+    } else if (viewMode === 'month') {
+      setAnchor(startOfDay(new Date(anchor.getFullYear(), anchor.getMonth() + dir, 1)));
+    }
+  };
+  const rangeLabel = viewMode === 'day'
+    ? `${fmtYMDJP(allDates[0])}（${dayName(allDates[0])}）`
+    : viewMode === 'week'
+      ? `${fmtMD(allDates[0])}（${dayName(allDates[0])}）〜 ${fmtMD(allDates[allDates.length - 1])}（${dayName(allDates[allDates.length - 1])}）`
+      : viewMode === 'month'
+        ? `${anchor.getFullYear()}年${anchor.getMonth() + 1}月`
+        : '';
 
   const dailySlots = getDailySlots(settings);
   const morningSlot = dailySlots[0];
@@ -3473,24 +3511,28 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
     }
   }
 
-  const dayCellWidth = 240;
-  const rowHeight = 100;
+  // 列幅：全期間=240px・月間=110px（横スクロール）、1日・週間=画面幅に合わせる
   const labelWidth = 110;
+  const isFlexWidth = viewMode === 'day' || viewMode === 'week';
+  const dayCellWidth = viewMode === 'month' ? 110 : 240;
+  const colWidth = isFlexWidth ? `calc((100% - ${labelWidth}px) / ${allDates.length})` : dayCellWidth;
+  const rowHeight = viewMode === 'day' ? 150 : 100;
+  const compact = viewMode === 'month';
 
-  // 初期スクロール位置を「今日が左端」に設定（コンテナ幅・dayCellWidth に応じて scrollLeft をセット）
+  // 初期スクロール位置を「今日が左端」に設定（全期間・月間のみ。モード/期間の切替時に再設定）
   const scrollRef = useRef(null);
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    // ラベル列分を考慮しつつ、今日のセル左端に合わせる
-    el.scrollLeft = todayIndex * dayCellWidth;
-    // 依存を todayIndex のみにし、リサイズ・データ更新では再スクロールしない（ユーザーのスクロール位置を保つ）
+    if (isFlexWidth) { el.scrollLeft = 0; return; }
+    el.scrollLeft = (todayIndex >= 0 ? todayIndex : 0) * dayCellWidth;
+    // データ更新では再スクロールしない（ユーザーのスクロール位置を保つ）
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [viewMode, anchor]);
 
   // 現在時刻の縦ライン位置（今日の列の中の横位置）
   let nowLineX = null;
-  if (now && !isNonWorkingDay(now)) {
+  if (now && todayIndex >= 0 && !isNonWorkingDay(now)) {
     const nowMin = now.getHours() * 60 + now.getMinutes();
     let frac;
     if (nowMin <= morningSlot.start) frac = 0;
@@ -3498,7 +3540,9 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
     else if (nowMin < afternoonSlot.start) frac = 0.5;
     else if (nowMin < afternoonSlot.end) frac = 0.5 + (nowMin - afternoonSlot.start) / (afternoonSlot.end - afternoonSlot.start) * 0.5;
     else frac = 1;
-    nowLineX = labelWidth + todayIndex * dayCellWidth + frac * dayCellWidth;
+    nowLineX = isFlexWidth
+      ? `calc(${labelWidth}px + (100% - ${labelWidth}px) * ${(todayIndex + frac) / allDates.length})`
+      : labelWidth + (todayIndex + frac) * dayCellWidth;
   }
 
   if (assignees.length === 0) {
@@ -3528,8 +3572,36 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
         .compact-scroll::-webkit-scrollbar-corner { background: transparent; }
       `}</style>
 
+      {/* 表示モード切替＋期間ナビゲーション */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
+        {[['day', '1日'], ['week', '週間'], ['month', '月間'], ['scroll', '全期間']].map(([m, label]) => (
+          <button key={m} type="button"
+            onClick={() => { setViewMode(m); setAnchor(today); }}
+            style={tabStyle(viewMode === m, colors, fontJP)}>
+            {label}
+          </button>
+        ))}
+        {viewMode !== 'scroll' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 10, flexWrap: 'wrap' }}>
+            <button type="button" onClick={() => goStep(-1)}
+              style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 3, padding: '6px 12px', cursor: 'pointer', fontFamily: fontJP, fontSize: 12, color: colors.text }}>
+              ‹ {viewMode === 'day' ? '前日' : viewMode === 'week' ? '前週' : '前月'}
+            </button>
+            <button type="button" onClick={() => setAnchor(today)}
+              style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 3, padding: '6px 12px', cursor: 'pointer', fontFamily: fontJP, fontSize: 12, color: colors.text }}>
+              今日
+            </button>
+            <button type="button" onClick={() => goStep(1)}
+              style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 3, padding: '6px 12px', cursor: 'pointer', fontFamily: fontJP, fontSize: 12, color: colors.text }}>
+              {viewMode === 'day' ? '翌日' : viewMode === 'week' ? '翌週' : '翌月'} ›
+            </button>
+            <span style={{ fontSize: 13, fontWeight: 600, color: colors.text, marginLeft: 6 }}>{rangeLabel}</span>
+          </div>
+        )}
+      </div>
+
       <div ref={scrollRef} className="compact-scroll" style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 6, overflow: 'auto' }}>
-        <div style={{ minWidth: labelWidth + allDates.length * dayCellWidth, position: 'relative' }}>
+        <div style={{ minWidth: isFlexWidth ? undefined : labelWidth + allDates.length * dayCellWidth, position: 'relative' }}>
           {nowLineX != null && (
             <div title={`現在時刻 ${minToTime(now.getHours() * 60 + now.getMinutes())}`} style={{
               position: 'absolute', top: 0, bottom: 0, left: nowLineX, width: 2,
@@ -3551,7 +3623,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
               const isToday = isSameDay(d, new Date());
               return (
                 <div key={i} style={{
-                  width: dayCellWidth, padding: '6px 4px 2px', textAlign: 'center', flexShrink: 0,
+                  width: colWidth, padding: '6px 4px 2px', textAlign: 'center', flexShrink: 0,
                   borderRight: i < allDates.length - 1 ? `1px solid ${colors.border}` : 'none',
                   background: isToday ? colors.accentSoft : 'transparent',
                   boxSizing: 'border-box',
@@ -3601,7 +3673,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                 }
                 return (
                   <div key={di} style={{
-                    width: dayCellWidth, height: rowHeight, flexShrink: 0,
+                    width: colWidth, height: rowHeight, flexShrink: 0,
                     borderRight: di < allDates.length - 1 ? `1px solid ${colors.border}` : 'none',
                     background: isToday ? '#fff8f8' : '#fff',
                     position: 'relative',
@@ -3610,7 +3682,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                   }}>
                     <div style={{ width: '50%', display: 'flex', flexDirection: 'column', borderRight: `1px dashed ${colors.border}`, boxSizing: 'border-box' }}>
                       {morningItems.map(({ task, slot, done }, si) => (
-                        <TaskBlock key={si} task={task} slot={slot} done={done}
+                        <TaskBlock key={si} task={task} slot={slot} done={done} compact={compact}
                           heightPct={(slot.hours / morningHours) * 100}
                           projectColor={getProjectColor(task.projectName)}
                           onClick={onEditProject && (() => onEditProject(task.projectName))} />
@@ -3620,7 +3692,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                       background: isWorkSat ? 'repeating-linear-gradient(45deg, #f5f0e3, #f5f0e3 4px, #fbf9f4 4px, #fbf9f4 8px)' : 'transparent',
                     }}>
                       {!isWorkSat && afternoonItems.map(({ task, slot, done }, si) => (
-                        <TaskBlock key={si} task={task} slot={slot} done={done}
+                        <TaskBlock key={si} task={task} slot={slot} done={done} compact={compact}
                           heightPct={(slot.hours / afternoonHours) * 100}
                           projectColor={getProjectColor(task.projectName)}
                           onClick={onEditProject && (() => onEditProject(task.projectName))} />
@@ -3662,7 +3734,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
   );
 }
 
-function TaskBlock({ task, slot, heightPct, projectColor, done, onClick }) {
+function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact }) {
   const remaining = Math.max(0, task.hours - (task.completedHours || 0));
   const stepLabel = task.stepName ? ` - ${task.stepName}` : '';
   const internal = task.projectNameInternal || '';
@@ -3686,19 +3758,28 @@ function TaskBlock({ task, slot, heightPct, projectColor, done, onClick }) {
         position: 'relative',
         cursor: onClick ? 'pointer' : 'default',
       }}>
-      {internal && (
-        <div style={{ fontSize: 10, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', paddingRight: 18 }}>
-          {internal}
+      {compact ? (
+        // 月間表示などの狭い列：案件名1行のみ（詳細はツールチップ）
+        <div style={{ fontSize: 8, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', paddingRight: 14 }}>
+          {internal || external || task.viewpointName}
         </div>
+      ) : (
+        <>
+          {internal && (
+            <div style={{ fontSize: 10, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', paddingRight: 18 }}>
+              {internal}
+            </div>
+          )}
+          {external && (
+            <div style={{ fontSize: 9, opacity: 0.85, whiteSpace: 'normal', wordBreak: 'break-word', paddingRight: internal ? 0 : 18 }}>
+              {external}
+            </div>
+          )}
+          <div style={{ fontSize: 9, fontWeight: 500, opacity: 0.95, whiteSpace: 'normal', overflow: 'hidden', wordBreak: 'break-word', paddingRight: (external || internal) ? 0 : 18 }}>
+            {task.viewpointName}
+          </div>
+        </>
       )}
-      {external && (
-        <div style={{ fontSize: 9, opacity: 0.85, whiteSpace: 'normal', wordBreak: 'break-word', paddingRight: internal ? 0 : 18 }}>
-          {external}
-        </div>
-      )}
-      <div style={{ fontSize: 9, fontWeight: 500, opacity: 0.95, whiteSpace: 'normal', overflow: 'hidden', wordBreak: 'break-word', paddingRight: (external || internal) ? 0 : 18 }}>
-        {task.viewpointName}
-      </div>
       <div style={{
         position: 'absolute', top: 2, right: 2,
         background: done ? (cancelled ? '#a05252' : '#7d7d76') : priorityColor(task.priority), color: '#fff',
