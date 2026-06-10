@@ -2208,6 +2208,8 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
   }, [scheduled.active, q]);
   // 進行中タスクのグループ表示：会社別（既定）／担当者別
   const [listGroupMode, setListGroupMode] = useState('company');
+  // 担当者別表示のときの担当者の絞り込み（null = 全選択）
+  const [selectedListAssignee, setSelectedListAssignee] = useState(null);
 
   // ===== 過去案件から引用 =====
   const [quoteOpen, setQuoteOpen] = useState(false);
@@ -2612,8 +2614,32 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
             「{searchQuery}」に一致する案件はありません。
           </div>
         ) : listGroupMode === 'assignee' ? (
-          // 担当者別表示：従業員マスタの並び順で担当者ごとにまとめる
-          sortAssigneesByMaster([...new Set(filteredActive.map(t => t.assignee))], assigneeOrder).map(a => {
+          // 担当者別表示：従業員マスタの並び順で担当者ごとにまとめ、タブで絞り込みできる
+          (() => {
+            const listAssignees = sortAssigneesByMaster([...new Set(filteredActive.map(t => t.assignee))], assigneeOrder);
+            const currentA = selectedListAssignee && listAssignees.includes(selectedListAssignee) ? selectedListAssignee : null;
+            return (
+              <>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 16 }}>
+                  <button type="button" onClick={() => setSelectedListAssignee(null)} style={tabStyle(currentA === null, colors, fontJP)}>
+                    すべて表示
+                  </button>
+                  {listAssignees.map(a => {
+                    const ts = filteredActive.filter(t => t.assignee === a);
+                    const remaining = ts.reduce((s, t) => s + Math.max(0, t.hours - (t.completedHours || 0)), 0);
+                    return (
+                      <button key={a} type="button" onClick={() => setSelectedListAssignee(a)} style={tabStyle(currentA === a, colors, fontJP)}>
+                        {a || '（担当者未設定）'}
+                        <span style={{
+                          marginLeft: 6, fontSize: 10, opacity: 0.7,
+                          padding: '1px 5px', borderRadius: 8,
+                          background: currentA === a ? 'rgba(255,255,255,0.2)' : '#f0ebde',
+                        }}>{ts.length}件 / 残{remaining}h</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {(currentA ? [currentA] : listAssignees).map(a => {
             const aTasks = filteredActive.filter(t => t.assignee === a);
             const aTotal = aTasks.reduce((s, t) => s + t.hours, 0);
             const aDone = aTasks.reduce((s, t) => s + (t.completedHours || 0), 0);
@@ -2651,7 +2677,10 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                   colors={colors} fontJP={fontJP} />
               </section>
             );
-          })
+          })}
+              </>
+            );
+          })()
         ) : (
           <ViewpointGroupList
             groups={groupByViewpoint(filteredActive)}
