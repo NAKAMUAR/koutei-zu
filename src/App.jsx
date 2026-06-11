@@ -153,6 +153,8 @@ const DEFAULT_SETTINGS = {
   startDate: fmtYMD(new Date()),
   startTime: '08:00',
   absences: [],
+  // 残業（担当者・期間・時間帯の稼働枠追加）。[{ id, assignee, startDate, endDate, startTime, endTime, label }]
+  overtimes: [],
   // 会社グループの表示順（暫定の固定順）。表示順設定ページで編集可
   companyOrder: ['CG工房', 'リノべる株式会社', 'オフィスコム', '田中建設', 'SUMUS', '玉善', 'オフショア（その他）'],
 };
@@ -407,7 +409,38 @@ function dayAbsence(assignee, date, absences) {
   return { allDay, intervals };
 }
 
-// その担当者・その日の「空いている営業時間」区間（土日・不在・予約済みを除外）
+// その担当者・その日の残業時間帯。[[s,e],...]（分）
+function dayOvertimeIntervals(assignee, date, overtimes) {
+  const ymd = fmtYMD(date);
+  const out = [];
+  for (const o of (overtimes || [])) {
+    if (!o || o.assignee !== assignee) continue;
+    if (!o.startDate || !o.endDate) continue;
+    if (ymd < o.startDate || ymd > o.endDate) continue;
+    if (o.startTime && o.endTime) {
+      const s = timeToMin(o.startTime), e = timeToMin(o.endTime);
+      if (e > s) out.push([s, e]);
+    }
+  }
+  return out;
+}
+
+// その担当者・その日の稼働枠（通常の営業スロット＋残業枠を重複なくマージ）
+function dayWorkSlots(assignee, date, settings) {
+  const base = getDaySlots(date, settings).map(s => [s.start, s.end]);
+  const ot = dayOvertimeIntervals(assignee, date, settings.overtimes || []);
+  const all = [...base, ...ot].sort((a, b) => a[0] - b[0]);
+  const merged = [];
+  for (const [s, e] of all) {
+    if (e <= s) continue;
+    if (merged.length > 0 && s <= merged[merged.length - 1][1]) {
+      merged[merged.length - 1][1] = Math.max(merged[merged.length - 1][1], e);
+    } else merged.push([s, e]);
+  }
+  return merged;
+}
+
+// その担当者・その日の「空いている営業時間」区間（土日・不在・予約済みを除外、残業枠を含む）
 function dayFreeIntervals(assignee, date, settings, busyMap, absences) {
   if (isNonWorkingDay(date)) return [];
   const abs = dayAbsence(assignee, date, absences);
@@ -416,13 +449,14 @@ function dayFreeIntervals(assignee, date, settings, busyMap, absences) {
   const busy = (busyMap[assignee] && busyMap[assignee].get(ymd)) || [];
   const blocked = [...busy, ...abs.intervals];
   const free = [];
-  for (const s of getDaySlots(date, settings)) {
-    for (const iv of subtractBusy(s.start, s.end, blocked)) free.push(iv);
+  for (const [s, e] of dayWorkSlots(assignee, date, settings)) {
+    for (const iv of subtractBusy(s, e, blocked)) free.push(iv);
   }
   return free;
 }
 
-function scheduleTasks(tasks, settings, projectOrder) {
+function scheduleTasks(tasks, settings, projectOrder, now) {
+  const nowTs = (now || new Date()).getTime();
   const dailySlots = getDailySlots(settings);
   const configuredStart = startOfDay(settings.startDate ? new Date(settings.startDate + 'T00:00:00') : new Date());
   // 過去には予定を置かない：起点は「設定された開始日」と「本日」の遅い方にする
@@ -476,9 +510,22 @@ function scheduleTasks(tasks, settings, projectOrder) {
   // 終了予定の指定（manualEnd）もこの下限に反映される
   const lastEndByAssignee = {};
 
-  // eTs 以降の空き営業時間に制作時間ぶんを詰める（予約済み・休日/不在は飛ばす）。
+  // 経過進捗を反映した実効的な所要時間（h）。
+  // 開始（eTs）が現在より過去のタスクは「開始〜現在の経過稼働時間＋残作業時間（制作時間−完了時間）」
+  // で枠を取り直す。完了時間が経過どおりなら終了予定は変わらず、
+  // 遅れていれば終了予定が後ろへ、進んでいれば前へ自動調整される。
+  const effectiveDuration = (task, eTs) => {
+    const fullHours = Math.max(0, task.hours || 0);
+    if (fullHours <= 0) return 0;
+    if (eTs >= nowTs) return fullHours;
+    const elapsedH = workingHoursBetweenTs(eTs, nowTs, task.assignee, settings);
+    const remainingH = Math.max(0, fullHours - (task.completedHours || 0));
+    return elapsedH + remainingH;
+  };
+
+  // eTs 以降の空き営業時間に durationHours ぶんを詰める（予約済み・休日/不在は飛ばす）。
   // 終了予定の指定（manualEnd・開始より後の場合のみ有効）があればその時刻で打ち切る
-  const fillTaskSlots = (task, eTs) => {
+  const fillTaskSlots = (task, eTs, durationHours) => {
     const assignee = task.assignee;
     const eDate = startOfDay(new Date(eTs));
     const eMin = Math.round((eTs - eDate.getTime()) / 60000);
@@ -492,7 +539,7 @@ function scheduleTasks(tasks, settings, projectOrder) {
         }
       }
     }
-    let remainingMin = Math.max(0, task.hours || 0) * 60;
+    let remainingMin = Math.round(Math.max(0, durationHours) * 60);
     const slots = [];
     let date = new Date(eDate);
     let guard = 0;
@@ -533,16 +580,14 @@ function scheduleTasks(tasks, settings, projectOrder) {
     );
     if (hasEarlierUnpinned) continue;
     const eTs = startOfDay(ms).getTime() + (ms.getHours() * 60 + ms.getMinutes()) * 60000;
-    pinnedResults.set(task.id, fillTaskSlots(task, eTs));
+    pinnedResults.set(task.id, fillTaskSlots(task, eTs, effectiveDuration(task, eTs)));
   }
 
   const scheduled = sorted.map(task => {
     const fullHours = Math.max(0, task.hours || 0);
-    // 【0】スケジュール枠は当初の制作時間で固定（completedHours は残時間表示のみ）
-    const durationHours = fullHours;
     const remainingHours = Math.max(0, fullHours - (task.completedHours || 0));
 
-    if (durationHours <= 0) {
+    if (fullHours <= 0) {
       return { ...task, scheduledStart: null, scheduledEnd: null, slots: [], remainingHours: 0 };
     }
 
@@ -565,7 +610,7 @@ function scheduleTasks(tasks, settings, projectOrder) {
         }
       }
       if (vpLastEnd[vkey] && vpLastEnd[vkey] > eTs) eTs = vpLastEnd[vkey];
-      res = fillTaskSlots(task, eTs);
+      res = fillTaskSlots(task, eTs, effectiveDuration(task, eTs));
     }
     const { slots, meTs, meDate, meMin } = res;
 
@@ -641,6 +686,15 @@ function buildDoneSlots(doneTasks, settings) {
     for (const slot of slots) out.push({ task: t, slot, done: true });
   }
   return out;
+}
+
+// 登録されている残業の最遅終了時刻（分）。カレンダーの時間軸の拡張に使う
+function maxOvertimeEndMin(settings) {
+  let max = 0;
+  for (const o of (settings.overtimes || [])) {
+    if (o && o.startTime && o.endTime) max = Math.max(max, timeToMin(o.endTime));
+  }
+  return max;
 }
 
 // 経過進捗（時間経過ベース）：slots のうち現在時刻 now より前の部分の合計時間（h）
@@ -739,8 +793,9 @@ function formPreviewRecords(form, activeCount, taskById) {
   return { records, priority };
 }
 
-// フォーム内容を実データに混ぜて scheduleTasks し、フォーム分の開始・終了予定を返す
-function simulateFormSchedule(form, allTasks, settings, projectOrder) {
+// フォーム内容を実データに混ぜて scheduleTasks し、フォーム分の開始・終了予定と
+// 納期チェック（視点の終了予定が納期を超えていないか）の結果を返す
+function simulateFormSchedule(form, allTasks, settings, projectOrder, now) {
   const editIds = formEditIds(form);
   const activeCount = allTasks.filter(t => t.status !== 'done' && !editIds.has(t.id)).length;
   const taskById = new Map(allTasks.map(t => [t.id, t]));
@@ -749,16 +804,20 @@ function simulateFormSchedule(form, allTasks, settings, projectOrder) {
   // 完了タスクは編集中でも常に含める（実績＝doneFloor はフォームでは変わらないため）。
   // 除外は編集中のアクティブなレコードのみ
   const others = allTasks.filter(t => t.status === 'done' || !editIds.has(t.id));
-  const result = scheduleTasks([...others, ...records], settings, projectOrder);
+  const result = scheduleTasks([...others, ...records], settings, projectOrder, now);
   const pids = new Set(records.map(r => r.id));
   const ps = result.active.filter(t => pids.has(t.id) && t.scheduledStart);
   if (ps.length === 0) return null;
   let sBest = null, eBest = null, sD = null, sM = 0, eD = null, eM = 0;
+  // 視点ごとの最遅終了（納期チェック用）
+  const vpEnds = new Map();
   for (const t of ps) {
     const sTs = t.scheduledStart.getTime() + (t.scheduledStartMin || 0) * 60000;
     const eTs = t.scheduledEnd.getTime() + (t.scheduledEndMin || 0) * 60000;
     if (sBest == null || sTs < sBest) { sBest = sTs; sD = t.scheduledStart; sM = t.scheduledStartMin; }
     if (eBest == null || eTs > eBest) { eBest = eTs; eD = t.scheduledEnd; eM = t.scheduledEndMin; }
+    const cur = vpEnds.get(t.viewpointName);
+    if (!cur || eTs > cur.endTs) vpEnds.set(t.viewpointName, { endTs: eTs, endDate: t.scheduledEnd, endMin: t.scheduledEndMin });
   }
   let moved = false, requested = null;
   // 視点ごとの開始指定のうち最も早いものを「指定時刻」として押し出し判定する
@@ -774,7 +833,19 @@ function simulateFormSchedule(form, allTasks, settings, projectOrder) {
     }
   }
   if (reqTs != null) moved = sBest > reqTs;
-  return { startDate: sD, startMin: sM, endDate: eD, endMin: eM, moved, requested };
+  // 納期チェック：視点の終了予定（日付）が納期（日付）より後なら違反
+  const deadlineViolations = [];
+  for (const vp of (form.viewpoints || [])) {
+    const dl = (vp.deadline || '').trim();
+    if (!dl) continue;
+    const name = (vp.viewpointName || '').trim() || '視点';
+    const r = vpEnds.get(name);
+    if (!r) continue;
+    if (fmtYMD(r.endDate) > dl) {
+      deadlineViolations.push({ viewpointName: name, deadline: dl, endDate: r.endDate, endMin: r.endMin });
+    }
+  }
+  return { startDate: sD, startMin: sM, endDate: eD, endMin: eM, moved, requested, deadlineViolations };
 }
 
 // 担当者の表示順：従業員マスタの並び順 → マスタ未登録は末尾（出現順を維持）
@@ -1006,8 +1077,8 @@ export default function App() {
   const saveSettings = async (newSettings) => {
     setSettings(newSettings);
     try {
-      const { morningStart, morningEnd, afternoonStart, afternoonEnd, startDate, startTime, lastAdvancedDate, absences, endPromptState, companyOrder } = newSettings;
-      await storage.set('settings', JSON.stringify({ morningStart, morningEnd, afternoonStart, afternoonEnd, startDate, startTime, lastAdvancedDate, absences: absences || [], endPromptState: endPromptState || {}, companyOrder: companyOrder || [] }));
+      const { morningStart, morningEnd, afternoonStart, afternoonEnd, startDate, startTime, lastAdvancedDate, absences, overtimes, endPromptState, companyOrder } = newSettings;
+      await storage.set('settings', JSON.stringify({ morningStart, morningEnd, afternoonStart, afternoonEnd, startDate, startTime, lastAdvancedDate, absences: absences || [], overtimes: overtimes || [], endPromptState: endPromptState || {}, companyOrder: companyOrder || [] }));
     } catch (e) { console.error(e); }
   };
   // 会社の表示順を保存
@@ -1022,13 +1093,22 @@ export default function App() {
     saveSettings({ ...settings, endPromptState: eps });
   };
 
-  // 休日・不在の追加／削除
+  // 欠勤・休日・不在の追加／削除
   const addAbsence = (absence) => {
     const next = [...(settings.absences || []), { ...absence, id: genId('abs') }];
     saveSettings({ ...settings, absences: next });
   };
   const removeAbsence = (id) => {
     saveSettings({ ...settings, absences: (settings.absences || []).filter(a => a.id !== id) });
+  };
+
+  // 残業（稼働枠の追加）の追加／削除
+  const addOvertime = (overtime) => {
+    const next = [...(settings.overtimes || []), { ...overtime, id: genId('ot') }];
+    saveSettings({ ...settings, overtimes: next });
+  };
+  const removeOvertime = (id) => {
+    saveSettings({ ...settings, overtimes: (settings.overtimes || []).filter(o => o.id !== id) });
   };
 
   // 案件並び順の保存（楽観的に即反映 → Firestore 上書き → 他端末同期）
@@ -1091,16 +1171,21 @@ export default function App() {
   };
 
 
-  // 登録/更新のエントリ：開始時間が指定どおりに置けない場合は確認モーダルを出す
+  // 登録/更新のエントリ：開始時間が指定どおりに置けない場合、
+  // または視点の終了予定が納期を超える場合は確認モーダルを出す
   const handleSubmit = async () => {
-    const hasStartPin = (form.viewpoints || []).some(v => v.manualStart);
-    if (form.projectName.trim() && hasStartPin) {
-      const sim = simulateFormSchedule(form, tasksRef.current, settings, projectOrder);
-      if (sim && sim.moved) {
+    if (form.projectName.trim()) {
+      const sim = simulateFormSchedule(form, tasksRef.current, settings, projectOrder, new Date());
+      const hasStartPin = (form.viewpoints || []).some(v => v.manualStart);
+      const moved = !!(sim && sim.moved && hasStartPin);
+      const violations = (sim && sim.deadlineViolations) || [];
+      if (moved || violations.length > 0) {
         setStartMoveConfirm({
+          moved,
           requested: sim.requested,
           actualDate: sim.startDate,
           actualMin: sim.startMin,
+          violations,
         });
         return; // モーダルの「登録する」で performSubmit を呼ぶ
       }
@@ -1823,10 +1908,11 @@ export default function App() {
     });
   };
 
+  // now を渡すことで「経過に応じた終了予定の自動調整」が1分ごとに再計算される
   const scheduled = useMemo(() => {
     assignProjectColors(tasks); // 案件の色割り当てを更新（登録順・重複なし）
-    return scheduleTasks(tasks, settings, projectOrder);
-  }, [tasks, settings, projectOrder]);
+    return scheduleTasks(tasks, settings, projectOrder, now);
+  }, [tasks, settings, projectOrder, now]);
 
   // 終了予定を過ぎた視点（機能B）。1分ごとの now と endPromptState で再評価
   const overdueViewpoints = useMemo(() => {
@@ -2037,6 +2123,13 @@ export default function App() {
               <span style={{ fontSize: 11, color: colors.textMute, marginLeft: 'auto' }}>1日 {hoursPerDay}時間 ・ 土日除外</span>
             </div>
             <div style={{ maxWidth: 1600, margin: '16px auto 0', borderTop: `1px solid ${colors.border}`, paddingTop: 16 }}>
+              <OvertimeManager
+                overtimes={settings.overtimes || []} assigneeList={assigneeList}
+                settings={settings}
+                onAdd={addOvertime} onRemove={removeOvertime}
+                colors={colors} fontJP={fontJP} />
+            </div>
+            <div style={{ maxWidth: 1600, margin: '16px auto 0', borderTop: `1px solid ${colors.border}`, paddingTop: 16 }}>
               <AbsenceManager
                 absences={settings.absences || []} assigneeList={assigneeList}
                 onAdd={addAbsence} onRemove={removeAbsence}
@@ -2124,28 +2217,52 @@ export default function App() {
 
       {startMoveConfirm && (
         <ConfirmModal
-          title="開始時間が移動します"
+          title="スケジュールの確認"
           colors={colors} fontJP={fontJP} fontDisplay={fontDisplay}
           confirmLabel="このまま登録する"
           cancelLabel="戻る"
           onConfirm={async () => { setStartMoveConfirm(null); await performSubmit(); }}
           onCancel={() => setStartMoveConfirm(null)}>
-          <p style={{ margin: '0 0 10px 0', lineHeight: 1.7 }}>
-            指定した開始時間{' '}
-            <strong>
-              {startMoveConfirm.requested
-                ? `${fmtMD(startMoveConfirm.requested.date)}(${dayName(startMoveConfirm.requested.date)}) ${minToTime(startMoveConfirm.requested.min)}`
-                : ''}
-            </strong>{' '}
-            には空きがありません。
-          </p>
-          <p style={{ margin: 0, lineHeight: 1.7 }}>
-            実際の開始は{' '}
-            <strong style={{ color: '#c46a16' }}>
-              {fmtMD(startMoveConfirm.actualDate)}({dayName(startMoveConfirm.actualDate)}) {minToTime(startMoveConfirm.actualMin)}
-            </strong>{' '}
-            になります。このまま登録しますか？
-          </p>
+          {startMoveConfirm.moved && (
+            <>
+              <p style={{ margin: '0 0 10px 0', lineHeight: 1.7 }}>
+                指定した開始時間{' '}
+                <strong>
+                  {startMoveConfirm.requested
+                    ? `${fmtMD(startMoveConfirm.requested.date)}(${dayName(startMoveConfirm.requested.date)}) ${minToTime(startMoveConfirm.requested.min)}`
+                    : ''}
+                </strong>{' '}
+                には空きがありません。
+              </p>
+              <p style={{ margin: '0 0 10px 0', lineHeight: 1.7 }}>
+                実際の開始は{' '}
+                <strong style={{ color: '#c46a16' }}>
+                  {fmtMD(startMoveConfirm.actualDate)}({dayName(startMoveConfirm.actualDate)}) {minToTime(startMoveConfirm.actualMin)}
+                </strong>{' '}
+                になります。
+              </p>
+            </>
+          )}
+          {(startMoveConfirm.violations || []).length > 0 && (
+            <div style={{ margin: '0 0 10px 0' }}>
+              <p style={{ margin: '0 0 6px 0', lineHeight: 1.7, color: colors.accent, fontWeight: 600 }}>
+                ⚠ 終了予定が納期を超える視点があります
+              </p>
+              {(startMoveConfirm.violations || []).map((v, i) => {
+                const dl = new Date(v.deadline + 'T00:00:00');
+                return (
+                  <p key={i} style={{ margin: '0 0 4px 0', lineHeight: 1.7, fontSize: 12 }}>
+                    視点「{v.viewpointName}」：終了予定{' '}
+                    <strong style={{ color: colors.accent }}>
+                      {fmtMD(v.endDate)}({dayName(v.endDate)}) {minToTime(v.endMin)}
+                    </strong>
+                    {' '}＞ 納期 {fmtMD(dl)}（{dayName(dl)}）
+                  </p>
+                );
+              })}
+            </div>
+          )}
+          <p style={{ margin: 0, lineHeight: 1.7 }}>このまま登録しますか？</p>
         </ConfirmModal>
       )}
 
@@ -2301,8 +2418,8 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
 
   // 開始・終了予定のプレビュー：実データ（他タスク）に混ぜて実スケジュールと同じ計算をする
   const previewSchedule = useMemo(
-    () => simulateFormSchedule(form, tasks, settings, projectOrder),
-    [form, tasks, settings, projectOrder]
+    () => simulateFormSchedule(form, tasks, settings, projectOrder, now),
+    [form, tasks, settings, projectOrder, now]
   );
 
   // 視点ごとの開始時間を「日付」と「時刻」に分けて扱う（datetime-localが入力しづらい環境への対策）
@@ -2520,6 +2637,14 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                 ※ 指定時刻に空きがないため、開始予定を移動しています
               </div>
             )}
+            {(previewSchedule?.deadlineViolations || []).map((v, i) => {
+              const dl = new Date(v.deadline + 'T00:00:00');
+              return (
+                <div key={i} style={{ fontSize: 11, color: colors.accent, marginTop: 6, fontWeight: 600 }}>
+                  ⚠ 視点「{v.viewpointName}」の終了予定 {fmtMD(v.endDate)}({dayName(v.endDate)}) {minToTime(v.endMin)} が納期 {fmtMD(dl)}（{dayName(dl)}）を超えています
+                </div>
+              );
+            })}
           </div>
           <div style={{ gridColumn: 'span 2' }}>
             <label style={labelStyle}>メモ（任意・一覧の案件ヘッダーとカレンダーのツールチップに表示）</label>
@@ -4032,9 +4157,10 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
 
       {viewMode === 'day' ? (() => {
         // 1日表示：時間が横に流れるタイムライン形式（30分刻みの時間軸 × 担当者行）
+        // 残業が登録されている場合は時間軸を残業の最遅終了まで延長する
         const dayDate = allDates[0];
         const ymd = fmtYMD(dayDate);
-        const dayStart = morningSlot.start, dayEnd = afternoonSlot.end;
+        const dayStart = morningSlot.start, dayEnd = Math.max(afternoonSlot.end, maxOvertimeEndMin(settings));
         const totalMin = dayEnd - dayStart;
         const halfHours = [];
         for (let m = dayStart; m < dayEnd; m += 30) halfHours.push(m);
@@ -4119,6 +4245,14 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                         left: `${lunchLeft}%`, width: `${lunchWidth}%`,
                         background: 'repeating-linear-gradient(45deg, #f3efe4, #f3efe4 4px, #faf7ee 4px, #faf7ee 8px)',
                       }} />
+                      {/* 定時後（この担当者の残業枠が無い時間帯）は薄いストライプ */}
+                      {dayEnd > afternoonSlot.end && subtractBusy(afternoonSlot.end, dayEnd, dayOvertimeIntervals(assignee, dayDate, settings.overtimes || [])).map(([s, e], k) => (
+                        <div key={'ah' + k} style={{
+                          position: 'absolute', top: 0, bottom: 0,
+                          left: `${((s - dayStart) / totalMin) * 100}%`, width: `${((e - s) / totalMin) * 100}%`,
+                          background: 'repeating-linear-gradient(45deg, #f3efe4, #f3efe4 4px, #faf7ee 4px, #faf7ee 8px)',
+                        }} />
+                      ))}
                       {/* 終日不在 */}
                       {abs.allDay && (
                         <div title={absLabel ? `休み（${absLabel}）` : '休み'} style={{
@@ -4163,7 +4297,8 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
         );
       })() : viewMode === 'week' ? (() => {
         // 週間表示（3週間）：1日表示と同じ横タイムライン形式を日数分つなげる
-        const dayStart = morningSlot.start, dayEnd = afternoonSlot.end;
+        // 残業が登録されている場合は1日の時間軸を残業の最遅終了まで延長する
+        const dayStart = morningSlot.start, dayEnd = Math.max(afternoonSlot.end, maxOvertimeEndMin(settings));
         const totalMin = dayEnd - dayStart;
         const dayW = dayCellWidth; // 1日あたりの幅(px)・横スクロール
         const rowH = 88;
@@ -4252,6 +4387,14 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                             width: isWorkSat ? `${100 - lunchLeftPct}%` : `${lunchWidthPct}%`,
                             background: 'repeating-linear-gradient(45deg, #f3efe4, #f3efe4 4px, #faf7ee 4px, #faf7ee 8px)',
                           }} />
+                          {/* 定時後（この担当者の残業枠が無い時間帯）は薄いストライプ */}
+                          {!isWorkSat && dayEnd > afternoonSlot.end && subtractBusy(afternoonSlot.end, dayEnd, dayOvertimeIntervals(assignee, d, settings.overtimes || [])).map(([s, e], k) => (
+                            <div key={'ah' + k} style={{
+                              position: 'absolute', top: 0, bottom: 0,
+                              left: `${((s - dayStart) / totalMin) * 100}%`, width: `${((e - s) / totalMin) * 100}%`,
+                              background: 'repeating-linear-gradient(45deg, #f3efe4, #f3efe4 4px, #faf7ee 4px, #faf7ee 8px)',
+                            }} />
+                          ))}
                           {abs.allDay && (
                             <div title={absLabel ? `休み（${absLabel}）` : '休み'} style={{
                               position: 'absolute', inset: 0, zIndex: 2,
@@ -4371,6 +4514,9 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                 const slots = (matrix[assignee] && matrix[assignee][key]) || [];
                 const morningItems = slots.filter(({ slot }) => slot.startMin < morningSlot.end);
                 const afternoonItems = slots.filter(({ slot }) => slot.startMin >= afternoonSlot.start);
+                // 午後の枠時間（残業を含む）。残業ぶんブロックが溢れないよう高さの分母にする
+                const pmCapMin = dayWorkSlots(assignee, d, settings).reduce((s, [a, b]) => s + Math.max(0, b - Math.max(a, afternoonSlot.start)), 0);
+                const pmHours = Math.max(afternoonHours, pmCapMin / 60);
                 const isToday = isSameDay(d, new Date());
                 const isWorkSat = d.getDay() === 6;
                 // 休日・不在
@@ -4409,7 +4555,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                     }}>
                       {!isWorkSat && afternoonItems.map(({ task, slot, done }, si) => (
                         <TaskBlock key={si} task={task} slot={slot} done={done} compact={compact}
-                          heightPct={(slot.hours / afternoonHours) * 100}
+                          heightPct={(slot.hours / pmHours) * 100}
                           projectColor={getProjectColor(task.projectName)}
                           separator={si === 0 ? null : (afternoonItems[si - 1].task.projectName !== task.projectName ? 'strong' : 'weak')}
                           projDrag={projDrag} onProjDragStart={onReorderProject ? setProjDrag : null} onDropProject={onReorderProject}
@@ -5534,7 +5680,77 @@ function Combobox({ value, onChange, options, placeholder, inputStyle, colors, f
   );
 }
 
-// ============ 休日・不在の登録 ============
+// ============ 残業の登録（担当者ごとの稼働枠追加） ============
+function OvertimeManager({ overtimes, assigneeList, settings, onAdd, onRemove, colors, fontJP }) {
+  const todayStr = fmtYMD(new Date());
+  const defaultStart = settings?.afternoonEnd || '17:00';
+  const [o, setO] = useState({ assignee: '', startDate: todayStr, endDate: todayStr, startTime: defaultStart, endTime: '19:00', label: '' });
+  const set = (k, v) => setO(p => ({ ...p, [k]: v }));
+  const submit = () => {
+    if (!o.assignee) { alert('担当者を選択してください'); return; }
+    if (!o.startDate || !o.endDate) { alert('開始日・終了日を入力してください'); return; }
+    if (o.endDate < o.startDate) { alert('終了日は開始日以降にしてください'); return; }
+    if (!o.startTime || !o.endTime || o.startTime >= o.endTime) { alert('残業の時間帯が正しくありません'); return; }
+    onAdd({
+      assignee: o.assignee, startDate: o.startDate, endDate: o.endDate,
+      startTime: o.startTime, endTime: o.endTime,
+      label: (o.label || '').trim(),
+    });
+    setO(p => ({ ...p, label: '' }));
+  };
+  const inputStyle = { padding: '5px 8px', border: `1px solid ${colors.border}`, borderRadius: 3, fontFamily: fontJP, fontSize: 13, background: '#fff', color: colors.text };
+  const sorted = [...overtimes].sort((x, y) => (y.startDate || '').localeCompare(x.startDate || ''));
+  return (
+    <div>
+      <div style={{ fontSize: 13, fontWeight: 600, color: colors.text, marginBottom: 4 }}>残業の登録（稼働枠の追加）</div>
+      <div style={{ fontSize: 11, color: colors.textMute, marginBottom: 10 }}>
+        担当者を選んで対応時間を追加します（例: 通常 {settings?.morningStart || '08:00'}〜{settings?.morningEnd || '12:00'}＋{settings?.afternoonStart || '13:00'}〜{settings?.afternoonEnd || '17:00'} ＋ 残業 17:00〜19:00）。追加した時間帯はスケジュール・カレンダーの稼働枠に反映されます。
+      </div>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
+        <select value={o.assignee} onChange={(e) => set('assignee', e.target.value)} style={{ ...inputStyle, cursor: 'pointer' }}>
+          <option value="">担当者を選択</option>
+          {(assigneeList || []).map(n => <option key={n} value={n}>{n}</option>)}
+        </select>
+        <input type="date" value={o.startDate} onChange={(e) => set('startDate', e.target.value)} style={inputStyle} />
+        <span style={{ fontSize: 12, color: colors.textMute }}>〜</span>
+        <input type="date" value={o.endDate} onChange={(e) => set('endDate', e.target.value)} style={inputStyle} />
+        <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: colors.textMute }}>
+          残業
+          <TimeSelect value={o.startTime} onChange={(v) => set('startTime', v)} colors={colors} fontJP={fontJP} />
+          〜
+          <TimeSelect value={o.endTime} onChange={(v) => set('endTime', v)} colors={colors} fontJP={fontJP} />
+        </span>
+        <input type="text" value={o.label} onChange={(e) => set('label', e.target.value)} placeholder="メモ（例: 納期対応）" style={{ ...inputStyle, flex: '1 1 140px', minWidth: 120 }} />
+        <button type="button" onClick={submit}
+          style={{ padding: '6px 14px', background: colors.accentSoft, border: `1px solid ${colors.accent}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, color: colors.accent, fontWeight: 600 }}>
+          追加
+        </button>
+      </div>
+      {sorted.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {sorted.map(ot => (
+            <div key={ot.id} style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 4, padding: '6px 10px', fontSize: 12, flexWrap: 'wrap' }}>
+              <span style={{ fontWeight: 600, color: colors.text }}>{ot.assignee}</span>
+              <span style={{ color: colors.textMute }}>
+                {ot.startDate}{ot.endDate !== ot.startDate ? ` 〜 ${ot.endDate}` : ''}
+              </span>
+              <span style={{ background: '#e8f0e4', borderRadius: 10, padding: '1px 8px', color: '#3a5a40', fontWeight: 600 }}>
+                残業 {ot.startTime}〜{ot.endTime}
+              </span>
+              {ot.label && <span style={{ color: colors.textMute }}>{ot.label}</span>}
+              <button type="button" onClick={() => onRemove(ot.id)} title="削除"
+                style={{ marginLeft: 'auto', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 3, padding: '3px 6px', cursor: 'pointer', color: colors.textMute, display: 'flex', alignItems: 'center' }}>
+                <Trash2 size={13} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============ 欠勤・休日・不在の登録 ============
 function AbsenceManager({ absences, assigneeList, onAdd, onRemove, colors, fontJP }) {
   const todayStr = fmtYMD(new Date());
   const [a, setA] = useState({ assignee: '', startDate: todayStr, endDate: todayStr, allDay: true, startTime: '13:00', endTime: '17:00', label: '' });
@@ -5557,7 +5773,10 @@ function AbsenceManager({ absences, assigneeList, onAdd, onRemove, colors, fontJ
   const sorted = [...absences].sort((x, y) => (y.startDate || '').localeCompare(x.startDate || ''));
   return (
     <div>
-      <div style={{ fontSize: 13, fontWeight: 600, color: colors.text, marginBottom: 10 }}>休日・不在の登録</div>
+      <div style={{ fontSize: 13, fontWeight: 600, color: colors.text, marginBottom: 4 }}>欠勤・休日・不在の登録（対応不可日）</div>
+      <div style={{ fontSize: 11, color: colors.textMute, marginBottom: 10 }}>
+        対象者のカレンダー・スケジュールから対応不可の日（終日）または時間帯を除外します。カレンダーには「休／不在」と表示されます。
+      </div>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
         <select value={a.assignee} onChange={(e) => set('assignee', e.target.value)} style={{ ...inputStyle, cursor: 'pointer' }}>
           <option value="">担当者を選択</option>
