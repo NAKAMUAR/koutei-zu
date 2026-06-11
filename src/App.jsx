@@ -93,11 +93,13 @@ const VIEWPOINT_PRESETS = [
   { id: 'photo', name: '写真合成', steps: ['写真合成'] },
 ];
 function makeViewpointFromPreset(preset) {
-  if (!preset) return { viewpointName: '', assignee: '', manualStart: '', steps: [{ name: '', hours: '', completedHours: '' }] };
+  if (!preset) return { viewpointName: '', assignee: '', manualStart: '', manualEnd: '', deadline: '', steps: [{ name: '', hours: '', completedHours: '' }] };
   return {
     viewpointName: preset.name,
     assignee: '',
     manualStart: '', // 視点ごとの開始時間指定（最初の未完了ステップに適用）
+    manualEnd: '',   // 視点ごとの終了時間指定（最後の未完了ステップに適用・作業終了予定）
+    deadline: '',    // 視点ごとの納期（お客様への提出日）
     steps: preset.steps.map(name => ({ name, hours: '', completedHours: '' })),
   };
 }
@@ -675,7 +677,7 @@ function workingHoursBetweenTs(fromTs, toTs, assignee, settings) {
   return total;
 }
 
-// 案件の進行中タスクの最終 scheduledEnd を timestamp で返す（無ければ null）
+// タスク群（案件・視点など）の進行中タスクの最終 scheduledEnd を timestamp で返す（無ければ null）
 function projectEndTs(tasks) {
   let best = null;
   for (const t of tasks) {
@@ -728,12 +730,11 @@ function formPreviewRecords(form, activeCount, taskById) {
       });
       seq++;
     }
-    // 視点ごとの開始時間：この視点の最初のレコードに登録・解除（buildRecords と同じ規則）
-    if (records.length > vpFirstIdx) records[vpFirstIdx].manualStart = vp.manualStart || null;
-  }
-  // フォームの終了予定欄は最後のレコードに登録・解除（buildRecords と同じ規則）
-  if (records.length > 0) {
-    records[records.length - 1].manualEnd = form.manualEnd || null;
+    // 視点ごとの開始時間・終了時間：この視点の最初／最後のレコードに登録・解除（buildRecords と同じ規則）
+    if (records.length > vpFirstIdx) {
+      records[vpFirstIdx].manualStart = vp.manualStart || null;
+      records[records.length - 1].manualEnd = vp.manualEnd || null;
+    }
   }
   return { records, priority };
 }
@@ -810,7 +811,7 @@ function groupByViewpoint(tasks) {
     groups[key].tasks.push(task);
     if (!groups[key].memo && task.memo) groups[key].memo = task.memo;
     if (task.tentative) groups[key].tentative = true;
-    if (!groups[key].deadline && task.deadline) groups[key].deadline = task.deadline;
+    if (task.deadline && (!groups[key].deadline || task.deadline < groups[key].deadline)) groups[key].deadline = task.deadline;
     if (task.priority < groups[key].minPriority) groups[key].minPriority = task.priority;
   }
   // 各グループ内：stepOrder → priority → createdAt の順
@@ -874,8 +875,9 @@ export default function App() {
   // 初期表示は「パース」プリセット
   const makeEmptyViewpoint = () => makeViewpointFromPreset(VIEWPOINT_PRESETS[0]);
   const emptyForm = {
-    projectName: '', projectNameInternal: '', companyName: '', customerContact: '', assignee: '', priority: '', manualStart: '', manualEnd: '', memo: '', tentative: false, deadline: '',
-    // 視点（担当タスク）の動的リスト。各視点の中にステップ（工程）を持つ
+    projectName: '', projectNameInternal: '', companyName: '', customerContact: '', assignee: '', priority: '', memo: '', tentative: false,
+    // 視点（担当タスク）の動的リスト。各視点の中にステップ（工程）を持つ。
+    // 開始時間・終了時間・納期は視点ごとに設定する（案件の大枠設定は廃止）
     viewpoints: [makeEmptyViewpoint()],
   };
   const [form, setForm] = useState(emptyForm);
@@ -1012,10 +1014,11 @@ export default function App() {
   const saveCompanyOrder = (order) => {
     saveSettings({ ...settings, companyOrder: order });
   };
-  // 終了超過ポップアップの制御状態（案件ごとの snooze / 表示済み終了予定）を更新
-  const setEndPromptFor = (projectName, patch) => {
+  // 終了超過ポップアップの制御状態（視点ごとの snooze / 表示済み終了予定）を更新
+  // key は視点キー（assignee::projectName::viewpointName）
+  const setEndPromptFor = (key, patch) => {
     const eps = { ...(settings.endPromptState || {}) };
-    eps[projectName] = { ...(eps[projectName] || {}), ...patch };
+    eps[key] = { ...(eps[key] || {}), ...patch };
     saveSettings({ ...settings, endPromptState: eps });
   };
 
@@ -1165,7 +1168,7 @@ export default function App() {
             priority, hours: stepHours, completedHours: stepCompleted,
             memo: (form.memo || '').trim(),
             tentative: !!form.tentative,
-            deadline: form.deadline || null,
+            deadline: vp.deadline || null,
             // ステップ個別の開始・終了指定は維持（フォームの欄は下で先頭/末尾の未完了ステップに適用）
             manualStart: existing?.manualStart || null,
             manualEnd: existing?.manualEnd || null,
@@ -1182,17 +1185,15 @@ export default function App() {
         }
         if (!vpHasStep) { return { error: `視点「${vpName}」に少なくとも1つのステップ（名称＋時間）を入力してください` }; }
         // 視点ごとの開始時間：この視点の最初の未完了ステップに登録・解除する
+        // 視点ごとの終了時間：この視点の最後の未完了ステップに登録・解除する
         // （他ステップの個別指定はそのまま維持）
         const vpRecs = upserts.slice(vpFirstIdx);
         const vpTarget = vpRecs.find(u => u.status !== 'done');
         if (vpTarget) vpTarget.manualStart = vp.manualStart || null;
         else if (vp.manualStart && vpRecs.length > 0) vpRecs[0].manualStart = vp.manualStart;
-      }
-      // フォームの終了予定欄は「最後の未完了ステップ」の指定として登録・解除する
-      if (upserts.length > 0) {
-        const lastActive = [...upserts].reverse().find(u => u.status !== 'done');
-        if (lastActive) lastActive.manualEnd = form.manualEnd || null;
-        else if (form.manualEnd) upserts[upserts.length - 1].manualEnd = form.manualEnd;
+        const vpLastActive = [...vpRecs].reverse().find(u => u.status !== 'done');
+        if (vpLastActive) vpLastActive.manualEnd = vp.manualEnd || null;
+        else if (vp.manualEnd && vpRecs.length > 0) vpRecs[vpRecs.length - 1].manualEnd = vp.manualEnd;
       }
       return { upserts };
     };
@@ -1323,14 +1324,14 @@ export default function App() {
       customerContact: task.customerContact || '',
       assignee: task.assignee,
       priority: String(task.priority),
-      manualEnd: task.manualEnd || '',
       memo: task.memo || '',
       tentative: !!task.tentative,
-      deadline: task.deadline || '',
       viewpoints: [{
         viewpointName: task.viewpointName || '',
         assignee: task.assignee || '',
         manualStart: task.manualStart || '',
+        manualEnd: task.manualEnd || '',
+        deadline: task.deadline || '',
         steps: [{
           taskId: task.id,
           name: task.stepName || task.viewpointName || '',
@@ -1359,11 +1360,16 @@ export default function App() {
     const viewpoints = Array.from(vpMap.values()).map(v => {
       const sortedSteps = v.steps.slice().sort((a, b) => (a.stepOrder ?? 0) - (b.stepOrder ?? 0));
       const firstActive = sortedSteps.find(t => t.status !== 'done');
+      const lastActive = [...sortedSteps].reverse().find(t => t.status !== 'done');
       return {
         viewpointName: v.viewpointName,
         assignee: v.assignee,
         // 視点ごとの開始時間：最初の未完了ステップの指定を表示（無ければ先頭ステップ）
         manualStart: (firstActive || sortedSteps[0])?.manualStart || '',
+        // 視点ごとの終了時間：最後の未完了ステップの指定を表示（無ければ末尾ステップ）
+        manualEnd: (lastActive || sortedSteps[sortedSteps.length - 1])?.manualEnd || '',
+        // 視点ごとの納期：この視点のタスクから（最初に見つかったもの）
+        deadline: (sortedSteps.find(t => t.deadline) || {}).deadline || '',
         steps: sortedSteps.map(t => ({
           taskId: t.id,
           name: t.stepName || '',
@@ -1383,11 +1389,8 @@ export default function App() {
       customerContact: first.customerContact || '',
       assignee: first.assignee,
       priority: priorityPool.length > 0 ? String(Math.min(...priorityPool.map(t => t.priority))) : '',
-      // 終了予定欄は最後の未完了ステップの指定を表示（開始時間は視点ごとの欄で扱う）
-      manualEnd: (priorityPool.length > 0 ? (priorityPool[priorityPool.length - 1].manualEnd || '') : (projectTasks[projectTasks.length - 1].manualEnd || '')),
       memo: (projectTasks.find(t => t.memo) || {}).memo || '',
       tentative: projectTasks.some(t => t.tentative),
-      deadline: (projectTasks.find(t => t.deadline) || {}).deadline || '',
       viewpoints,
     });
     setEditingId(null);
@@ -1451,7 +1454,6 @@ export default function App() {
       customerContact: sibling?.customerContact || '',
       memo: sibling?.memo || '',
       tentative: !!sibling?.tentative,
-      deadline: sibling?.deadline || '',
       viewpoints: [makeEmptyViewpoint()],
     });
     setEditingId(null);
@@ -1470,10 +1472,13 @@ export default function App() {
     ).slice().sort((a, b) => (a.stepOrder ?? 0) - (b.stepOrder ?? 0));
     if (tasksOfVp.length === 0) { alert('この視点には編集できるタスクがありません'); return; }
     const first = tasksOfVp[0];
+    const last = tasksOfVp[tasksOfVp.length - 1];
     const viewpoints = [{
       viewpointName: group.viewpointName,
       assignee: group.assignee,
       manualStart: first.manualStart || '',
+      manualEnd: last.manualEnd || '',
+      deadline: (tasksOfVp.find(t => t.deadline) || {}).deadline || '',
       steps: tasksOfVp.map(t => ({
         taskId: t.id,
         name: t.stepName || '',
@@ -1489,7 +1494,6 @@ export default function App() {
       customerContact: group.customerContact || first.customerContact || '',
       assignee: group.assignee,
       priority: String(group.minPriority || first.priority),
-      deadline: first.deadline || '',
       viewpoints,
     });
     setEditingId(null);
@@ -1508,8 +1512,8 @@ export default function App() {
       customerContact: group.customerContact || '',
       assignee: group.assignee,
       priority: String(group.minPriority),
-      deadline: group.deadline || '',
-      viewpoints: [{ viewpointName: group.viewpointName, assignee: group.assignee, manualStart: '', steps: [{ name: '', hours: '', completedHours: '' }] }],
+      // 追加ステップはこの視点の納期を引き継ぐ（開始・終了の指定は既存ステップ側を維持）
+      viewpoints: [{ viewpointName: group.viewpointName, assignee: group.assignee, manualStart: '', manualEnd: '', deadline: group.deadline || '', steps: [{ name: '', hours: '', completedHours: '' }] }],
     });
     setEditingId(null);
     setEditMode(null);
@@ -1668,23 +1672,25 @@ export default function App() {
     }));
   };
 
-  // ===== 終了予定超過ポップアップ（機能B） =====
-  // ① 完了（終了時間つき）
-  const endPromptComplete = (projectName, actualEndStr) => {
+  // ===== 終了予定超過ポップアップ（機能B・視点単位） =====
+  // vp は { projectName, viewpointName, assignee } を持つオブジェクト
+  // ① 視点完了（終了時間つき）
+  const endPromptComplete = (vp, actualEndStr) => {
     const ae = actualEndStr || null;
     const completedAtMs = ae ? new Date(ae).getTime() : Date.now();
     saveTasks(prev => normalizePriorities(prev.map(t =>
-      (t.projectName === projectName && t.status !== 'done')
+      (t.projectName === vp.projectName && t.viewpointName === vp.viewpointName && t.assignee === vp.assignee && t.status !== 'done')
         ? { ...t, status: 'done', cancelled: null, completedHours: t.hours, completedAt: completedAtMs, actualEnd: ae }
         : t
     )));
     setView('done');
   };
-  // ② 追加修正（視点の最後尾にステップを追加）
-  const endPromptAddRevision = (projectName, viewpointName, stepName, hours) => {
+  // ② 追加修正（この視点の最後尾にステップを追加）
+  const endPromptAddRevision = (vp, stepName, hours) => {
+    const projectName = vp.projectName, viewpointName = vp.viewpointName;
     const h = Math.max(0, parseFloat(hours) || 0);
     if (h <= 0) { alert('追加時間を入力してください'); return; }
-    const vpTasks = tasksRef.current.filter(t => t.projectName === projectName && t.viewpointName === viewpointName);
+    const vpTasks = tasksRef.current.filter(t => t.projectName === projectName && t.viewpointName === viewpointName && t.assignee === vp.assignee);
     if (vpTasks.length === 0) { alert('対象の視点が見つかりません'); return; }
     const ref = vpTasks.reduce((a, b) => ((b.createdAt || 0) > (a.createdAt || 0) ? b : a), vpTasks[0]);
     const maxOrder = vpTasks.reduce((m, t) => Math.max(m, t.stepOrder ?? 0), 0);
@@ -1705,10 +1711,13 @@ export default function App() {
     };
     saveTasks(prev => normalizePriorities([...prev, rec]));
   };
-  // ③ 遅延（新しい終了予定に合わせて最後のステップに時間を加算＋遅延履歴）
-  const endPromptDelay = (projectName, currentEndTs, newEndTs) => {
+  // ③ 遅延（新しい終了予定に合わせてこの視点の最後のステップに時間を加算＋遅延履歴）
+  const endPromptDelay = (vp, currentEndTs, newEndTs) => {
     if (newEndTs <= currentEndTs) { alert('新しい終了予定は現在の終了予定より後にしてください'); return; }
-    const active = tasksRef.current.filter(t => t.projectName === projectName && t.status !== 'done' && t.scheduledEnd);
+    const scheduledById = new Map(scheduled.active.map(t => [t.id, t]));
+    const active = tasksRef.current
+      .map(t => scheduledById.get(t.id) || t)
+      .filter(t => t.projectName === vp.projectName && t.viewpointName === vp.viewpointName && t.assignee === vp.assignee && t.status !== 'done' && t.scheduledEnd);
     if (active.length === 0) { alert('対象の進行中タスクがありません'); return; }
     // 終了予定を決めている最後のステップ
     const last = active.reduce((a, b) => {
@@ -1725,9 +1734,9 @@ export default function App() {
         : t
     )));
   };
-  // ④ 後で（30分スヌーズ）
-  const endPromptSnooze = (projectName, endTs) => {
-    setEndPromptFor(projectName, { snoozedUntil: Date.now() + 30 * 60000, lastPromptedEnd: endTs });
+  // ④ 後で（30分スヌーズ）。key は視点キー
+  const endPromptSnooze = (key, endTs) => {
+    setEndPromptFor(key, { snoozedUntil: Date.now() + 30 * 60000, lastPromptedEnd: endTs });
   };
 
   const setTaskCompletedHours = (id, completed) => {
@@ -1819,26 +1828,33 @@ export default function App() {
     return scheduleTasks(tasks, settings, projectOrder);
   }, [tasks, settings, projectOrder]);
 
-  // 終了予定を過ぎた案件（機能B）。1分ごとの now と endPromptState で再評価
-  const overdueProjects = useMemo(() => {
-    const byProject = new Map();
+  // 終了予定を過ぎた視点（機能B）。1分ごとの now と endPromptState で再評価
+  const overdueViewpoints = useMemo(() => {
+    const byViewpoint = new Map();
     for (const t of scheduled.active) {
-      const p = t.projectName || '';
-      if (!p) continue;
-      if (!byProject.has(p)) byProject.set(p, []);
-      byProject.get(p).push(t);
+      if (!t.projectName) continue;
+      const key = `${t.assignee}::${t.projectName}::${t.viewpointName}`;
+      if (!byViewpoint.has(key)) byViewpoint.set(key, []);
+      byViewpoint.get(key).push(t);
     }
     const nowTs = now.getTime();
     const eps = settings.endPromptState || {};
     const result = [];
-    for (const [p, ptasks] of byProject) {
-      const endTs = projectEndTs(ptasks);
+    for (const [key, vtasks] of byViewpoint) {
+      const endTs = projectEndTs(vtasks);
       if (endTs == null || endTs > nowTs) continue;
-      const st = eps[p] || {};
+      const st = eps[key] || {};
       const snoozeActive = st.snoozedUntil && st.snoozedUntil > nowTs && st.lastPromptedEnd === endTs;
       if (snoozeActive) continue;
-      const assignees = [...new Set(ptasks.map(t => t.assignee).filter(Boolean))];
-      result.push({ projectName: p, tasks: ptasks, endTs, endDate: new Date(endTs), assignees });
+      const first = vtasks[0];
+      result.push({
+        key,
+        projectName: first.projectName,
+        viewpointName: first.viewpointName,
+        assignee: first.assignee,
+        deadline: (vtasks.find(t => t.deadline) || {}).deadline || '',
+        tasks: vtasks, endTs, endDate: new Date(endTs),
+      });
     }
     return result.sort((a, b) => a.endTs - b.endTs);
   }, [scheduled.active, now, settings.endPromptState]);
@@ -2133,9 +2149,9 @@ export default function App() {
         </ConfirmModal>
       )}
 
-      {overdueProjects.length > 0 && (
+      {overdueViewpoints.length > 0 && (
         <EndPromptModal
-          projects={overdueProjects} now={now} settings={settings}
+          viewpoints={overdueViewpoints} now={now} settings={settings}
           onComplete={endPromptComplete} onAddRevision={endPromptAddRevision}
           onDelay={endPromptDelay} onSnooze={endPromptSnooze}
           colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
@@ -2299,6 +2315,19 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
     }
     setForm({ ...form, viewpoints: form.viewpoints.map((vp, i) => i === vi ? { ...vp, manualStart: val } : vp) });
   };
+  // 視点ごとの終了時間（作業終了予定）。日付・時刻を別々に扱う
+  const setVpManualEnd = (vi, datePart, timePart) => {
+    let val = '';
+    if (datePart || timePart) {
+      const d = datePart || fmtYMD(new Date());
+      const tm = timePart || '17:00';
+      val = `${d}T${tm}`;
+    }
+    setForm({ ...form, viewpoints: form.viewpoints.map((vp, i) => i === vi ? { ...vp, manualEnd: val } : vp) });
+  };
+  // 視点ごとの納期（お客様への提出日）
+  const setVpDeadline = (vi, val) =>
+    setForm({ ...form, viewpoints: form.viewpoints.map((vp, i) => i === vi ? { ...vp, deadline: val || '' } : vp) });
 
   // 案件の検索：案件名・社内案件名・会社名・お客様担当者・制作担当者・視点名・ステップ名で絞り込み
   const [searchQuery, setSearchQuery] = useState('');
@@ -2344,9 +2373,10 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
 
   const isFormDirty = () => {
     const f = form;
-    if ((f.projectName || f.projectNameInternal || f.companyName || f.customerContact || f.assignee || f.priority || f.manualStart || '').toString().trim()) return true;
+    if ((f.projectName || f.projectNameInternal || f.companyName || f.customerContact || f.assignee || f.priority || '').toString().trim()) return true;
     for (const vp of (f.viewpoints || [])) {
       if ((vp.viewpointName || '').trim() || (vp.assignee || '').trim()) return true;
+      if ((vp.manualStart || '').trim() || (vp.manualEnd || '').trim() || (vp.deadline || '').trim()) return true;
       for (const s of (vp.steps || [])) {
         if ((s.name || '').trim() || String(s.hours ?? '').trim() || String(s.completedHours ?? '').trim()) return true;
       }
@@ -2360,7 +2390,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
       companyName: proj.companyName || '',
       customerContact: proj.customerContact || '',
       assignee: proj.lastAssignee || '',
-      priority: '', manualStart: '',
+      priority: '', memo: '', tentative: false,
       viewpoints: [makeViewpointFromPreset(VIEWPOINT_PRESETS[0])],
     });
     setQuoteOpen(false);
@@ -2470,79 +2500,26 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
               onChange={(e) => setForm({ ...form, priority: e.target.value })}
               placeholder="未入力なら末尾に追加" style={inputStyle} />
           </div>
-          <div>
-            <label style={labelStyle}>納期（任意・進行中タスクの「納期順」表示に使用）</label>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <input type="date" value={form.deadline || ''}
-                onChange={(e) => setForm({ ...form, deadline: e.target.value })}
-                style={{ ...inputStyle, width: 'auto', flex: '0 0 160px' }} />
-              {form.deadline && (
-                <button type="button" onClick={() => setForm({ ...form, deadline: '' })}
-                  style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '8px 12px', borderRadius: 3, fontSize: 11, color: colors.textMute, cursor: 'pointer' }}>
-                  クリア
-                </button>
-              )}
-            </div>
-          </div>
           <div style={{ gridColumn: 'span 2' }}>
-            <label style={labelStyle}>開始時間（任意・最初の視点に適用・自動スケジュールより優先／視点ごとに変えたい場合は下の各視点の欄で）</label>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-              {(() => {
-                const vp0 = form.viewpoints[0] || {};
-                const d0 = vp0.manualStart ? vp0.manualStart.split('T')[0] : '';
-                const t0 = vp0.manualStart ? (vp0.manualStart.split('T')[1] || '') : '';
-                return (
-                  <>
-                    <input type="date" value={d0}
-                      onChange={(e) => setVpManualStart(0, e.target.value, t0)}
-                      style={{ ...inputStyle, width: 'auto', flex: '0 0 160px' }} />
-                    <TimeSelect value={t0}
-                      onChange={(val) => setVpManualStart(0, d0, val)}
-                      colors={colors} fontJP={fontJP} allowEmpty />
-                    {vp0.manualStart && (
-                      <button type="button" onClick={() => setVpManualStart(0, '', '')}
-                        style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '8px 12px', borderRadius: 3, fontSize: 11, color: colors.textMute, cursor: 'pointer' }}>
-                        クリア
-                      </button>
-                    )}
-                  </>
-                );
-              })()}
-              {previewSchedule ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600, flexWrap: 'wrap' }}>
-                  <span style={{ color: previewSchedule.moved ? '#c46a16' : colors.accent }}>
-                    開始予定: {fmtMD(previewSchedule.startDate)}({dayName(previewSchedule.startDate)}) {minToTime(previewSchedule.startMin)}
-                  </span>
-                  <ArrowRight size={14} color={colors.textMute} />
-                  <span style={{ color: colors.accent }}>
-                    終了予定: {fmtMD(previewSchedule.endDate)}({dayName(previewSchedule.endDate)}) {minToTime(previewSchedule.endMin)}
-                  </span>
-                </div>
-              ) : null}
-            </div>
+            <label style={labelStyle}>スケジュールプレビュー（他タスクを含めた実際の予定・開始/終了/納期は下の各視点の欄で設定）</label>
+            {previewSchedule ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600, flexWrap: 'wrap' }}>
+                <span style={{ color: previewSchedule.moved ? '#c46a16' : colors.accent }}>
+                  開始予定: {fmtMD(previewSchedule.startDate)}({dayName(previewSchedule.startDate)}) {minToTime(previewSchedule.startMin)}
+                </span>
+                <ArrowRight size={14} color={colors.textMute} />
+                <span style={{ color: colors.accent }}>
+                  終了予定: {fmtMD(previewSchedule.endDate)}({dayName(previewSchedule.endDate)}) {minToTime(previewSchedule.endMin)}
+                </span>
+              </div>
+            ) : (
+              <div style={{ fontSize: 12, color: colors.textMute }}>視点とステップ（制作時間）を入力すると表示されます</div>
+            )}
             {previewSchedule?.moved && (
               <div style={{ fontSize: 11, color: '#c46a16', marginTop: 6, fontWeight: 500 }}>
                 ※ 指定時刻に空きがないため、開始予定を移動しています
               </div>
             )}
-            <div style={{ fontSize: 10, color: colors.textMute, marginTop: 6 }}>
-              日付・時刻を別々に選べます（時刻だけ入力した場合は本日の日付になります） ・ 開始/終了予定は他タスクを含めた実際のスケジュールです
-            </div>
-          </div>
-          <div style={{ gridColumn: 'span 2' }}>
-            <label style={labelStyle}>終了予定時間（任意・最後の未完了ステップに適用・次のタスクはこの時刻以降に開始）</label>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-              <EndTimeFields value={form.manualEnd || ''} onChange={(v) => setForm({ ...form, manualEnd: v })} colors={colors} fontJP={fontJP} />
-              {form.manualEnd && (
-                <button type="button" onClick={() => setForm({ ...form, manualEnd: '' })}
-                  style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '8px 12px', borderRadius: 3, fontSize: 11, color: colors.textMute, cursor: 'pointer' }}>
-                  クリア
-                </button>
-              )}
-            </div>
-            <div style={{ fontSize: 10, color: colors.textMute, marginTop: 6 }}>
-              指定するとこの案件の終了がこの時刻になり、同じ担当者の次のタスクはこの時刻から開始します（制作時間ぶんの作業がこの時刻を超える場合は打ち切り）
-            </div>
           </div>
           <div style={{ gridColumn: 'span 2' }}>
             <label style={labelStyle}>メモ（任意・一覧の案件ヘッダーとカレンダーのツールチップに表示）</label>
@@ -2614,26 +2591,62 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                       title="この視点を削除"><Trash2 size={13} /> 視点削除</button>
                   </div>
 
-                  {/* 視点ごとの開始時間（最初の未完了ステップに適用・差し込み優先） */}
+                  {/* 視点ごとのスケジュール設定：開始時間・終了時間・納期 */}
                   <div style={{
-                    display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+                    display: 'flex', flexDirection: 'column', gap: 6,
                     padding: '8px 12px', background: '#faf7ef', borderBottom: `1px solid ${colors.border}`,
                   }}>
-                    <span style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap' }}>
-                      開始時間（任意・この視点の最初の未完了ステップに適用・差し込み優先）
-                    </span>
-                    <input type="date" value={vp.manualStart ? vp.manualStart.split('T')[0] : ''}
-                      onChange={(e) => setVpManualStart(vi, e.target.value, vp.manualStart ? (vp.manualStart.split('T')[1] || '') : '')}
-                      style={{ ...inputStyle, width: 'auto', flex: '0 0 150px', padding: '6px 8px', fontSize: 12 }} />
-                    <TimeSelect value={vp.manualStart ? (vp.manualStart.split('T')[1] || '') : ''}
-                      onChange={(val) => setVpManualStart(vi, vp.manualStart ? vp.manualStart.split('T')[0] : '', val)}
-                      colors={colors} fontJP={fontJP} allowEmpty />
-                    {vp.manualStart && (
-                      <button type="button" onClick={() => setVpManualStart(vi, '', '')}
-                        style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '6px 10px', borderRadius: 3, fontSize: 11, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP }}>
-                        クリア
-                      </button>
-                    )}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', minWidth: 64, fontWeight: 600 }}>
+                        開始時間
+                      </span>
+                      <input type="date" value={vp.manualStart ? vp.manualStart.split('T')[0] : ''}
+                        onChange={(e) => setVpManualStart(vi, e.target.value, vp.manualStart ? (vp.manualStart.split('T')[1] || '') : '')}
+                        style={{ ...inputStyle, width: 'auto', flex: '0 0 150px', padding: '6px 8px', fontSize: 12 }} />
+                      <TimeSelect value={vp.manualStart ? (vp.manualStart.split('T')[1] || '') : ''}
+                        onChange={(val) => setVpManualStart(vi, vp.manualStart ? vp.manualStart.split('T')[0] : '', val)}
+                        colors={colors} fontJP={fontJP} allowEmpty />
+                      {vp.manualStart && (
+                        <button type="button" onClick={() => setVpManualStart(vi, '', '')}
+                          style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '6px 10px', borderRadius: 3, fontSize: 11, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP }}>
+                          クリア
+                        </button>
+                      )}
+                      <span style={{ fontSize: 10, color: colors.textMute }}>任意・この視点の最初の未完了ステップに適用・差し込み優先</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', minWidth: 64, fontWeight: 600 }}>
+                        終了時間
+                      </span>
+                      <input type="date" value={vp.manualEnd ? vp.manualEnd.split('T')[0] : ''}
+                        onChange={(e) => setVpManualEnd(vi, e.target.value, vp.manualEnd ? (vp.manualEnd.split('T')[1] || '') : '')}
+                        style={{ ...inputStyle, width: 'auto', flex: '0 0 150px', padding: '6px 8px', fontSize: 12 }} />
+                      <TimeSelect value={vp.manualEnd ? (vp.manualEnd.split('T')[1] || '') : ''}
+                        onChange={(val) => setVpManualEnd(vi, vp.manualEnd ? vp.manualEnd.split('T')[0] : '', val)}
+                        colors={colors} fontJP={fontJP} allowEmpty />
+                      {vp.manualEnd && (
+                        <button type="button" onClick={() => setVpManualEnd(vi, '', '')}
+                          style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '6px 10px', borderRadius: 3, fontSize: 11, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP }}>
+                          クリア
+                        </button>
+                      )}
+                      <span style={{ fontSize: 10, color: colors.textMute }}>任意・作業終了予定。この視点の最後の未完了ステップに適用・次のタスクはこの時刻以降に開始</span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', minWidth: 64, fontWeight: 600 }}>
+                        納期
+                      </span>
+                      <input type="date" value={vp.deadline || ''}
+                        onChange={(e) => setVpDeadline(vi, e.target.value)}
+                        style={{ ...inputStyle, width: 'auto', flex: '0 0 150px', padding: '6px 8px', fontSize: 12 }} />
+                      {vp.deadline && (
+                        <button type="button" onClick={() => setVpDeadline(vi, '')}
+                          style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '6px 10px', borderRadius: 3, fontSize: 11, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP }}>
+                          クリア
+                        </button>
+                      )}
+                      <span style={{ fontSize: 10, color: colors.textMute }}>任意・お客様への提出日。「納期順」表示と納期超過の警告に使用</span>
+                    </div>
                   </div>
 
                   {/* ステップリスト */}
@@ -2745,7 +2758,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
         {/* 表示切替＋案件の検索 */}
         <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', gap: 6 }}>
-            <button type="button" onClick={() => setListGroupMode('deadline')} style={tabStyle(listGroupMode === 'deadline', colors, fontJP)} title="納期の早い案件から表示（納期なしは末尾・制作順）">
+            <button type="button" onClick={() => setListGroupMode('deadline')} style={tabStyle(listGroupMode === 'deadline', colors, fontJP)} title="納期の早い案件から表示（視点ごとの納期のうち最早のもの・納期なしは末尾・制作順）">
               納期順
             </button>
             <button type="button" onClick={() => setListGroupMode('company')} style={tabStyle(listGroupMode === 'company', colors, fontJP)} title="会社ごとに制作順で表示">
@@ -2932,7 +2945,8 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
       if (!pg.customerContact && g.customerContact) pg.customerContact = g.customerContact;
       if (!pg.memo && g.memo) pg.memo = g.memo;
       if (g.tentative) pg.tentative = true;
-      if (!pg.deadline && g.deadline) pg.deadline = g.deadline;
+      // 案件の納期 ＝ 視点ごとの納期のうち最も早いもの（表示・納期順ソート用）
+      if (g.deadline && (!pg.deadline || g.deadline < pg.deadline)) pg.deadline = g.deadline;
       if (g.assignee) pg.assigneeSet.add(g.assignee);
       // 案件全体の開始＝最早の視点開始、終了＝最遅の視点終了
       if (g.scheduledStart) {
@@ -3154,7 +3168,7 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
                 const danger = todayYmd > pg.deadline || (endYmd && endYmd > pg.deadline);
                 const d = new Date(pg.deadline + 'T00:00:00');
                 return (
-                  <span title={danger ? '納期を過ぎている、または終了予定が納期を超えています' : '納期'} style={{
+                  <span title={danger ? '納期を過ぎている、または終了予定が納期を超えています（視点ごとの納期のうち最早のもの）' : '納期（視点ごとの納期のうち最早のもの）'} style={{
                     fontSize: 11, fontWeight: 700, flexShrink: 0,
                     color: danger ? '#fff' : '#7a8471',
                     background: danger ? '#c1272d' : '#eef2ea',
@@ -3344,6 +3358,21 @@ function ViewpointCard({ group, now, allSortedIds, companyFirstIds, companyLastI
                 {fmtMD(group.scheduledStart)} {minToTime(group.scheduledStartMin)} 〜 {fmtMD(group.scheduledEnd)} {minToTime(group.scheduledEndMin)}
               </span>
             )}
+            {group.deadline && (() => {
+              const todayYmd = fmtYMD(new Date());
+              const endYmd = group.scheduledEnd ? fmtYMD(group.scheduledEnd) : null;
+              const danger = todayYmd > group.deadline || (endYmd && endYmd > group.deadline);
+              const d = new Date(group.deadline + 'T00:00:00');
+              return (
+                <span title={danger ? 'この視点の納期を過ぎている、または終了予定が納期を超えています' : 'この視点の納期'} style={{
+                  fontSize: 10, fontWeight: 700,
+                  color: danger ? '#fff' : '#7a8471',
+                  background: danger ? '#c1272d' : '#eef2ea',
+                  border: danger ? 'none' : '1px solid #c9d4c2',
+                  borderRadius: 2, padding: '1px 7px',
+                }}>納期 {fmtMD(d)}（{dayName(d)}）{danger ? ' ⚠' : ''}</span>
+              );
+            })()}
           </div>
           {/* 進捗バー：経過進捗（薄色）の上に実績（濃色）を重ねる */}
           <div style={{ position: 'relative', height: 5, background: '#f0ebde', borderRadius: 2, overflow: 'hidden', marginTop: 6, maxWidth: 360 }}>
@@ -5647,23 +5676,19 @@ function fmtOverdue(ms) {
   const h = Math.floor(min / 60), m = min % 60;
   return m === 0 ? `${h}時間超過` : `${h}時間${m}分超過`;
 }
-function EndPromptModal({ projects, now, settings, onComplete, onAddRevision, onDelay, onSnooze, colors, fontJP, fontDisplay }) {
-  // 展開中のアクション { projectName, action } と各フォーム値
+function EndPromptModal({ viewpoints, now, settings, onComplete, onAddRevision, onDelay, onSnooze, colors, fontJP, fontDisplay }) {
+  // 展開中のアクション { key, action } と各フォーム値
   const [active, setActive] = useState(null);
   const [completeEnd, setCompleteEnd] = useState('');
   const [delayEnd, setDelayEnd] = useState('');
-  const [revVp, setRevVp] = useState('');
   const [revName, setRevName] = useState('追加修正');
   const [revHours, setRevHours] = useState('');
 
-  const open = (proj, action) => {
-    setActive({ projectName: proj.projectName, action });
+  const open = (vp, action) => {
+    setActive({ key: vp.key, action });
     if (action === 'complete') setCompleteEnd(dateToDtLocal(now));
-    if (action === 'delay') setDelayEnd(dateToDtLocal(new Date(proj.endTs)));
-    if (action === 'revision') {
-      const vps = [...new Set(proj.tasks.map(t => t.viewpointName).filter(Boolean))];
-      setRevVp(vps[0] || ''); setRevName('追加修正'); setRevHours('');
-    }
+    if (action === 'delay') setDelayEnd(dateToDtLocal(new Date(vp.endTs)));
+    if (action === 'revision') { setRevName('追加修正'); setRevHours(''); }
   };
   const close = () => setActive(null);
 
@@ -5677,28 +5702,31 @@ function EndPromptModal({ projects, now, settings, onComplete, onAddRevision, on
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, padding: 16 }}>
       <div style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 8, width: '100%', maxWidth: 600, maxHeight: '85vh', display: 'flex', flexDirection: 'column', fontFamily: fontJP, boxShadow: '0 12px 48px rgba(0,0,0,0.25)' }}>
         <div style={{ padding: '18px 22px', borderBottom: `1px solid ${colors.border}` }}>
-          <h3 style={{ fontFamily: fontDisplay, fontSize: 17, margin: 0, fontWeight: 600, color: colors.accent }}>終了予定を過ぎた案件があります</h3>
-          <p style={{ fontSize: 11, color: colors.textMute, margin: '6px 0 0 0' }}>対応を選んでください（「後で」で30分後に再表示）。</p>
+          <h3 style={{ fontFamily: fontDisplay, fontSize: 17, margin: 0, fontWeight: 600, color: colors.accent }}>終了予定を過ぎた視点があります</h3>
+          <p style={{ fontSize: 11, color: colors.textMute, margin: '6px 0 0 0' }}>視点ごとに対応を選んでください（「後で」で30分後に再表示）。</p>
         </div>
         <div style={{ overflowY: 'auto', padding: '8px 16px 16px', flex: 1 }}>
-          {projects.map(proj => {
-            const isOpen = active && active.projectName === proj.projectName;
-            const vps = [...new Set(proj.tasks.map(t => t.viewpointName).filter(Boolean))];
+          {viewpoints.map(vp => {
+            const isOpen = active && active.key === vp.key;
             return (
-              <div key={proj.projectName} style={{ border: `1px solid ${colors.border}`, borderLeft: `4px solid ${getProjectColor(proj.projectName)}`, borderRadius: 6, padding: '12px 14px', marginBottom: 10 }}>
+              <div key={vp.key} style={{ border: `1px solid ${colors.border}`, borderLeft: `4px solid ${getProjectColor(vp.projectName)}`, borderRadius: 6, padding: '12px 14px', marginBottom: 10 }}>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: 14, fontWeight: 600 }}>{proj.projectName}</span>
-                  {proj.assignees.length > 0 && <span style={{ fontSize: 11, color: colors.textMute }}>担当: {proj.assignees.join('・')}</span>}
+                  <span style={{ fontSize: 14, fontWeight: 600 }}>{vp.projectName} ／ {vp.viewpointName}</span>
+                  {vp.assignee && <span style={{ fontSize: 11, color: colors.textMute }}>担当: {vp.assignee}</span>}
                 </div>
                 <div style={{ fontSize: 11, color: colors.textMute, marginTop: 4, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                  <span>終了予定: {fmtMD(proj.endDate)}({dayName(proj.endDate)}) {minToTime(proj.endDate.getHours() * 60 + proj.endDate.getMinutes())}</span>
-                  <span style={{ color: colors.accent, fontWeight: 600 }}>{fmtOverdue(now.getTime() - proj.endTs)}</span>
+                  <span>終了予定: {fmtMD(vp.endDate)}({dayName(vp.endDate)}) {minToTime(vp.endDate.getHours() * 60 + vp.endDate.getMinutes())}</span>
+                  <span style={{ color: colors.accent, fontWeight: 600 }}>{fmtOverdue(now.getTime() - vp.endTs)}</span>
+                  {vp.deadline && (() => {
+                    const d = new Date(vp.deadline + 'T00:00:00');
+                    return <span>納期: {fmtMD(d)}（{dayName(d)}）</span>;
+                  })()}
                 </div>
                 <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
-                  <button type="button" onClick={() => open(proj, 'complete')} style={btn(colors.progress, colors.progress, '#fff')}>① 案件完了</button>
-                  <button type="button" onClick={() => open(proj, 'revision')} style={btn('#fff', colors.border, colors.text)}>② 追加修正</button>
-                  <button type="button" onClick={() => open(proj, 'delay')} style={btn('#fff', colors.border, colors.text)}>③ 遅延</button>
-                  <button type="button" onClick={() => onSnooze(proj.projectName, proj.endTs)} style={btn('#fff', colors.border, colors.textMute)}>④ 後で</button>
+                  <button type="button" onClick={() => open(vp, 'complete')} style={btn(colors.progress, colors.progress, '#fff')}>① 視点完了</button>
+                  <button type="button" onClick={() => open(vp, 'revision')} style={btn('#fff', colors.border, colors.text)}>② 追加修正</button>
+                  <button type="button" onClick={() => open(vp, 'delay')} style={btn('#fff', colors.border, colors.text)}>③ 遅延</button>
+                  <button type="button" onClick={() => onSnooze(vp.key, vp.endTs)} style={btn('#fff', colors.border, colors.textMute)}>④ 後で</button>
                 </div>
 
                 {isOpen && active.action === 'complete' && (
@@ -5706,7 +5734,7 @@ function EndPromptModal({ projects, now, settings, onComplete, onAddRevision, on
                     <div style={fieldLabel}>実際の終了時間</div>
                     <EndTimeFields value={completeEnd} onChange={setCompleteEnd} colors={colors} fontJP={fontJP} />
                     <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-                      <button type="button" onClick={() => { onComplete(proj.projectName, completeEnd); close(); }} style={btn(colors.progress, colors.progress, '#fff')}>完了する</button>
+                      <button type="button" onClick={() => { onComplete(vp, completeEnd); close(); }} style={btn(colors.progress, colors.progress, '#fff')}>完了する</button>
                       <button type="button" onClick={close} style={btn('#fff', colors.border, colors.textMute)}>やめる</button>
                     </div>
                   </div>
@@ -5714,12 +5742,6 @@ function EndPromptModal({ projects, now, settings, onComplete, onAddRevision, on
                 {isOpen && active.action === 'revision' && (
                   <div style={{ marginTop: 12, background: '#fbf9f4', borderRadius: 5, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
                     <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                      <div>
-                        <div style={fieldLabel}>視点</div>
-                        <select value={revVp} onChange={(e) => setRevVp(e.target.value)} style={{ padding: '7px 8px', border: `1px solid ${colors.border}`, borderRadius: 4, fontFamily: fontJP, fontSize: 13 }}>
-                          {vps.map(v => <option key={v} value={v}>{v}</option>)}
-                        </select>
-                      </div>
                       <div>
                         <div style={fieldLabel}>ステップ名</div>
                         <input type="text" value={revName} onChange={(e) => setRevName(e.target.value)} style={{ padding: '7px 8px', border: `1px solid ${colors.border}`, borderRadius: 4, fontFamily: fontJP, fontSize: 13 }} />
@@ -5730,7 +5752,7 @@ function EndPromptModal({ projects, now, settings, onComplete, onAddRevision, on
                       </div>
                     </div>
                     <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-                      <button type="button" onClick={() => { onAddRevision(proj.projectName, revVp, revName, revHours); close(); }} style={btn(colors.text, colors.text, '#fff')}>追加する</button>
+                      <button type="button" onClick={() => { onAddRevision(vp, revName, revHours); close(); }} style={btn(colors.text, colors.text, '#fff')}>追加する</button>
                       <button type="button" onClick={close} style={btn('#fff', colors.border, colors.textMute)}>やめる</button>
                     </div>
                   </div>
@@ -5743,7 +5765,7 @@ function EndPromptModal({ projects, now, settings, onComplete, onAddRevision, on
                       <button type="button" onClick={() => {
                         const nt = delayEnd ? new Date(delayEnd).getTime() : 0;
                         if (!nt) { alert('日時を入力してください'); return; }
-                        onDelay(proj.projectName, proj.endTs, nt); close();
+                        onDelay(vp, vp.endTs, nt); close();
                       }} style={btn(colors.text, colors.text, '#fff')}>更新する</button>
                       <button type="button" onClick={close} style={btn('#fff', colors.border, colors.textMute)}>やめる</button>
                     </div>
