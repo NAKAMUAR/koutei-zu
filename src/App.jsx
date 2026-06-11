@@ -1796,7 +1796,8 @@ export default function App() {
     };
     saveTasks(prev => normalizePriorities([...prev, rec]));
   };
-  // ③ 遅延（新しい終了予定に合わせてこの視点の最後のステップに時間を加算＋遅延履歴）
+  // ③ 遅延（この視点の最後のステップの終了時間指定を新しい終了予定へ動かし、
+  //    差分の稼働時間ぶん制作時間を加算＋遅延履歴を記録）
   const endPromptDelay = (vp, currentEndTs, newEndTs) => {
     if (newEndTs <= currentEndTs) { alert('新しい終了予定は現在の終了予定より後にしてください'); return; }
     const scheduledById = new Map(scheduled.active.map(t => [t.id, t]));
@@ -1810,12 +1811,21 @@ export default function App() {
       const tb = startOfDay(b.scheduledEnd).getTime() + (b.scheduledEndMin || 0) * 60000;
       return tb > ta ? b : a;
     });
+    // 差分の稼働時間。新しい終了予定が稼働時間外（残業なしの夜間など）の場合は0でもよく、
+    // その場合は終了時間の指定だけを動かす
     const addH = workingHoursBetweenTs(currentEndTs, newEndTs, last.assignee, settings);
-    if (addH <= 0) { alert('差分の稼働時間が計算できませんでした'); return; }
+    const newEndStr = dateToDtLocal(new Date(newEndTs));
     const delay = { at: Date.now(), from: currentEndTs, to: newEndTs };
     saveTasks(prev => normalizePriorities(prev.map(t =>
       t.id === last.id
-        ? { ...t, hours: Math.round((t.hours + addH) * 10) / 10, delays: [...(t.delays || []), delay] }
+        ? {
+          ...t,
+          hours: addH > 0 ? Math.round((t.hours + addH) * 10) / 10 : t.hours,
+          // 終了時間の指定を新しい終了予定へ更新する。
+          // 古い指定が残っていると終了予定がその時刻に固定され、ポップアップが直後に再表示されてしまう
+          manualEnd: newEndStr,
+          delays: [...(t.delays || []), delay],
+        }
         : t
     )));
   };
