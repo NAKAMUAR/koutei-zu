@@ -2132,18 +2132,8 @@ export default function App() {
               </div>
               <span style={{ fontSize: 11, color: colors.textMute, marginLeft: 'auto' }}>1日 {hoursPerDay}時間 ・ 土日除外</span>
             </div>
-            <div style={{ maxWidth: 1600, margin: '16px auto 0', borderTop: `1px solid ${colors.border}`, paddingTop: 16 }}>
-              <OvertimeManager
-                overtimes={settings.overtimes || []} assigneeList={assigneeList}
-                settings={settings}
-                onAdd={addOvertime} onRemove={removeOvertime}
-                colors={colors} fontJP={fontJP} />
-            </div>
-            <div style={{ maxWidth: 1600, margin: '16px auto 0', borderTop: `1px solid ${colors.border}`, paddingTop: 16 }}>
-              <AbsenceManager
-                absences={settings.absences || []} assigneeList={assigneeList}
-                onAdd={addAbsence} onRemove={removeAbsence}
-                colors={colors} fontJP={fontJP} />
+            <div style={{ maxWidth: 1600, margin: '16px auto 0', borderTop: `1px solid ${colors.border}`, paddingTop: 12, fontSize: 11, color: colors.textMute }}>
+              残業・欠勤（休日・不在）の登録は「マスタ」タブに移動しました。
             </div>
           </div>
         )}
@@ -2207,6 +2197,9 @@ export default function App() {
           <MasterView
             customerMaster={customerMaster} saveCustomerMaster={saveCustomerMaster}
             employeeMaster={employeeMaster} saveEmployeeMaster={saveEmployeeMaster}
+            settings={settings} assigneeList={assigneeList}
+            addOvertime={addOvertime} removeOvertime={removeOvertime}
+            addAbsence={addAbsence} removeAbsence={removeAbsence}
             colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
         )}
         {view === 'companyOrder' && (
@@ -5329,7 +5322,7 @@ function DoneTaskRow({ task, onRestore, onDelete, onSetActualEnd, onEditProject,
 }
 
 // ============ マスタ管理ビュー ============
-function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEmployeeMaster, colors, fontJP, fontDisplay }) {
+function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEmployeeMaster, settings, assigneeList, addOvertime, removeOvertime, addAbsence, removeAbsence, colors, fontJP, fontDisplay }) {
   // ローカル下書き（入力中の値）。props が更新されたら同期する
   const [customers, setCustomers] = useState(customerMaster);
   const [employees, setEmployees] = useState(employeeMaster);
@@ -5582,6 +5575,23 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
         <button type="button" onClick={addEmployee} style={{ ...addBtnStyle, marginTop: 14 }}>
           <Plus size={14} /> 従業員を追加
         </button>
+      </section>
+
+      {/* 残業の登録（稼働枠の追加） */}
+      <section style={cardStyle}>
+        <OvertimeManager
+          overtimes={settings?.overtimes || []} assigneeList={assigneeList}
+          settings={settings}
+          onAdd={addOvertime} onRemove={removeOvertime}
+          colors={colors} fontJP={fontJP} />
+      </section>
+
+      {/* 欠勤・休日・不在の登録（対応不可日） */}
+      <section style={cardStyle}>
+        <AbsenceManager
+          absences={settings?.absences || []} assigneeList={assigneeList}
+          onAdd={addAbsence} onRemove={removeAbsence}
+          colors={colors} fontJP={fontJP} />
       </section>
     </div>
   );
