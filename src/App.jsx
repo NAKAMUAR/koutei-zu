@@ -1790,6 +1790,15 @@ export default function App() {
   const setReviewNote = (g, note) => {
     saveTasks(prev => prev.map(t => reviewMatch(t, g) ? { ...t, reviewNote: note, reviewUpdatedAt: Date.now() } : t));
   };
+  // 確認待ちの「完了時刻」を後から修正。actualEnd を更新すると、その時刻を起点に
+  // （doneFloor 経由で）担当者の残りタスクが組み直る。早く終われば前倒しされる。
+  const setReviewActualEnd = (g, value) => {
+    const ae = value || null;
+    const nowMs = Date.now();
+    saveTasks(prev => prev.map(t => reviewMatch(t, g)
+      ? { ...t, actualEnd: ae, completedAt: ae ? new Date(ae).getTime() : t.completedAt, reviewUpdatedAt: nowMs }
+      : t));
+  };
 
   // ステップ単位の開始時間指定（自動スケジュールより優先）を登録・解除
   const setTaskManualStart = (id, value) => {
@@ -2229,7 +2238,7 @@ export default function App() {
             handleDelete={handleDelete} toggleStatus={toggleStatus}
             moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={setDragTaskId} onDropTask={reorderTaskPriority} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} completeProject={completeProject} cancelProject={cancelProject} completeViewpoint={completeViewpoint}
             handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} saveProjectInfo={saveProjectInfo}
-            finalizeReview={finalizeReview} reopenReview={reopenReview} setReviewNote={setReviewNote}
+            finalizeReview={finalizeReview} reopenReview={reopenReview} setReviewNote={setReviewNote} setReviewActualEnd={setReviewActualEnd}
             projectList={projectList} projectInternalList={projectInternalList} viewpointList={viewpointList} assigneeList={assigneeList} assigneeOrder={assigneeOrder}
             settings={settings} now={now}
             colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
@@ -2431,7 +2440,7 @@ function NavButton({ active, onClick, icon, label, badge }) {
 }
 
 // ============ 入力ビュー ============
-function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdit, tasks, scheduled, projectOrder, saveProjectOrder, companyList, customerMaster, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, saveProjectInfo, finalizeReview, reopenReview, setReviewNote, projectList, projectInternalList, viewpointList, assigneeList, assigneeOrder, settings, now, colors, fontJP, fontDisplay }) {
+function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdit, tasks, scheduled, projectOrder, saveProjectOrder, companyList, customerMaster, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, saveProjectInfo, finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, projectList, projectInternalList, viewpointList, assigneeList, assigneeOrder, settings, now, colors, fontJP, fontDisplay }) {
   // お客様担当者の候補：会社名を選んでいればその会社の担当者を優先表示
   const contactOptions = useMemo(() => {
     const rows = customerMaster || [];
@@ -3079,7 +3088,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
 
       <ReviewSection
         review={scheduled.review} now={now}
-        finalizeReview={finalizeReview} reopenReview={reopenReview} setReviewNote={setReviewNote}
+        finalizeReview={finalizeReview} reopenReview={reopenReview} setReviewNote={setReviewNote} setReviewActualEnd={setReviewActualEnd}
         colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
     </div>
   );
@@ -3090,18 +3099,19 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
 // 追加修正があればメモを記入でき、3日更新がないとグレー、7日でアプリが自動的に完了タブへ移す。
 const REVIEW_GRAY_DAYS = 3;
 const REVIEW_AUTO_DONE_DAYS = 7;
-function ReviewSection({ review, now, finalizeReview, reopenReview, setReviewNote, colors, fontJP, fontDisplay }) {
+function ReviewSection({ review, now, finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, colors, fontJP, fontDisplay }) {
   if (!review || review.length === 0) return null;
-  // 視点単位にまとめ、確認待ちのメタ情報（開始・最終更新・メモ・完了日）を付与
+  // 視点単位にまとめ、確認待ちのメタ情報（開始・最終更新・メモ・完了日・完了時刻）を付与
   const groups = groupByViewpoint(review).map(g => {
-    let reviewAt = Infinity, reviewUpdatedAt = 0, completedAt = 0, reviewNote = '';
+    let reviewAt = Infinity, reviewUpdatedAt = 0, completedAt = 0, reviewNote = '', actualEnd = '';
     for (const t of g.tasks) {
       if (t.reviewAt && t.reviewAt < reviewAt) reviewAt = t.reviewAt;
       if (t.reviewUpdatedAt && t.reviewUpdatedAt > reviewUpdatedAt) reviewUpdatedAt = t.reviewUpdatedAt;
       if (t.completedAt && t.completedAt > completedAt) completedAt = t.completedAt;
       if (!reviewNote && t.reviewNote) reviewNote = t.reviewNote;
+      if (!actualEnd && t.actualEnd) actualEnd = t.actualEnd;
     }
-    return { ...g, reviewAt: reviewAt === Infinity ? null : reviewAt, reviewUpdatedAt: reviewUpdatedAt || null, completedAt: completedAt || null, reviewNote };
+    return { ...g, reviewAt: reviewAt === Infinity ? null : reviewAt, reviewUpdatedAt: reviewUpdatedAt || null, completedAt: completedAt || null, reviewNote, actualEnd };
   });
   // 最終更新が古い順（＝自動完了が近い順）に並べる
   groups.sort((a, b) => (a.reviewUpdatedAt || 0) - (b.reviewUpdatedAt || 0));
@@ -3117,7 +3127,7 @@ function ReviewSection({ review, now, finalizeReview, reopenReview, setReviewNot
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 12 }}>
         {groups.map(g => (
           <ReviewCard key={g.key} g={g} now={now}
-            finalizeReview={finalizeReview} reopenReview={reopenReview} setReviewNote={setReviewNote}
+            finalizeReview={finalizeReview} reopenReview={reopenReview} setReviewNote={setReviewNote} setReviewActualEnd={setReviewActualEnd}
             colors={colors} fontJP={fontJP} />
         ))}
       </div>
@@ -3125,7 +3135,7 @@ function ReviewSection({ review, now, finalizeReview, reopenReview, setReviewNot
   );
 }
 
-function ReviewCard({ g, now, finalizeReview, reopenReview, setReviewNote, colors, fontJP }) {
+function ReviewCard({ g, now, finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, colors, fontJP }) {
   const [note, setNote] = useState(g.reviewNote || '');
   // 他端末などで g.reviewNote が更新されたら、編集中でなければ追従
   const [focused, setFocused] = useState(false);
@@ -3167,9 +3177,20 @@ function ReviewCard({ g, now, finalizeReview, reopenReview, setReviewNote, color
           </span>
         )}
         <span style={{ marginLeft: 'auto', fontSize: 11, color: colors.textMute, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-          {g.completedAt && <span>完了 {fmtMD(new Date(g.completedAt))}（{dayName(new Date(g.completedAt))}）</span>}
           <span style={{ color: gray ? colors.textMute : colors.accent }}>あと {daysLeft} 日で自動完了</span>
         </span>
+      </div>
+
+      <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <label style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap' }}>完了時刻</label>
+        <input type="datetime-local"
+          value={g.actualEnd || ''}
+          onChange={(e) => setReviewActualEnd(g, e.target.value)}
+          style={{
+            padding: '6px 8px', border: `1px solid ${colors.border}`, borderRadius: 4,
+            fontFamily: fontJP, fontSize: 12, background: '#fff', color: colors.text, outline: 'none',
+          }} />
+        <span style={{ fontSize: 10, color: colors.textMute }}>直すとこの時刻を起点に、担当者の残りスケジュールが組み直ります（早く終われば前倒し）</span>
       </div>
 
       <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
