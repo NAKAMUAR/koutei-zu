@@ -2077,7 +2077,6 @@ export default function App() {
     { id: 'message', icon: <MessageSquare size={15} />, label: 'サマリー' },
     { id: 'done', icon: <CheckCircle2 size={15} />, label: '完了' },
     { id: 'master', icon: <Folder size={15} />, label: 'マスタ' },
-    { id: 'companyOrder', icon: <GripVertical size={15} />, label: '表示順設定' },
   ];
 
   return (
@@ -2200,11 +2199,7 @@ export default function App() {
             settings={settings} assigneeList={assigneeList}
             addOvertime={addOvertime} removeOvertime={removeOvertime}
             addAbsence={addAbsence} removeAbsence={removeAbsence}
-            colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
-        )}
-        {view === 'companyOrder' && (
-          <CompanyOrderView
-            companyOrder={settings.companyOrder || []} saveCompanyOrder={saveCompanyOrder}
+            saveCompanyOrder={saveCompanyOrder}
             usedCompanies={[...new Set(tasks.map(t => (t.companyName || '').trim()).filter(Boolean))]}
             colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
         )}
@@ -5322,7 +5317,7 @@ function DoneTaskRow({ task, onRestore, onDelete, onSetActualEnd, onEditProject,
 }
 
 // ============ マスタ管理ビュー ============
-function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEmployeeMaster, settings, assigneeList, addOvertime, removeOvertime, addAbsence, removeAbsence, colors, fontJP, fontDisplay }) {
+function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEmployeeMaster, settings, assigneeList, addOvertime, removeOvertime, addAbsence, removeAbsence, saveCompanyOrder, usedCompanies, colors, fontJP, fontDisplay }) {
   // ローカル下書き（入力中の値）。props が更新されたら同期する
   const [customers, setCustomers] = useState(customerMaster);
   const [employees, setEmployees] = useState(employeeMaster);
@@ -5593,6 +5588,12 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
           onAdd={addAbsence} onRemove={removeAbsence}
           colors={colors} fontJP={fontJP} />
       </section>
+
+      {/* 会社の表示順設定 */}
+      <CompanyOrderView
+        companyOrder={settings?.companyOrder || []} saveCompanyOrder={saveCompanyOrder}
+        usedCompanies={usedCompanies || []}
+        colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
     </div>
   );
 }
