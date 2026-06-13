@@ -3402,8 +3402,10 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
                 </button>
               )}
             </div>
-            {!isCollapsed && pg.viewpointGroups.map(group => (
-              <ViewpointCard key={group.key} group={group} now={now}
+            {!isCollapsed && pg.viewpointGroups.map((group, gi) => (
+              // 視点カードは案件ヘッダーから階段状にインデント（作業順が視覚的に分かるように）
+              <div key={group.key} style={{ marginLeft: Math.min(gi + 1, 8) * 22 }}>
+              <ViewpointCard group={group} now={now}
                 allSortedIds={allSortedIds}
                 companyFirstIds={companyFirstIds} companyLastIds={companyLastIds}
                 handleEdit={handleEdit} handleEditViewpoint={handleEditViewpoint}
@@ -3412,6 +3414,7 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
                 moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={onDragTask} onDropTask={onDropTask} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} completeProject={completeProject} cancelProject={cancelProject} completeViewpoint={completeViewpoint}
                 handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} assigneeList={assigneeList}
                 colors={colors} fontJP={fontJP} />
+              </div>
             ))}
           </div>
         );
