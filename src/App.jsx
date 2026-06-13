@@ -53,6 +53,14 @@ const fmtYMD = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2,
 const fmtYMDJP = (d) => `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
 const dayName = (d) => ['日', '月', '火', '水', '木', '金', '土'][d.getDay()];
 const isWeekend = (d) => d.getDay() === 0 || d.getDay() === 6;
+// 全体共通の祝日（ベトナム等）。settings.holidays（YYYY-MM-DD の配列）から同期する。
+// isNonWorkingDay は settings を受け取らない箇所が多いため、モジュール変数で保持する
+// （案件色の assignProjectColors と同じパターン）。
+let HOLIDAY_SET = new Set();
+function syncHolidays(settings) {
+  const list = (settings && settings.holidays) || [];
+  HOLIDAY_SET = new Set(list.map(h => h && h.date).filter(Boolean));
+}
 // 第2・第4土曜は午前のみ営業
 function isWorkingSaturday(d) {
   if (d.getDay() !== 6) return false;
@@ -60,6 +68,7 @@ function isWorkingSaturday(d) {
   return week === 2 || week === 4;
 }
 function isNonWorkingDay(d) {
+  if (HOLIDAY_SET.has(fmtYMD(d))) return true; // 祝日（全体共通の休み）
   if (d.getDay() === 0) return true;
   if (d.getDay() === 6) return !isWorkingSaturday(d);
   return false;
@@ -145,6 +154,42 @@ function normalizeCustomerMaster(arr) {
   }));
 }
 
+// ===== ベトナムの祝日（候補データ） =====
+// 旧暦ベースの祝日（推定・要確認）。政府が毎年、振替日を含めて公式日程を発表するため目安。
+// tet=テト元日, tetDays=テト休みの目安日数, hung=フンヴオン王の命日（旧暦3月10日）
+const VN_LUNAR_HOLIDAYS = {
+  2025: { tet: '2025-01-29', tetDays: 5, hung: '2025-04-07' },
+  2026: { tet: '2026-02-17', tetDays: 5, hung: '2026-04-26' },
+  2027: { tet: '2027-02-06', tetDays: 5, hung: '2027-04-16' },
+  2028: { tet: '2028-01-26', tetDays: 5, hung: '2028-04-04' },
+  2029: { tet: '2029-02-13', tetDays: 5, hung: '2029-04-23' },
+  2030: { tet: '2030-02-03', tetDays: 5, hung: '2030-04-12' },
+};
+// 指定年の祝日候補。各候補 { date:'YYYY-MM-DD', days, label, estimated }
+// estimated=true は旧暦ベースで要確認（日付・日数は政府発表に合わせて編集する）
+function vietnamHolidayCandidates(year) {
+  const out = [
+    { date: `${year}-01-01`, days: 1, label: '元日 Tết Dương lịch', estimated: false },
+    { date: `${year}-04-30`, days: 1, label: '南部解放記念日 Giải phóng miền Nam', estimated: false },
+    { date: `${year}-05-01`, days: 1, label: 'メーデー Quốc tế Lao động', estimated: false },
+    { date: `${year}-09-02`, days: 2, label: '建国記念日 Quốc khánh', estimated: false },
+  ];
+  const lunar = VN_LUNAR_HOLIDAYS[year];
+  if (lunar) {
+    out.push({ date: lunar.tet, days: lunar.tetDays, label: 'テト（旧正月）Tết Nguyên đán', estimated: true });
+    out.push({ date: lunar.hung, days: 1, label: 'フンヴオン王の命日 Giỗ Tổ Hùng Vương', estimated: true });
+  }
+  return out.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+}
+// 'YYYY-MM-DD' から days 日ぶんの連続日付の配列を返す
+function expandHolidayDates(startDate, days) {
+  const out = [];
+  const d = new Date(startDate + 'T00:00:00');
+  if (isNaN(d.getTime())) return out;
+  for (let i = 0; i < Math.max(1, days || 1); i++) { out.push(fmtYMD(d)); d.setDate(d.getDate() + 1); }
+  return out;
+}
+
 const DEFAULT_SETTINGS = {
   morningStart: '08:00',
   morningEnd: '12:00',
@@ -153,6 +198,8 @@ const DEFAULT_SETTINGS = {
   startDate: fmtYMD(new Date()),
   startTime: '08:00',
   absences: [],
+  // 全体共通の祝日（ベトナム等）。[{ id, date:'YYYY-MM-DD', label }]。土日と同じく非稼働日として扱う
+  holidays: [],
   // 残業（担当者・期間・時間帯の稼働枠追加）。[{ id, assignee, startDate, endDate, startTime, endTime, label }]
   overtimes: [],
   // 会社グループの表示順（暫定の固定順）。表示順設定ページで編集可
@@ -1086,8 +1133,8 @@ export default function App() {
   const saveSettings = async (newSettings) => {
     setSettings(newSettings);
     try {
-      const { morningStart, morningEnd, afternoonStart, afternoonEnd, startDate, startTime, lastAdvancedDate, absences, overtimes, endPromptState, companyOrder } = newSettings;
-      await storage.set('settings', JSON.stringify({ morningStart, morningEnd, afternoonStart, afternoonEnd, startDate, startTime, lastAdvancedDate, absences: absences || [], overtimes: overtimes || [], endPromptState: endPromptState || {}, companyOrder: companyOrder || [] }));
+      const { morningStart, morningEnd, afternoonStart, afternoonEnd, startDate, startTime, lastAdvancedDate, absences, overtimes, endPromptState, companyOrder, holidays } = newSettings;
+      await storage.set('settings', JSON.stringify({ morningStart, morningEnd, afternoonStart, afternoonEnd, startDate, startTime, lastAdvancedDate, absences: absences || [], overtimes: overtimes || [], endPromptState: endPromptState || {}, companyOrder: companyOrder || [], holidays: holidays || [] }));
     } catch (e) { console.error(e); }
   };
   // 会社の表示順を保存
@@ -1109,6 +1156,25 @@ export default function App() {
   };
   const removeAbsence = (id) => {
     saveSettings({ ...settings, absences: (settings.absences || []).filter(a => a.id !== id) });
+  };
+
+  // 全体共通の祝日（ベトナム等）の追加／削除。重複日付は無視する
+  const addHolidays = (items) => {
+    const cur = settings.holidays || [];
+    const have = new Set(cur.map(h => h.date));
+    const adds = [];
+    for (const it of (items || [])) {
+      for (const date of expandHolidayDates(it.date, it.days)) {
+        if (have.has(date)) continue;
+        have.add(date);
+        adds.push({ id: genId('hol'), date, label: it.label || '' });
+      }
+    }
+    if (adds.length === 0) return;
+    saveSettings({ ...settings, holidays: [...cur, ...adds] });
+  };
+  const removeHoliday = (id) => {
+    saveSettings({ ...settings, holidays: (settings.holidays || []).filter(h => h.id !== id) });
   };
 
   // 残業（稼働枠の追加）の追加／削除
@@ -1986,6 +2052,7 @@ export default function App() {
   // now を渡すことで「経過に応じた終了予定の自動調整」が1分ごとに再計算される
   const scheduled = useMemo(() => {
     assignProjectColors(tasks); // 案件の色割り当てを更新（登録順・重複なし）
+    syncHolidays(settings);     // 全体共通の祝日（非稼働日）をモジュールに反映
     return scheduleTasks(tasks, settings, projectOrder, now);
   }, [tasks, settings, projectOrder, now]);
 
@@ -2275,6 +2342,7 @@ export default function App() {
             settings={settings} assigneeList={assigneeList}
             addOvertime={addOvertime} removeOvertime={removeOvertime}
             addAbsence={addAbsence} removeAbsence={removeAbsence}
+            addHolidays={addHolidays} removeHoliday={removeHoliday}
             saveCompanyOrder={saveCompanyOrder}
             usedCompanies={[...new Set(tasks.map(t => (t.companyName || '').trim()).filter(Boolean))]}
             colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
@@ -5795,7 +5863,7 @@ function DoneTaskRow({ task, onRestore, onDelete, onSetActualEnd, onEditProject,
 }
 
 // ============ マスタ管理ビュー ============
-function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEmployeeMaster, settings, assigneeList, addOvertime, removeOvertime, addAbsence, removeAbsence, saveCompanyOrder, usedCompanies, colors, fontJP, fontDisplay }) {
+function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEmployeeMaster, settings, assigneeList, addOvertime, removeOvertime, addAbsence, removeAbsence, addHolidays, removeHoliday, saveCompanyOrder, usedCompanies, colors, fontJP, fontDisplay }) {
   // ローカル下書き（入力中の値）。props が更新されたら同期する
   const [customers, setCustomers] = useState(customerMaster);
   const [employees, setEmployees] = useState(employeeMaster);
@@ -6067,6 +6135,14 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
           colors={colors} fontJP={fontJP} />
       </section>
 
+      {/* ベトナムの祝日（全体共通の休み） */}
+      <section style={cardStyle}>
+        <HolidayManager
+          holidays={settings?.holidays || []}
+          onAdd={addHolidays} onRemove={removeHoliday}
+          colors={colors} fontJP={fontJP} />
+      </section>
+
       {/* 会社の表示順設定 */}
       <CompanyOrderView
         companyOrder={settings?.companyOrder || []} saveCompanyOrder={saveCompanyOrder}
@@ -6320,6 +6396,104 @@ function AbsenceManager({ absences, assigneeList, onAdd, onRemove, colors, fontJ
             </div>
           ))}
         </div>
+      )}
+    </div>
+  );
+}
+
+// ============ ベトナムの祝日（全体共通の休み） ============
+function HolidayManager({ holidays, onAdd, onRemove, colors, fontJP }) {
+  const years = Object.keys(VN_LUNAR_HOLIDAYS).map(Number).sort((a, b) => a - b);
+  const thisYear = new Date().getFullYear();
+  const [year, setYear] = useState(years.includes(thisYear) ? thisYear : years[0]);
+  const [cands, setCands] = useState([]);
+  const [manual, setManual] = useState({ date: fmtYMD(new Date()), label: '' });
+  const have = new Set((holidays || []).map(h => h.date));
+  const inputStyle = { padding: '5px 8px', border: `1px solid ${colors.border}`, borderRadius: 3, fontFamily: fontJP, fontSize: 13, background: '#fff', color: colors.text };
+
+  const showCandidates = () => setCands(vietnamHolidayCandidates(year));
+  const setCand = (i, k, v) => setCands(prev => prev.map((c, idx) => idx === i ? { ...c, [k]: v } : c));
+  const sorted = [...(holidays || [])].sort((x, y) => (x.date || '').localeCompare(y.date || ''));
+  const fmtDateJP = (ymd) => { const d = new Date(ymd + 'T00:00:00'); return isNaN(d.getTime()) ? '' : `${fmtMD(d)}（${dayName(d)}）`; };
+
+  return (
+    <div>
+      <div style={{ fontSize: 13, fontWeight: 600, color: colors.text, marginBottom: 4 }}>ベトナムの祝日（全体共通の休み）</div>
+      <div style={{ fontSize: 11, color: colors.textMute, marginBottom: 10 }}>
+        登録した日は全担当者の非稼働日（土日と同じ扱い）になり、スケジュール・カレンダーから除外されます。
+        テト（旧正月）・フンヴオン王の命日は旧暦ベースで政府が毎年公式日程を発表するため「要確認」です。日付・日数を編集してから追加してください。
+      </div>
+
+      {/* 年ごとの候補を取り込む */}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 10 }}>
+        <select value={year} onChange={(e) => { setYear(Number(e.target.value)); setCands([]); }} style={{ ...inputStyle, cursor: 'pointer' }}>
+          {years.map(y => <option key={y} value={y}>{y}年</option>)}
+        </select>
+        <button type="button" onClick={showCandidates}
+          style={{ padding: '6px 14px', background: '#fff', border: `1px solid ${colors.accent}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, color: colors.accent, fontWeight: 600 }}>
+          {year}年の祝日候補を表示
+        </button>
+        {cands.length > 0 && (
+          <button type="button" onClick={() => onAdd(cands)}
+            style={{ padding: '6px 14px', background: colors.accentSoft, border: `1px solid ${colors.accent}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, color: colors.accent, fontWeight: 600 }}>
+            候補をまとめて追加
+          </button>
+        )}
+      </div>
+
+      {cands.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16, background: '#fbf9f4', border: `1px solid ${colors.border}`, borderRadius: 4, padding: 10 }}>
+          {cands.map((c, i) => {
+            const added = expandHolidayDates(c.date, c.days).every(d => have.has(d));
+            return (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12 }}>
+                <input type="date" value={c.date} onChange={(e) => setCand(i, 'date', e.target.value)} style={inputStyle} />
+                <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: colors.textMute }}>
+                  <input type="number" min={1} max={14} value={c.days}
+                    onChange={(e) => setCand(i, 'days', Math.max(1, parseInt(e.target.value, 10) || 1))}
+                    style={{ ...inputStyle, width: 56 }} /> 日間
+                </span>
+                <span style={{ color: colors.text }}>{c.label}</span>
+                {c.estimated && <span style={{ fontSize: 10, color: '#fff', background: '#c46a16', borderRadius: 8, padding: '1px 6px' }}>要確認</span>}
+                {added
+                  ? <span style={{ marginLeft: 'auto', fontSize: 11, color: colors.textMute }}>登録済み</span>
+                  : <button type="button" onClick={() => onAdd([c])}
+                      style={{ marginLeft: 'auto', padding: '4px 10px', background: colors.accentSoft, border: `1px solid ${colors.accent}`, borderRadius: 3, cursor: 'pointer', fontFamily: fontJP, fontSize: 11, color: colors.accent, fontWeight: 600 }}>
+                      追加
+                    </button>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* 手動で1日追加 */}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
+        <input type="date" value={manual.date} onChange={(e) => setManual(p => ({ ...p, date: e.target.value }))} style={inputStyle} />
+        <input type="text" value={manual.label} onChange={(e) => setManual(p => ({ ...p, label: e.target.value }))} placeholder="名称（任意・例: 臨時休業）" style={{ ...inputStyle, flex: '1 1 160px', minWidth: 120 }} />
+        <button type="button" onClick={() => { if (manual.date) { onAdd([{ date: manual.date, days: 1, label: (manual.label || '').trim() }]); setManual(p => ({ ...p, label: '' })); } }}
+          style={{ padding: '6px 14px', background: colors.accentSoft, border: `1px solid ${colors.accent}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, color: colors.accent, fontWeight: 600 }}>
+          手動で追加
+        </button>
+      </div>
+
+      {/* 登録済み一覧 */}
+      {sorted.length > 0 ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {sorted.map(h => (
+            <div key={h.id} style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 4, padding: '6px 10px', fontSize: 12, flexWrap: 'wrap' }}>
+              <span style={{ fontWeight: 600, color: colors.text }}>{h.date}</span>
+              <span style={{ color: colors.textMute }}>{fmtDateJP(h.date)}</span>
+              {h.label && <span style={{ color: colors.textMute }}>{h.label}</span>}
+              <button type="button" onClick={() => onRemove(h.id)} title="削除"
+                style={{ marginLeft: 'auto', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 3, padding: '3px 6px', cursor: 'pointer', color: colors.textMute, display: 'flex', alignItems: 'center' }}>
+                <Trash2 size={13} />
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div style={{ fontSize: 12, color: colors.textMute }}>まだ祝日が登録されていません。</div>
       )}
     </div>
   );
