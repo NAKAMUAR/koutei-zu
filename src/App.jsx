@@ -1614,6 +1614,28 @@ export default function App() {
     saveTasks(prev => normalizePriorities(prev.map(t => ids.has(t.id) ? { ...t, assignee: na } : t)));
   };
 
+  // 進行中タスクの案件ヘッダーからインラインで案件情報を編集する。
+  // 対象案件の全タスク（完了済み含む）に反映し、案件が分割されないようにする。
+  // 戻り値：保存したら true、バリデーションエラーなら false（呼び出し側でパネルを閉じる判定に使う）
+  const saveProjectInfo = (oldProjectName, info) => {
+    const newName = (info.projectName || '').trim();
+    if (!newName) { alert('社外案件名を入力してください'); return false; }
+    saveTasks(prev => normalizePriorities(prev.map(t =>
+      t.projectName === oldProjectName
+        ? {
+          ...t,
+          projectName: newName,
+          projectNameInternal: (info.projectNameInternal || '').trim(),
+          companyName: (info.companyName || '').trim(),
+          customerContact: (info.customerContact || '').trim(),
+          memo: (info.memo || '').trim(),
+          tentative: !!info.tentative,
+        }
+        : t
+    )));
+    return true;
+  };
+
   const handleDelete = async (id) => {
     if (!confirm('このタスクを削除しますか？')) return;
     const task = tasksRef.current.find(t => t.id === id);
@@ -2162,7 +2184,7 @@ export default function App() {
             handleDeleteViewpoint={handleDeleteViewpoint}
             handleDelete={handleDelete} toggleStatus={toggleStatus}
             moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={setDragTaskId} onDropTask={reorderTaskPriority} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} completeProject={completeProject} cancelProject={cancelProject} completeViewpoint={completeViewpoint}
-            handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint}
+            handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} saveProjectInfo={saveProjectInfo}
             projectList={projectList} projectInternalList={projectInternalList} viewpointList={viewpointList} assigneeList={assigneeList} assigneeOrder={assigneeOrder}
             settings={settings} now={now}
             colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
@@ -2174,7 +2196,7 @@ export default function App() {
         )}
         {view === 'byAssignee' && (
           <AssigneeView scheduled={scheduled} selectedAssignee={selectedAssignee} setSelectedAssignee={setSelectedAssignee} now={now} assigneeOrder={assigneeOrder}
-            companyOrder={settings.companyOrder || []}
+            companyOrder={settings.companyOrder || []} companyList={companyList} saveProjectInfo={saveProjectInfo}
             projectOrder={projectOrder} saveProjectOrder={saveProjectOrderPartial}
             handleEdit={handleEdit} handleEditProject={handleEditProject} handleEditViewpoint={handleEditViewpoint}
             handleAddViewpointToProject={handleAddViewpointToProject}
@@ -2364,7 +2386,7 @@ function NavButton({ active, onClick, icon, label, badge }) {
 }
 
 // ============ 入力ビュー ============
-function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdit, tasks, scheduled, projectOrder, saveProjectOrder, companyList, customerMaster, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, projectList, projectInternalList, viewpointList, assigneeList, assigneeOrder, settings, now, colors, fontJP, fontDisplay }) {
+function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdit, tasks, scheduled, projectOrder, saveProjectOrder, companyList, customerMaster, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, saveProjectInfo, projectList, projectInternalList, viewpointList, assigneeList, assigneeOrder, settings, now, colors, fontJP, fontDisplay }) {
   // お客様担当者の候補：会社名を選んでいればその会社の担当者を優先表示
   const contactOptions = useMemo(() => {
     const rows = customerMaster || [];
@@ -2985,7 +3007,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                   handleDeleteViewpoint={handleDeleteViewpoint}
                   handleDelete={handleDelete} toggleStatus={toggleStatus}
                   moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={onDragTask} onDropTask={onDropTask} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} completeProject={completeProject} cancelProject={cancelProject} completeViewpoint={completeViewpoint}
-                  handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} assigneeList={assigneeList}
+                  handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} saveProjectInfo={saveProjectInfo} companyList={companyList} assigneeList={assigneeList}
                   colors={colors} fontJP={fontJP} />
               </section>
             );
@@ -3005,7 +3027,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
             handleDeleteViewpoint={handleDeleteViewpoint}
             handleDelete={handleDelete} toggleStatus={toggleStatus}
             moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={onDragTask} onDropTask={onDropTask} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} completeProject={completeProject} cancelProject={cancelProject} completeViewpoint={completeViewpoint}
-            handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} assigneeList={assigneeList}
+            handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} saveProjectInfo={saveProjectInfo} companyList={companyList} assigneeList={assigneeList}
             colors={colors} fontJP={fontJP} />
         )}
       </section>
@@ -3013,8 +3035,82 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
   );
 }
 
+// ============ 案件情報インライン編集パネル ============
+// 進行中タスクの案件ヘッダーから、案件情報（案件名・会社名・お客様担当者・メモ・仮案件）を
+// その場で編集する。保存すると案件の全タスクへ反映される。
+function ProjectInfoEditor({ pg, companyList, onSave, onCancel, colors, fontJP }) {
+  const [v, setV] = useState({
+    projectName: pg.projectName === '(案件名未設定)' ? '' : (pg.projectName || ''),
+    projectNameInternal: pg.projectNameInternal || '',
+    companyName: pg.companyName || '',
+    customerContact: pg.customerContact || '',
+    memo: pg.memo || '',
+    tentative: !!pg.tentative,
+  });
+  const set = (k, val) => setV(p => ({ ...p, [k]: val }));
+  const inputStyle = {
+    width: '100%', padding: '8px 10px', boxSizing: 'border-box',
+    border: `1px solid ${colors.border}`, borderRadius: 4,
+    fontFamily: fontJP, fontSize: 13, background: '#fff', color: colors.text, outline: 'none',
+  };
+  const labelStyle = { display: 'block', fontSize: 11, color: colors.textMute, marginBottom: 4 };
+  return (
+    <div style={{
+      background: '#fbf9f4', border: `1px solid ${colors.border}`,
+      borderLeft: `4px solid ${getProjectColor(pg.projectName)}`, borderRadius: 4, padding: 14, marginLeft: 22,
+    }}>
+      <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10, color: colors.text }}>
+        案件情報を編集（この案件の全タスク・完了済み含むに反映）
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+        <div>
+          <label style={labelStyle}>社外案件名</label>
+          <input type="text" value={v.projectName} onChange={(e) => set('projectName', e.target.value)} placeholder="例: 〇〇マンション" style={inputStyle} />
+        </div>
+        <div>
+          <label style={labelStyle}>社内案件名（任意）</label>
+          <input type="text" value={v.projectNameInternal} onChange={(e) => set('projectNameInternal', e.target.value)} placeholder="例: TAMAZEN.58-6" style={inputStyle} />
+        </div>
+        <div>
+          <label style={labelStyle}>会社名</label>
+          <input type="text" list="inline-company-list" value={v.companyName} onChange={(e) => set('companyName', e.target.value)} placeholder="会社名" style={inputStyle} />
+          <datalist id="inline-company-list">{(companyList || []).map(c => <option key={c} value={c} />)}</datalist>
+        </div>
+        <div>
+          <label style={labelStyle}>お客様担当者（任意）</label>
+          <input type="text" value={v.customerContact} onChange={(e) => set('customerContact', e.target.value)} placeholder="お客様担当者" style={inputStyle} />
+        </div>
+        <div style={{ gridColumn: '1 / -1' }}>
+          <label style={labelStyle}>メモ（任意）</label>
+          <input type="text" value={v.memo} onChange={(e) => set('memo', e.target.value)} placeholder="例: 6/20 受注確定予定" style={inputStyle} />
+        </div>
+      </div>
+      <label style={{
+        display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginTop: 12,
+        fontSize: 13, fontFamily: fontJP, color: v.tentative ? '#c46a16' : colors.text, fontWeight: v.tentative ? 700 : 400,
+      }}>
+        <input type="checkbox" checked={v.tentative} onChange={(e) => set('tentative', e.target.checked)}
+          style={{ width: 15, height: 15, accentColor: '#c46a16', cursor: 'pointer' }} />
+        仮案件（仮予定）として登録する
+      </label>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
+        <button type="button" onClick={onCancel}
+          style={{ padding: '7px 14px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, color: colors.textMute }}>
+          キャンセル
+        </button>
+        <button type="button" onClick={() => onSave(v)}
+          style={{ padding: '7px 18px', background: colors.text, color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+          <Check size={14} /> 保存
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ============ 視点グループリスト ============
-function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder, saveProjectOrder, sortMode, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, assigneeList, colors, fontJP }) {
+function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder, saveProjectOrder, sortMode, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, saveProjectInfo, companyList, assigneeList, colors, fontJP }) {
+  // 案件情報をインライン編集中の案件名（null = 非編集）
+  const [editingInfo, setEditingInfo] = useState(null);
   // 全タスクのグローバルなインデックス（移動可否判定用）
   const allSortedIds = allActive.map(t => t.id);
 
@@ -3280,6 +3376,19 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
               ) : (
                 <span style={{ fontSize: 14, fontWeight: 600, color: colors.text, cursor: 'pointer' }} onClick={() => toggle(pg.projectName)}>{pg.projectName}</span>
               )}
+              {saveProjectInfo && (
+                <button type="button"
+                  onClick={(e) => { e.stopPropagation(); setEditingInfo(editingInfo === pg.projectName ? null : pg.projectName); }}
+                  title="案件情報をここで編集（案件名・社内案件名・会社名・お客様担当者・メモ・仮案件）"
+                  style={{
+                    background: editingInfo === pg.projectName ? colors.accentSoft : 'transparent',
+                    border: `1px solid ${editingInfo === pg.projectName ? colors.accent : colors.border}`,
+                    cursor: 'pointer', color: editingInfo === pg.projectName ? colors.accent : colors.textMute,
+                    display: 'flex', alignItems: 'center', padding: '3px 5px', borderRadius: 3, flexShrink: 0,
+                  }}>
+                  <Edit2 size={12} />
+                </button>
+              )}
               {pg.customerContact && (
                 <span style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', flexShrink: 0 }}>
                   お客様: {pg.customerContact}
@@ -3402,6 +3511,12 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
                 </button>
               )}
             </div>
+            {editingInfo === pg.projectName && saveProjectInfo && (
+              <ProjectInfoEditor pg={pg} companyList={companyList}
+                onSave={(info) => { if (saveProjectInfo(pg.projectName, info)) setEditingInfo(null); }}
+                onCancel={() => setEditingInfo(null)}
+                colors={colors} fontJP={fontJP} />
+            )}
             {!isCollapsed && pg.viewpointGroups.map(group => (
               // 視点カードは案件ヘッダーから1段インデント（全視点同じ深さで揃える）
               <div key={group.key} style={{ marginLeft: 22 }}>
@@ -4688,7 +4803,7 @@ function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact
 }
 
 // ============ 担当者別ビュー ============
-function AssigneeView({ scheduled, selectedAssignee, setSelectedAssignee, now, assigneeOrder, companyOrder, projectOrder, saveProjectOrder, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, assigneeList, colors, fontJP, fontDisplay }) {
+function AssigneeView({ scheduled, selectedAssignee, setSelectedAssignee, now, assigneeOrder, companyOrder, companyList, saveProjectInfo, projectOrder, saveProjectOrder, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, assigneeList, colors, fontJP, fontDisplay }) {
   const assignees = sortAssigneesByMaster([...new Set(scheduled.active.map(t => t.assignee))], assigneeOrder);
   if (assignees.length === 0) {
     return (
@@ -4775,7 +4890,7 @@ function AssigneeView({ scheduled, selectedAssignee, setSelectedAssignee, now, a
               handleDeleteViewpoint={handleDeleteViewpoint}
               handleDelete={handleDelete} toggleStatus={toggleStatus}
               moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={onDragTask} onDropTask={onDropTask} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} completeProject={completeProject} cancelProject={cancelProject} completeViewpoint={completeViewpoint}
-              handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} assigneeList={assigneeList}
+              handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} saveProjectInfo={saveProjectInfo} companyList={companyList} assigneeList={assigneeList}
               colors={colors} fontJP={fontJP} />
           </section>
         );
