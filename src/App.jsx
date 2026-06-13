@@ -3402,9 +3402,9 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
                 </button>
               )}
             </div>
-            {!isCollapsed && pg.viewpointGroups.map((group, gi) => (
-              // 視点カードは案件ヘッダーから階段状にインデント（作業順が視覚的に分かるように）
-              <div key={group.key} style={{ marginLeft: Math.min(gi + 1, 8) * 22 }}>
+            {!isCollapsed && pg.viewpointGroups.map(group => (
+              // 視点カードは案件ヘッダーから1段インデント（全視点同じ深さで揃える）
+              <div key={group.key} style={{ marginLeft: 22 }}>
               <ViewpointCard group={group} now={now}
                 allSortedIds={allSortedIds}
                 companyFirstIds={companyFirstIds} companyLastIds={companyLastIds}
