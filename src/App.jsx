@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Plus, Trash2, Edit2, Calendar as CalIcon, MessageSquare, Settings as SettingsIcon, Check, X, Clock, Folder, User, ChevronUp, ChevronDown, Users, CheckCircle2, RotateCcw, TrendingUp, ArrowRight, GripVertical, Search } from 'lucide-react';
+import { Plus, Trash2, Edit2, Calendar as CalIcon, MessageSquare, Settings as SettingsIcon, Check, X, Clock, Folder, User, ChevronUp, ChevronDown, Users, CheckCircle2, RotateCcw, TrendingUp, ArrowRight, GripVertical, Search, AlertTriangle } from 'lucide-react';
 import { storage, tasksStore, signIn, signOutUser, subscribeAuth } from './firebase.js';
 
 // ============ 定数・ユーティリティ ============
@@ -2535,6 +2535,34 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
   // 担当者別表示のときの担当者の絞り込み（null = 全選択）
   const [selectedListAssignee, setSelectedListAssignee] = useState(null);
 
+  // 納期（本日 or 超過）があるのに本日納品予定でない（＝間に合わない恐れ）案件を抽出。
+  // 一覧では赤背景、さらにポップアップで警告する。
+  const atRiskProjects = useMemo(() => {
+    const todayYmd = fmtYMD(now);
+    const map = new Map();
+    for (const t of scheduled.active) {
+      if (!t.projectName) continue;
+      const e = map.get(t.projectName) || { projectName: t.projectName, projectNameInternal: t.projectNameInternal || '', deadline: '', endTs: null };
+      if (t.deadline && (!e.deadline || t.deadline < e.deadline)) e.deadline = t.deadline;
+      if (t.scheduledEnd) {
+        const ts = t.scheduledEnd.getTime() + (t.scheduledEndMin || 0) * 60000;
+        if (e.endTs == null || ts > e.endTs) e.endTs = ts;
+      }
+      map.set(t.projectName, e);
+    }
+    const res = [];
+    for (const e of map.values()) {
+      if (!e.deadline || e.deadline > todayYmd) continue; // 納期が本日 or 超過のものだけ
+      const endYmd = e.endTs ? fmtYMD(new Date(e.endTs)) : null;
+      if (endYmd !== todayYmd) res.push(e); // 本日納品予定でない＝間に合わない恐れ
+    }
+    return res.sort((a, b) => (a.deadline < b.deadline ? -1 : a.deadline > b.deadline ? 1 : 0));
+  }, [scheduled.active, now]);
+  // ポップアップの表示制御（対象が変わったら再表示・閉じると消える）
+  const [riskAck, setRiskAck] = useState(false);
+  const riskKey = atRiskProjects.map(p => p.projectName).sort().join('|');
+  useEffect(() => { setRiskAck(false); }, [riskKey]);
+
   // ===== 過去案件から引用 =====
   const [quoteOpen, setQuoteOpen] = useState(false);
   // 完了済みタスクを含む案件を、案件単位（社外案件名）でまとめる
@@ -2596,6 +2624,51 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
       {quoteOpen && (
         <QuoteModal projects={pastProjects} onSelect={selectQuote} onClose={() => setQuoteOpen(false)}
           colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
+      )}
+      {atRiskProjects.length > 0 && !riskAck && (
+        <div onClick={() => setRiskAck(true)}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
+          }}>
+          <div onClick={(e) => e.stopPropagation()}
+            style={{
+              background: '#fff', borderRadius: 8, border: '2px solid #c1272d',
+              maxWidth: 460, width: '100%', maxHeight: '80vh', overflow: 'auto',
+              boxShadow: '0 12px 40px rgba(0,0,0,0.3)', fontFamily: fontJP,
+            }}>
+            <div style={{ background: '#c1272d', color: '#fff', padding: '12px 18px', display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 15 }}>
+              <AlertTriangle size={18} /> 納期に間に合わない恐れがあります
+            </div>
+            <div style={{ padding: 18 }}>
+              <div style={{ fontSize: 13, color: colors.text, marginBottom: 12 }}>
+                納期が本日または超過しているのに、本日中の納品予定になっていない案件が {atRiskProjects.length} 件あります。
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {atRiskProjects.map(p => {
+                  const d = new Date(p.deadline + 'T00:00:00');
+                  return (
+                    <div key={p.projectName} style={{ background: '#fbdcdc', border: '1px solid #e6a3a3', borderRadius: 4, padding: '8px 12px', fontSize: 13 }}>
+                      <span style={{ fontWeight: 600, color: '#c1272d' }}>
+                        {p.projectNameInternal ? `${p.projectNameInternal}（${p.projectName}）` : p.projectName}
+                      </span>
+                      <span style={{ marginLeft: 8, fontSize: 12, color: '#c1272d' }}>納期 {fmtMD(d)}（{dayName(d)}）</span>
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ marginTop: 16, textAlign: 'right' }}>
+                <button type="button" onClick={() => setRiskAck(true)}
+                  style={{
+                    background: '#c1272d', color: '#fff', border: 'none', borderRadius: 4,
+                    padding: '8px 18px', cursor: 'pointer', fontFamily: fontJP, fontSize: 13, fontWeight: 600,
+                  }}>
+                  確認した
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
       <section style={{ background: colors.surface, border: `1px solid ${colors.border}`, borderRadius: 6, padding: 24 }}>
         <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 20, flexWrap: 'wrap', gap: 8 }}>
@@ -3555,6 +3628,18 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
         const isDragOver = dragOver === pg.projectName && dragSource && dragSource !== pg.projectName;
         const isFirstInSection = secIdx === 0;
         const isLastInSection = secIdx === section.projects.length - 1;
+        // ===== 状態に応じた背景色 =====
+        // 黄: 作業が始まった案件 / オレンジ: 本日納品予定（終了予定が本日） /
+        // 赤: 納期（本日 or 超過）があるのに本日納品予定でない（間に合わない恐れ）
+        const todayYmd = fmtYMD(now);
+        const endYmd = pg.scheduledEnd ? fmtYMD(pg.scheduledEnd) : null;
+        const startedTs = pg.scheduledStart ? pg.scheduledStart.getTime() + (pg.scheduledStartMin || 0) * 60000 : null;
+        const started = startedTs != null && startedTs <= now.getTime();
+        const dueToday = endYmd != null && endYmd === todayYmd;
+        const deadlinePassed = !!pg.deadline && pg.deadline <= todayYmd;
+        const atRisk = deadlinePassed && !dueToday;
+        const headerBg = atRisk ? '#fbdcdc' : dueToday ? '#ffe6c9' : started ? '#fdf3a6' : '#fff';
+        const nameColor = deadlinePassed ? '#c1272d' : colors.text;
         return (
           <div key={pg.projectName} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div
@@ -3566,8 +3651,8 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
               onDragEnd={draggable ? onDragEnd : undefined}
               style={{
                 display: 'flex', alignItems: 'center', gap: 10,
-                background: '#fff', border: `1px solid ${isDragOver ? colors.accent : colors.border}`,
-                borderLeft: `4px solid ${pcolor}`,
+                background: headerBg, border: `1px solid ${isDragOver ? colors.accent : (atRisk ? '#c1272d' : colors.border)}`,
+                borderLeft: `4px solid ${atRisk ? '#c1272d' : pcolor}`,
                 padding: '10px 14px', borderRadius: 4,
                 fontFamily: fontJP,
                 opacity: isDragSource ? 0.5 : 1,
@@ -3604,11 +3689,11 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
               )}
               {pg.projectNameInternal ? (
                 <>
-                  <span style={{ fontSize: 14, fontWeight: 600, color: colors.text, cursor: 'pointer' }} onClick={() => toggle(pg.projectName)}>{pg.projectNameInternal}</span>
-                  <span style={{ fontSize: 11, color: colors.textMute, cursor: 'pointer' }} onClick={() => toggle(pg.projectName)}>{pg.projectName}</span>
+                  <span style={{ fontSize: 14, fontWeight: 600, color: nameColor, cursor: 'pointer' }} onClick={() => toggle(pg.projectName)}>{pg.projectNameInternal}</span>
+                  <span style={{ fontSize: 11, color: deadlinePassed ? '#c1272d' : colors.textMute, cursor: 'pointer' }} onClick={() => toggle(pg.projectName)}>{pg.projectName}</span>
                 </>
               ) : (
-                <span style={{ fontSize: 14, fontWeight: 600, color: colors.text, cursor: 'pointer' }} onClick={() => toggle(pg.projectName)}>{pg.projectName}</span>
+                <span style={{ fontSize: 14, fontWeight: 600, color: nameColor, cursor: 'pointer' }} onClick={() => toggle(pg.projectName)}>{pg.projectName}</span>
               )}
               {saveProjectInfo && (
                 <button type="button"
