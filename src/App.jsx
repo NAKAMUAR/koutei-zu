@@ -5164,19 +5164,28 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
 // ============ 完了タスクビュー ============
 function DoneView({ scheduled, toggleStatus, handleDelete, setActualEnd, handleEditProject, colors, fontJP, fontDisplay }) {
   const doneTasks = [...scheduled.done].sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
-  const cancelledCount = doneTasks.filter(t => t.cancelled).length;
+
+  // 検索：案件名・社内案件名・会社名・お客様担当者・制作担当者・視点名・ステップ名・メモで絞り込み
+  const [searchQuery, setSearchQuery] = useState('');
+  const q = searchQuery.trim().toLowerCase();
+  const filtered = q
+    ? doneTasks.filter(t =>
+      [t.projectName, t.projectNameInternal, t.companyName, t.customerContact, t.assignee, t.viewpointName, t.stepName, t.memo]
+        .some(v => (v || '').toLowerCase().includes(q)))
+    : doneTasks;
+  const cancelledCount = filtered.filter(t => t.cancelled).length;
 
   const grouped = {};
-  for (const task of doneTasks) {
+  for (const task of filtered) {
     const d = task.completedAt ? new Date(task.completedAt) : null;
     const key = d ? fmtYMD(startOfDay(d)) : '日時不明';
     if (!grouped[key]) grouped[key] = [];
     grouped[key].push(task);
   }
 
-  const totalHours = doneTasks.reduce((s, t) => s + t.hours, 0);
+  const totalHours = filtered.reduce((s, t) => s + t.hours, 0);
   const byAssignee = {};
-  for (const t of doneTasks) {
+  for (const t of filtered) {
     if (!byAssignee[t.assignee]) byAssignee[t.assignee] = { count: 0, hours: 0 };
     byAssignee[t.assignee].count++;
     byAssignee[t.assignee].hours += t.hours;
@@ -5196,12 +5205,44 @@ function DoneView({ scheduled, toggleStatus, handleDelete, setActualEnd, handleE
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 20, flexWrap: 'wrap', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
         <h2 style={{ fontFamily: fontDisplay, fontSize: 20, margin: 0, fontWeight: 500 }}>完了タスク</h2>
         <span style={{ fontSize: 12, color: colors.textMute }}>
-          {doneTasks.length}件 完了{cancelledCount > 0 ? `（うち中止 ${cancelledCount}件）` : ''} ・ 合計 {totalHours}時間
+          {q ? `${filtered.length} / ${doneTasks.length}件` : `${doneTasks.length}件 完了`}{cancelledCount > 0 ? `（うち中止 ${cancelledCount}件）` : ''} ・ 合計 {totalHours}時間
         </span>
       </div>
+
+      {/* 検索 */}
+      <div style={{ position: 'relative', maxWidth: 480, marginBottom: 20 }}>
+        <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: colors.textMute, display: 'flex', alignItems: 'center', pointerEvents: 'none' }}>
+          <Search size={15} />
+        </span>
+        <input type="text" value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="案件名・会社名・お客様担当者・制作担当者・視点名で検索"
+          style={{
+            width: '100%', padding: '9px 32px 9px 32px', boxSizing: 'border-box',
+            border: `1px solid ${colors.border}`, borderRadius: 4,
+            fontFamily: fontJP, fontSize: 13, background: '#fff', color: colors.text, outline: 'none',
+          }} />
+        {searchQuery && (
+          <button type="button" onClick={() => setSearchQuery('')}
+            title="検索をクリア"
+            style={{
+              position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)',
+              background: 'transparent', border: 'none', cursor: 'pointer', color: colors.textMute,
+              display: 'flex', alignItems: 'center', padding: 2,
+            }}>
+            <X size={15} />
+          </button>
+        )}
+      </div>
+
+      {filtered.length === 0 && (
+        <div style={{ background: '#fff', border: `1px dashed ${colors.border}`, borderRadius: 6, padding: 48, textAlign: 'center', color: colors.textMute, fontSize: 13 }}>
+          「{searchQuery}」に一致する完了タスクはありません。
+        </div>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 24 }}>
         {Object.entries(byAssignee).map(([a, stat]) => (
