@@ -277,8 +277,14 @@ function migrateTask(task) {
   // 実際の終了時刻（"YYYY-MM-DDTHH:mm"）。完了時に記録し、遅れた場合は後続を後ろ倒しする
   const actualEnd = task.actualEnd || null;
 
+  // 確認待ち（視点完了後の確認フェーズ）の状態
+  const reviewState = task.reviewState || null;            // 'waiting' = 確認待ち
+  const reviewAt = task.reviewAt || null;                  // 確認待ちに入れた時刻（ms）
+  const reviewUpdatedAt = task.reviewUpdatedAt || null;    // 最終更新（修正メモ記入など）。3日でグレー・7日で自動完了の基準
+  const reviewNote = task.reviewNote || '';                // 追加修正メモ
+
   const { taskName, ...rest } = task;
-  return { ...rest, viewpointName, stepName, stepOrder, manualStart, priority, completedHours, projectNameInternal, companyName, customerContact, actualEnd };
+  return { ...rest, viewpointName, stepName, stepOrder, manualStart, priority, completedHours, projectNameInternal, companyName, customerContact, actualEnd, reviewState, reviewAt, reviewUpdatedAt, reviewNote };
 }
 
 // 優先順位は「会社ごと」に 1 から採番する（会社の中だけで順位を持つ）
@@ -637,7 +643,10 @@ function scheduleTasks(tasks, settings, projectOrder, now) {
     };
   });
 
-  return { active: scheduled, done };
+  // 確認待ち（done のうち reviewState==='waiting'）と、確認も済んだ完了（完了タブ表示用）に分ける
+  const review = done.filter(t => t.reviewState === 'waiting');
+  const doneFinal = done.filter(t => t.reviewState !== 'waiting');
+  return { active: scheduled, done, review, doneFinal };
 }
 
 // 完了タスクのカレンダー表示用スロット：実終了時刻（actualEnd、無ければ completedAt）から
@@ -1733,13 +1742,16 @@ export default function App() {
     const idSet = new Set(completeTarget.ids);
     const ae = actualEndStr || null;
     const completedAtMs = ae ? new Date(ae).getTime() : Date.now();
+    const nowMs = Date.now();
+    // 完了した視点／案件は、いったん「確認待ち」へ入れる（完了タブには行かない）
     saveTasks(prev => normalizePriorities(prev.map(t =>
       idSet.has(t.id)
-        ? { ...t, status: 'done', cancelled: null, completedHours: t.hours, completedAt: completedAtMs, actualEnd: ae }
+        ? { ...t, status: 'done', cancelled: null, completedHours: t.hours, completedAt: completedAtMs, actualEnd: ae,
+            reviewState: 'waiting', reviewAt: nowMs, reviewUpdatedAt: nowMs, reviewNote: '' }
         : t
     )));
     setCompleteTarget(null);
-    setView('done');
+    setView('input');
   };
 
   // 「案件中止」：未完了タスクを「中止」として完了タブへ移動する。
@@ -1757,6 +1769,26 @@ export default function App() {
         : t
     )));
     setView('done');
+  };
+
+  // ===== 確認待ち（視点完了後の確認フェーズ）の操作（視点単位） =====
+  // 確認待ちの視点グループ（案件・視点・担当者）に属するタスクか
+  const reviewMatch = (t, g) =>
+    t.reviewState === 'waiting' && t.projectName === g.projectName && t.viewpointName === g.viewpointName && t.assignee === g.assignee;
+  // 「完了」：確認を終え、完了タブへ移す
+  const finalizeReview = (g) => {
+    saveTasks(prev => prev.map(t => reviewMatch(t, g) ? { ...t, reviewState: null } : t));
+  };
+  // 「進行中に戻す」：確認待ちから進行中へ差し戻す
+  const reopenReview = (g) => {
+    if (!confirm(`「${g.projectName} ／ ${g.viewpointName}」を進行中に戻しますか？`)) return;
+    saveTasks(prev => normalizePriorities(prev.map(t => reviewMatch(t, g)
+      ? { ...t, status: 'pending', reviewState: null, reviewAt: null, reviewUpdatedAt: null, completedAt: null, actualEnd: null }
+      : t)));
+  };
+  // 追加修正メモの記入。最終更新時刻も更新する（3日グレー・7日自動完了の基準をリセット）
+  const setReviewNote = (g, note) => {
+    saveTasks(prev => prev.map(t => reviewMatch(t, g) ? { ...t, reviewNote: note, reviewUpdatedAt: Date.now() } : t));
   };
 
   // ステップ単位の開始時間指定（自動スケジュールより優先）を登録・解除
@@ -1785,12 +1817,14 @@ export default function App() {
   const endPromptComplete = (vp, actualEndStr) => {
     const ae = actualEndStr || null;
     const completedAtMs = ae ? new Date(ae).getTime() : Date.now();
+    const nowMs = Date.now();
     saveTasks(prev => normalizePriorities(prev.map(t =>
       (t.projectName === vp.projectName && t.viewpointName === vp.viewpointName && t.assignee === vp.assignee && t.status !== 'done')
-        ? { ...t, status: 'done', cancelled: null, completedHours: t.hours, completedAt: completedAtMs, actualEnd: ae }
+        ? { ...t, status: 'done', cancelled: null, completedHours: t.hours, completedAt: completedAtMs, actualEnd: ae,
+            reviewState: 'waiting', reviewAt: nowMs, reviewUpdatedAt: nowMs, reviewNote: '' }
         : t
     )));
-    setView('done');
+    setView('input');
   };
   // ② 追加修正（この視点の最後尾にステップを追加）
   const endPromptAddRevision = (vp, stepName, hours) => {
@@ -1976,6 +2010,16 @@ export default function App() {
     }
     return result.sort((a, b) => a.endTs - b.endTs);
   }, [scheduled.active, now, settings.endPromptState]);
+
+  // 確認待ちが7日間更新されなければ、自動で完了タブへ移す
+  useEffect(() => {
+    if (!tasksLoaded) return;
+    const SEVEN = 7 * 24 * 60 * 60 * 1000;
+    const nowMs = now.getTime();
+    const isStale = (t) => t.reviewState === 'waiting' && t.reviewUpdatedAt && (nowMs - t.reviewUpdatedAt) >= SEVEN;
+    if (!tasksRef.current.some(isStale)) return;
+    saveTasks(prev => prev.map(t => isStale(t) ? { ...t, reviewState: null } : t));
+  }, [now, tasksLoaded]);
   const projectList = useMemo(() => [...new Set(tasks.map(t => t.projectName))].filter(Boolean), [tasks]);
   const projectInternalList = useMemo(() => [...new Set(tasks.map(t => t.projectNameInternal))].filter(Boolean), [tasks]);
   const viewpointList = useMemo(() => [...new Set(tasks.map(t => t.viewpointName))].filter(Boolean), [tasks]);
@@ -2114,7 +2158,7 @@ export default function App() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
             {navItems.map(item => (
               <NavButton key={item.id} active={view === item.id} onClick={() => setView(item.id)} icon={item.icon} label={item.label}
-                badge={item.id === 'done' ? scheduled.done.length : null} />
+                badge={item.id === 'done' ? scheduled.doneFinal.length : null} />
             ))}
             <button onClick={() => setShowSettings(!showSettings)}
               style={{ padding: '7px 9px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', color: colors.textMute }}
@@ -2185,6 +2229,7 @@ export default function App() {
             handleDelete={handleDelete} toggleStatus={toggleStatus}
             moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={setDragTaskId} onDropTask={reorderTaskPriority} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} completeProject={completeProject} cancelProject={cancelProject} completeViewpoint={completeViewpoint}
             handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} saveProjectInfo={saveProjectInfo}
+            finalizeReview={finalizeReview} reopenReview={reopenReview} setReviewNote={setReviewNote}
             projectList={projectList} projectInternalList={projectInternalList} viewpointList={viewpointList} assigneeList={assigneeList} assigneeOrder={assigneeOrder}
             settings={settings} now={now}
             colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
@@ -2386,7 +2431,7 @@ function NavButton({ active, onClick, icon, label, badge }) {
 }
 
 // ============ 入力ビュー ============
-function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdit, tasks, scheduled, projectOrder, saveProjectOrder, companyList, customerMaster, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, saveProjectInfo, projectList, projectInternalList, viewpointList, assigneeList, assigneeOrder, settings, now, colors, fontJP, fontDisplay }) {
+function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdit, tasks, scheduled, projectOrder, saveProjectOrder, companyList, customerMaster, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, saveProjectInfo, finalizeReview, reopenReview, setReviewNote, projectList, projectInternalList, viewpointList, assigneeList, assigneeOrder, settings, now, colors, fontJP, fontDisplay }) {
   // お客様担当者の候補：会社名を選んでいればその会社の担当者を優先表示
   const contactOptions = useMemo(() => {
     const rows = customerMaster || [];
@@ -3031,6 +3076,136 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
             colors={colors} fontJP={fontJP} />
         )}
       </section>
+
+      <ReviewSection
+        review={scheduled.review} now={now}
+        finalizeReview={finalizeReview} reopenReview={reopenReview} setReviewNote={setReviewNote}
+        colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
+    </div>
+  );
+}
+
+// ============ 確認待ちセクション（視点完了後の確認フェーズ） ============
+// 進行中タスクの下に表示。視点を完了すると、完了タブへ行く前にここへ入る。
+// 追加修正があればメモを記入でき、3日更新がないとグレー、7日でアプリが自動的に完了タブへ移す。
+const REVIEW_GRAY_DAYS = 3;
+const REVIEW_AUTO_DONE_DAYS = 7;
+function ReviewSection({ review, now, finalizeReview, reopenReview, setReviewNote, colors, fontJP, fontDisplay }) {
+  if (!review || review.length === 0) return null;
+  // 視点単位にまとめ、確認待ちのメタ情報（開始・最終更新・メモ・完了日）を付与
+  const groups = groupByViewpoint(review).map(g => {
+    let reviewAt = Infinity, reviewUpdatedAt = 0, completedAt = 0, reviewNote = '';
+    for (const t of g.tasks) {
+      if (t.reviewAt && t.reviewAt < reviewAt) reviewAt = t.reviewAt;
+      if (t.reviewUpdatedAt && t.reviewUpdatedAt > reviewUpdatedAt) reviewUpdatedAt = t.reviewUpdatedAt;
+      if (t.completedAt && t.completedAt > completedAt) completedAt = t.completedAt;
+      if (!reviewNote && t.reviewNote) reviewNote = t.reviewNote;
+    }
+    return { ...g, reviewAt: reviewAt === Infinity ? null : reviewAt, reviewUpdatedAt: reviewUpdatedAt || null, completedAt: completedAt || null, reviewNote };
+  });
+  // 最終更新が古い順（＝自動完了が近い順）に並べる
+  groups.sort((a, b) => (a.reviewUpdatedAt || 0) - (b.reviewUpdatedAt || 0));
+
+  return (
+    <section>
+      <h2 style={{ fontFamily: fontDisplay, fontSize: 18, margin: '0 0 4px 0', fontWeight: 500, display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+        確認待ち
+        <span style={{ fontSize: 12, color: colors.textMute, fontFamily: fontJP }}>
+          {groups.length}件 ・ 視点完了後の確認フェーズ（{REVIEW_AUTO_DONE_DAYS}日更新がなければ自動で完了へ）
+        </span>
+      </h2>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 12 }}>
+        {groups.map(g => (
+          <ReviewCard key={g.key} g={g} now={now}
+            finalizeReview={finalizeReview} reopenReview={reopenReview} setReviewNote={setReviewNote}
+            colors={colors} fontJP={fontJP} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ReviewCard({ g, now, finalizeReview, reopenReview, setReviewNote, colors, fontJP }) {
+  const [note, setNote] = useState(g.reviewNote || '');
+  // 他端末などで g.reviewNote が更新されたら、編集中でなければ追従
+  const [focused, setFocused] = useState(false);
+  useEffect(() => { if (!focused) setNote(g.reviewNote || ''); }, [g.reviewNote, focused]);
+
+  const DAY = 24 * 60 * 60 * 1000;
+  const base = g.reviewUpdatedAt || g.reviewAt || g.completedAt || now.getTime();
+  const daysSinceUpdate = Math.floor((now.getTime() - base) / DAY);
+  const gray = daysSinceUpdate >= REVIEW_GRAY_DAYS;
+  const daysLeft = Math.max(0, REVIEW_AUTO_DONE_DAYS - daysSinceUpdate);
+  const pcolor = getProjectColor(g.projectName);
+
+  const saveNote = () => {
+    setFocused(false);
+    if ((note || '') !== (g.reviewNote || '')) setReviewNote(g, note);
+  };
+
+  return (
+    <div style={{
+      background: gray ? '#f1f0ec' : '#fff',
+      border: `1px solid ${colors.border}`,
+      borderLeft: `4px solid ${gray ? '#b9b6ad' : pcolor}`,
+      borderRadius: 4, padding: '12px 14px', fontFamily: fontJP,
+      opacity: gray ? 0.7 : 1,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <span style={{
+          fontSize: 10, fontWeight: 700, color: '#fff',
+          background: gray ? '#9aa295' : '#c46a16', borderRadius: 10, padding: '2px 8px', flexShrink: 0,
+        }}>確認待ち</span>
+        {g.projectNameInternal
+          ? (<><span style={{ fontSize: 14, fontWeight: 600, color: colors.text }}>{g.projectNameInternal}</span>
+              <span style={{ fontSize: 11, color: colors.textMute }}>{g.projectName}</span></>)
+          : (<span style={{ fontSize: 14, fontWeight: 600, color: colors.text }}>{g.projectName}</span>)}
+        <span style={{ fontSize: 12, color: colors.text }}>／ {g.viewpointName}</span>
+        {g.assignee && (
+          <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: colors.textMute }}>
+            <User size={12} /> {g.assignee}
+          </span>
+        )}
+        <span style={{ marginLeft: 'auto', fontSize: 11, color: colors.textMute, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          {g.completedAt && <span>完了 {fmtMD(new Date(g.completedAt))}（{dayName(new Date(g.completedAt))}）</span>}
+          <span style={{ color: gray ? colors.textMute : colors.accent }}>あと {daysLeft} 日で自動完了</span>
+        </span>
+      </div>
+
+      <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+        <textarea
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          onFocus={() => setFocused(true)}
+          onBlur={saveNote}
+          placeholder="追加修正があれば記入（保存すると確認待ちの期限がリセットされます）"
+          rows={2}
+          style={{
+            flex: '1 1 320px', minWidth: 220, resize: 'vertical',
+            padding: '8px 10px', boxSizing: 'border-box',
+            border: `1px solid ${colors.border}`, borderRadius: 4,
+            fontFamily: fontJP, fontSize: 13, background: '#fff', color: colors.text, outline: 'none',
+          }} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <button type="button" onClick={() => finalizeReview(g)}
+            title="確認を終えて完了タブへ移します"
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+              background: colors.accent, color: '#fff', border: 'none', borderRadius: 4,
+              padding: '8px 14px', cursor: 'pointer', fontFamily: fontJP, fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap',
+            }}>
+            <Check size={14} /> 完了
+          </button>
+          <button type="button" onClick={() => reopenReview(g)}
+            title="確認待ちをやめて進行中タスクへ戻します"
+            style={{
+              background: 'transparent', color: colors.textMute, border: `1px solid ${colors.border}`, borderRadius: 4,
+              padding: '6px 12px', cursor: 'pointer', fontFamily: fontJP, fontSize: 12, whiteSpace: 'nowrap',
+            }}>
+            進行中に戻す
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -5319,7 +5494,7 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
 
 // ============ 完了タスクビュー ============
 function DoneView({ scheduled, toggleStatus, handleDelete, setActualEnd, handleEditProject, colors, fontJP, fontDisplay }) {
-  const doneTasks = [...scheduled.done].sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
+  const doneTasks = [...scheduled.doneFinal].sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
 
   // 検索：案件名・社内案件名・会社名・お客様担当者・制作担当者・視点名・ステップ名・メモで絞り込み
   const [searchQuery, setSearchQuery] = useState('');
