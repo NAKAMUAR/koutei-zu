@@ -3206,7 +3206,19 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
         if (da !== db) return da < db ? -1 : 1;
         return 0; // 同じ納期・納期なし同士は制作順を維持（stable sort）
       });
-      return [{ companyName: '', projects: sorted, remaining: sorted.reduce((s, pg) => s + (pg.totalHours - pg.completedHours), 0) }];
+      // 納期の日付ごとにグループ分け（sorted は納期順なので Map の挿入順＝日付順）
+      const dmap = new Map();
+      for (const pg of sorted) {
+        const key = pg.deadline || ''; // '' = 納期未設定（最後に並ぶ）
+        if (!dmap.has(key)) dmap.set(key, []);
+        dmap.get(key).push(pg);
+      }
+      return [...dmap.entries()].map(([deadline, projects]) => ({
+        companyName: '',
+        deadlineGroup: deadline, // 'YYYY-MM-DD' または '' （納期未設定）
+        projects,
+        remaining: projects.reduce((s, pg) => s + (pg.totalHours - pg.completedHours), 0),
+      }));
     }
     const map = new Map();
     for (const pg of orderedProjectGroups) {
@@ -3298,8 +3310,34 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
         </div>
       )}
       {companySections.map((section) => (
-        <div key={'company::' + section.companyName} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {section.companyName && (
+        <div key={section.deadlineGroup !== undefined ? 'deadline::' + section.deadlineGroup : 'company::' + section.companyName} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {section.deadlineGroup !== undefined ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 4 }}>
+              {(() => {
+                if (!section.deadlineGroup) {
+                  return (
+                    <span style={{
+                      fontSize: 13, fontWeight: 700, color: colors.textMute,
+                      background: '#eee', borderRadius: 12,
+                      padding: '4px 14px', whiteSpace: 'nowrap',
+                    }}>納期未設定</span>
+                  );
+                }
+                const dl = new Date(section.deadlineGroup + 'T00:00:00');
+                const overdue = section.deadlineGroup < fmtYMD(now);
+                return (
+                  <span style={{
+                    fontSize: 13, fontWeight: 700, color: '#fff',
+                    background: overdue ? '#c0392b' : colors.accent, borderRadius: 12,
+                    padding: '4px 14px', whiteSpace: 'nowrap',
+                  }}>納期 {fmtMD(dl)}（{dayName(dl)}）{overdue ? ' 超過' : ''}</span>
+                );
+              })()}
+              <span style={{ fontSize: 11, color: colors.textMute }}>
+                {section.projects.length}案件 ・ 残 {section.remaining}h
+              </span>
+            </div>
+          ) : section.companyName && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 4 }}>
               <span style={{
                 fontSize: 13, fontWeight: 700, color: '#fff',
