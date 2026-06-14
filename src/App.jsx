@@ -2516,7 +2516,8 @@ function InputView({ embedded, form, setForm, handleSubmit, editingId, editMode,
   const [inputTab, setInputTab] = useState('list');
   // 新規タスク登録フォームの折畳み（カレンダー・担当者別では既定で折畳み）
   const [formCollapsed, setFormCollapsed] = useState(false);
-  const switchTab = (t) => { setInputTab(t); setFormCollapsed(t !== 'list' && !editMode); };
+  // カレンダー／担当者別では折畳む。進行中一覧では現在の折畳み状態を維持（勝手に開かない）
+  const switchTab = (t) => { setInputTab(t); if (t !== 'list' && !editMode) setFormCollapsed(true); };
   // 編集を開始したら自動で展開する
   useEffect(() => { if (editMode) setFormCollapsed(false); }, [editMode]);
   const inputStyle = {
