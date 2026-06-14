@@ -3844,23 +3844,29 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
                   maxWidth: 260, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                 }}>📝 {pg.memo}</span>
               )}
-              <span style={{ marginLeft: 'auto', fontSize: 11, color: colors.textMute, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end' }}>
-                {pg.assignees && pg.assignees.length > 0 && (
-                  <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: colors.text, fontWeight: 500 }}>
-                    <User size={12} /> {pg.assignees.join('・')}
-                  </span>
-                )}
-                {pg.scheduledStart && pg.scheduledEnd && (
-                  <span style={{ color: colors.accent, fontWeight: 500, whiteSpace: 'nowrap' }}>
-                    {fmtMD(pg.scheduledStart)}（{dayName(pg.scheduledStart)}）{minToTime(pg.scheduledStartMin)}
-                    {' 〜 '}
-                    {fmtMD(pg.scheduledEnd)}（{dayName(pg.scheduledEnd)}）{minToTime(pg.scheduledEndMin)}
-                  </span>
-                )}
-                <span>{pg.viewpointGroups.length}視点</span>
-                <span>{pg.taskCount}タスク</span>
-                <span>完了 {pg.completedHours}h / 全 {pg.totalHours}h</span>
-                <span style={{ color: colors.accent, fontWeight: 600 }}>残 {remaining}h</span>
+              <span style={{ marginLeft: 'auto', fontSize: 11, color: colors.textMute, display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'flex-end' }}>
+                {/* 1段目：担当者 ＋ 予定（開始〜終了） */}
+                <span style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end' }}>
+                  {pg.assignees && pg.assignees.length > 0 && (
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: colors.text, fontWeight: 500 }}>
+                      <User size={12} /> {pg.assignees.join('・')}
+                    </span>
+                  )}
+                  {pg.scheduledStart && pg.scheduledEnd && (
+                    <span style={{ color: colors.accent, fontWeight: 500, whiteSpace: 'nowrap' }}>
+                      {fmtMD(pg.scheduledStart)}（{dayName(pg.scheduledStart)}）{minToTime(pg.scheduledStartMin)}
+                      {' 〜 '}
+                      {fmtMD(pg.scheduledEnd)}（{dayName(pg.scheduledEnd)}）{minToTime(pg.scheduledEndMin)}
+                    </span>
+                  )}
+                </span>
+                {/* 2段目：視点・タスク・完了/全・残 */}
+                <span style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end' }}>
+                  <span>{pg.viewpointGroups.length}視点</span>
+                  <span>{pg.taskCount}タスク</span>
+                  <span>完了 {pg.completedHours}h / 全 {pg.totalHours}h</span>
+                  <span style={{ color: colors.accent, fontWeight: 600 }}>残 {remaining}h</span>
+                </span>
               </span>
               {draggable && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
