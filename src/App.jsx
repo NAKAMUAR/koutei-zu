@@ -2801,8 +2801,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
             <div style={{ fontSize: 10, color: colors.textMute, marginTop: 4 }}>案件全体の納期。各視点の「納期」（個別設定）が入っていればそちらを優先します</div>
           </div>
           <div style={{ gridColumn: 'span 2' }}>
-            <label style={labelStyle}>スケジュールプレビュー（他タスクを含めた実際の予定・開始/終了/納期は下の各視点の欄で設定）</label>
-            {previewSchedule ? (
+            {previewSchedule && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600, flexWrap: 'wrap' }}>
                 <span style={{ color: previewSchedule.moved ? '#c46a16' : colors.accent }}>
                   開始予定: {fmtMD(previewSchedule.startDate)}({dayName(previewSchedule.startDate)}) {minToTime(previewSchedule.startMin)}
@@ -2812,8 +2811,6 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                   終了予定: {fmtMD(previewSchedule.endDate)}({dayName(previewSchedule.endDate)}) {minToTime(previewSchedule.endMin)}
                 </span>
               </div>
-            ) : (
-              <div style={{ fontSize: 12, color: colors.textMute }}>視点とステップ（制作時間）を入力すると表示されます</div>
             )}
             {previewSchedule?.moved && (
               <div style={{ fontSize: 11, color: '#c46a16', marginTop: 6, fontWeight: 500 }}>
@@ -2849,9 +2846,6 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                 style={{ width: 15, height: 15, accentColor: '#c46a16', cursor: 'pointer' }} />
               仮案件（仮予定）として登録する
             </label>
-            <div style={{ fontSize: 10, color: colors.textMute, marginTop: 6 }}>
-              スケジュールの枠は通常どおり確保されます。一覧・カレンダーに「仮」マークが付き、編集でチェックを外せば本登録になります
-            </div>
             {form.tentative && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
                 <span style={{ fontSize: 12, color: '#c46a16', fontWeight: 600, whiteSpace: 'nowrap', minWidth: 84 }}>対応想定期間</span>
