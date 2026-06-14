@@ -2787,7 +2787,6 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
           <div>
             <label style={labelStyle}>
               {editMode ? '担当者（既定）' : 'デフォルト担当者'}
-              {!editMode && <span style={{ color: colors.textMute, fontSize: 10 }}>※視点ごとに上書き可</span>}
             </label>
             <div style={{ display: 'flex', gap: 6, alignItems: 'stretch' }}>
               <Combobox value={form.assignee} onChange={(v) => setForm({ ...form, assignee: v })}
@@ -2829,9 +2828,8 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                 </button>
               )}
             </div>
-            <div style={{ fontSize: 10, color: colors.textMute, marginTop: 4 }}>案件全体の納期。各視点の「納期」（個別設定）が入っていればそちらを優先します</div>
           </div>
-          <div style={{ gridColumn: 'span 2' }}>
+          <div style={{ gridColumn: '1 / -1' }}>
             {previewSchedule && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600, flexWrap: 'wrap' }}>
                 <span style={{ color: previewSchedule.moved ? '#c46a16' : colors.accent }}>
