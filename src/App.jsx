@@ -286,6 +286,27 @@ function normalizePriorities(tasks) {
   return [...renumbered, ...done];
 }
 
+// 納期（"YYYY-MM-DD"）を比較可能な数値キーに変換する。未設定・不正は最後（Infinity）。
+function deadlineKey(dl) {
+  if (!dl) return Infinity;
+  const n = parseInt(String(dl).replace(/-/g, ''), 10);
+  return isNaN(n) ? Infinity : n;
+}
+// タスクの実効納期（個別納期＞全体納期）の数値キー。
+function effectiveDeadlineKey(t) {
+  return deadlineKey(t.deadline || t.projectDeadline);
+}
+// 優先順位は廃止。新規案件の既定の並び順は「同じ会社の中で納期（実効）の早い順」。
+// 同じ会社の進行中タスクのうち、実効納期がこの案件以前のものの件数＋0.5 を仮の priority として返す。
+// （normalizePriorities が整数へ振り直す。手動ドラッグ／↑↓で上書き可能）
+function deadlineInsertPriority(activeSameCompanyTasks, formDeadlineKey) {
+  let before = 0;
+  for (const t of activeSameCompanyTasks) {
+    if (effectiveDeadlineKey(t) <= formDeadlineKey) before++;
+  }
+  return before + 0.5;
+}
+
 // 会社のランク（小さいほど上）。プリセットの並び順を基準にし、
 // 「オフショア（その他）」と会社未設定は常に最後に回す。
 function companyRank(name) {
@@ -739,9 +760,9 @@ function formEditIds(form) {
 }
 
 // フォーム内容を、スケジュール計算に使える簡易タスクレコード群へ変換（プレビュー／確認用）
-function formPreviewRecords(form, activeCount, taskById) {
+function formPreviewRecords(form, defaultPriority, taskById) {
   let priority = parseInt(form.priority, 10);
-  if (isNaN(priority) || priority < 1) priority = activeCount + 1;
+  if (isNaN(priority) || priority < 1) priority = defaultPriority;
   const records = [];
   let seq = 0;
   for (const vp of (form.viewpoints || [])) {
@@ -786,9 +807,13 @@ function formPreviewRecords(form, activeCount, taskById) {
 // 納期チェック（視点の終了予定が納期を超えていないか）の結果を返す
 function simulateFormSchedule(form, allTasks, settings, projectOrder, now) {
   const editIds = formEditIds(form);
-  const activeCount = allTasks.filter(t => t.status !== 'done' && !editIds.has(t.id)).length;
+  // 優先順位は廃止。プレビューも実登録と同じく「同じ会社の中で納期（実効）の早い順」で既定位置を決める。
+  const companyName = (form.companyName || '').trim();
+  const activeSameCompany = allTasks.filter(t => t.status !== 'done' && !editIds.has(t.id) && (t.companyName || '') === companyName);
+  const dlKey = Math.min(...(form.viewpoints || []).map(v => deadlineKey((v.deadline || '').trim() || (form.projectDeadline || '').trim())));
+  const defaultPriority = deadlineInsertPriority(activeSameCompany, dlKey);
   const taskById = new Map(allTasks.map(t => [t.id, t]));
-  const { records } = formPreviewRecords(form, activeCount, taskById);
+  const { records } = formPreviewRecords(form, defaultPriority, taskById);
   if (records.length === 0) return null;
   // 完了タスクは編集中でも常に含める（実績＝doneFloor はフォームでは変わらないため）。
   // 除外は編集中のアクティブなレコードのみ
@@ -864,6 +889,8 @@ function groupByViewpoint(tasks) {
         assignee: task.assignee,
         memo: task.memo || '',
         tentative: !!task.tentative,
+        tentativeStart: task.tentativeStart || '',
+        tentativeEnd: task.tentativeEnd || '',
         deadline: task.deadline || '',                       // 実効納期（後で個別＞全体で確定）
         individualDeadline: task.deadline || '',             // 個別納期（視点）
         projectDeadline: task.projectDeadline || '',         // 全体納期（案件）
@@ -874,6 +901,8 @@ function groupByViewpoint(tasks) {
     groups[key].tasks.push(task);
     if (!groups[key].memo && task.memo) groups[key].memo = task.memo;
     if (task.tentative) groups[key].tentative = true;
+    if (!groups[key].tentativeStart && task.tentativeStart) groups[key].tentativeStart = task.tentativeStart;
+    if (!groups[key].tentativeEnd && task.tentativeEnd) groups[key].tentativeEnd = task.tentativeEnd;
     if (task.deadline && (!groups[key].individualDeadline || task.deadline < groups[key].individualDeadline)) groups[key].individualDeadline = task.deadline;
     if (task.projectDeadline && !groups[key].projectDeadline) groups[key].projectDeadline = task.projectDeadline;
     if (task.priority < groups[key].minPriority) groups[key].minPriority = task.priority;
@@ -941,7 +970,7 @@ export default function App() {
   // 初期表示は「パース」プリセット
   const makeEmptyViewpoint = () => makeViewpointFromPreset(VIEWPOINT_PRESETS[0]);
   const emptyForm = {
-    projectName: '', projectNameInternal: '', companyName: '', customerContact: '', assignee: '', priority: '', memo: '', tentative: false,
+    projectName: '', projectNameInternal: '', companyName: '', customerContact: '', assignee: '', priority: '', memo: '', tentative: false, tentativeStart: '', tentativeEnd: '',
     // 案件全体の納期（全体設定）。各視点の納期（個別設定）が未設定のとき適用する
     projectDeadline: '',
     // 視点（担当タスク）の動的リスト。各視点の中にステップ（工程）を持つ。
@@ -1215,10 +1244,14 @@ export default function App() {
       alert('案件名を入力してください');
       return;
     }
+    // 優先順位は廃止。編集時は既存の順位（form.priority）を保持し、
+    // 新規登録時は「同じ会社の中で納期（実効）の早い順」の位置に挿入する（手動ドラッグ／↑↓で上書き可）。
     let priority = parseInt(form.priority, 10);
-    const activeCount = tasks.filter(t => t.status !== 'done').length;
     if (isNaN(priority) || priority < 1) {
-      priority = activeCount + 1;
+      const companyName = (form.companyName || '').trim();
+      const activeSameCompany = tasks.filter(t => t.status !== 'done' && (t.companyName || '') === companyName);
+      const dlKey = Math.min(...(form.viewpoints || []).map(v => deadlineKey((v.deadline || '').trim() || (form.projectDeadline || '').trim())));
+      priority = deadlineInsertPriority(activeSameCompany, dlKey);
     }
 
     // フォーム → タスクレコード化（編集モード共通の前処理）
@@ -1269,6 +1302,8 @@ export default function App() {
             priority, hours: stepHours, completedHours: stepCompleted,
             memo: (form.memo || '').trim(),
             tentative: !!form.tentative,
+            tentativeStart: form.tentative ? (form.tentativeStart || null) : null,
+            tentativeEnd: form.tentative ? (form.tentativeEnd || null) : null,
             deadline: vp.deadline || null,               // 個別納期（視点）
             projectDeadline: (form.projectDeadline || '').trim() || null, // 全体納期（案件）
             // ステップ個別の開始・終了指定は維持（フォームの欄は下で先頭/末尾の未完了ステップに適用）
@@ -1428,6 +1463,8 @@ export default function App() {
       priority: String(task.priority),
       memo: task.memo || '',
       tentative: !!task.tentative,
+      tentativeStart: task.tentativeStart || '',
+      tentativeEnd: task.tentativeEnd || '',
       projectDeadline: task.projectDeadline || '',
       viewpoints: [{
         viewpointName: task.viewpointName || '',
@@ -1494,6 +1531,8 @@ export default function App() {
       priority: priorityPool.length > 0 ? String(Math.min(...priorityPool.map(t => t.priority))) : '',
       memo: (projectTasks.find(t => t.memo) || {}).memo || '',
       tentative: projectTasks.some(t => t.tentative),
+      tentativeStart: (projectTasks.find(t => t.tentativeStart) || {}).tentativeStart || '',
+      tentativeEnd: (projectTasks.find(t => t.tentativeEnd) || {}).tentativeEnd || '',
       projectDeadline: (projectTasks.find(t => t.projectDeadline) || {}).projectDeadline || '',
       viewpoints,
     });
@@ -1550,14 +1589,19 @@ export default function App() {
   const handleAddViewpointToProject = (projectName, projectNameInternal) => {
     // 同じ案件の既存タスクから会社名・お客様担当者を引き継ぐ
     const sibling = tasksRef.current.find(t => t.projectName === projectName);
+    // 視点追加で案件の並び順が動かないよう、既存案件の優先順位（進行中の最小）を引き継ぐ
+    const activeSiblings = tasksRef.current.filter(t => t.projectName === projectName && t.status !== 'done');
     setForm({
       ...emptyForm,
       projectName: projectName || '',
       projectNameInternal: projectNameInternal || '',
       companyName: sibling?.companyName || '',
       customerContact: sibling?.customerContact || '',
+      priority: activeSiblings.length ? String(Math.min(...activeSiblings.map(t => t.priority))) : '',
       memo: sibling?.memo || '',
       tentative: !!sibling?.tentative,
+      tentativeStart: sibling?.tentativeStart || '',
+      tentativeEnd: sibling?.tentativeEnd || '',
       projectDeadline: sibling?.projectDeadline || '',
       viewpoints: [makeEmptyViewpoint()],
     });
@@ -1666,6 +1710,8 @@ export default function App() {
           customerContact: (info.customerContact || '').trim(),
           memo: (info.memo || '').trim(),
           tentative: !!info.tentative,
+          tentativeStart: info.tentative ? (info.tentativeStart || null) : null,
+          tentativeEnd: info.tentative ? (info.tentativeEnd || null) : null,
         }
         : t
     )));
@@ -2590,7 +2636,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
       companyName: proj.companyName || '',
       customerContact: proj.customerContact || '',
       assignee: proj.lastAssignee || '',
-      priority: '', memo: '', tentative: false,
+      priority: '', memo: '', tentative: false, tentativeStart: '', tentativeEnd: '',
       viewpoints: [makeViewpointFromPreset(VIEWPOINT_PRESETS[0])],
     });
     setQuoteOpen(false);
@@ -2740,12 +2786,6 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
             </div>
           </div>
           <div>
-            <label style={labelStyle}>優先順位（番号・小さいほど優先）</label>
-            <input type="number" min="1" step="1" value={form.priority}
-              onChange={(e) => setForm({ ...form, priority: e.target.value })}
-              placeholder="未入力なら末尾に追加" style={inputStyle} />
-          </div>
-          <div>
             <label style={labelStyle}>全体納期（案件共通・任意）</label>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <input type="date" value={form.projectDeadline || ''}
@@ -2812,6 +2852,19 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
             <div style={{ fontSize: 10, color: colors.textMute, marginTop: 6 }}>
               スケジュールの枠は通常どおり確保されます。一覧・カレンダーに「仮」マークが付き、編集でチェックを外せば本登録になります
             </div>
+            {form.tentative && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+                <span style={{ fontSize: 12, color: '#c46a16', fontWeight: 600, whiteSpace: 'nowrap', minWidth: 84 }}>対応想定期間</span>
+                <input type="date" value={form.tentativeStart || ''}
+                  onChange={(e) => setForm({ ...form, tentativeStart: e.target.value })}
+                  style={{ ...inputStyle, width: 'auto', flex: '0 0 160px' }} />
+                <span style={{ fontSize: 12, color: colors.textMute }}>〜</span>
+                <input type="date" value={form.tentativeEnd || ''}
+                  onChange={(e) => setForm({ ...form, tentativeEnd: e.target.value })}
+                  style={{ ...inputStyle, width: 'auto', flex: '0 0 160px' }} />
+                <span style={{ fontSize: 10, color: colors.textMute }}>任意・いつ頃対応する見込みかの目安（開始予定日〜終了予定日）</span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -3313,6 +3366,8 @@ function ProjectInfoEditor({ pg, companyList, onSave, onCancel, colors, fontJP }
     customerContact: pg.customerContact || '',
     memo: pg.memo || '',
     tentative: !!pg.tentative,
+    tentativeStart: pg.tentativeStart || '',
+    tentativeEnd: pg.tentativeEnd || '',
   });
   const set = (k, val) => setV(p => ({ ...p, [k]: val }));
   const inputStyle = {
@@ -3360,6 +3415,16 @@ function ProjectInfoEditor({ pg, companyList, onSave, onCancel, colors, fontJP }
           style={{ width: 15, height: 15, accentColor: '#c46a16', cursor: 'pointer' }} />
         仮案件（仮予定）として登録する
       </label>
+      {v.tentative && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+          <span style={{ fontSize: 12, color: '#c46a16', fontWeight: 600, whiteSpace: 'nowrap' }}>対応想定期間</span>
+          <input type="date" value={v.tentativeStart} onChange={(e) => set('tentativeStart', e.target.value)}
+            style={{ ...inputStyle, width: 'auto', flex: '0 0 160px' }} />
+          <span style={{ fontSize: 12, color: colors.textMute }}>〜</span>
+          <input type="date" value={v.tentativeEnd} onChange={(e) => set('tentativeEnd', e.target.value)}
+            style={{ ...inputStyle, width: 'auto', flex: '0 0 160px' }} />
+        </div>
+      )}
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
         <button type="button" onClick={onCancel}
           style={{ padding: '7px 14px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, color: colors.textMute }}>
@@ -3410,6 +3475,8 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
           customerContact: g.customerContact || '',
           memo: g.memo || '',
           tentative: !!g.tentative,
+          tentativeStart: g.tentativeStart || '',
+          tentativeEnd: g.tentativeEnd || '',
           deadline: g.deadline || '',           // 表示・納期順ソート用＝視点ごと実効納期の最早
           projectDeadline: g.projectDeadline || '', // 全体納期（案件共通）
           viewpointGroups: [],
@@ -3432,6 +3499,8 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
       if (!pg.customerContact && g.customerContact) pg.customerContact = g.customerContact;
       if (!pg.memo && g.memo) pg.memo = g.memo;
       if (g.tentative) pg.tentative = true;
+      if (!pg.tentativeStart && g.tentativeStart) pg.tentativeStart = g.tentativeStart;
+      if (!pg.tentativeEnd && g.tentativeEnd) pg.tentativeEnd = g.tentativeEnd;
       // 案件の納期 ＝ 視点ごとの実効納期のうち最も早いもの（表示・納期順ソート用）
       if (g.deadline && (!pg.deadline || g.deadline < pg.deadline)) pg.deadline = g.deadline;
       // 全体納期（案件共通）はどの視点でも同じ値（最初に見つかったもの）
@@ -3680,6 +3749,15 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
                   fontSize: 10, fontWeight: 700, color: '#fff', background: '#c46a16',
                   borderRadius: 2, padding: '2px 6px', flexShrink: 0,
                 }} title="仮案件（仮予定）です。編集フォームで本登録に切り替えられます">仮</span>
+              )}
+              {pg.tentative && (pg.tentativeStart || pg.tentativeEnd) && (
+                <span style={{
+                  fontSize: 10, fontWeight: 600, color: '#c46a16', flexShrink: 0, whiteSpace: 'nowrap',
+                }} title="仮案件の対応想定期間（開始予定日〜終了予定日）">
+                  {pg.tentativeStart ? pg.tentativeStart.slice(5).replace('-', '/') : ''}
+                  〜
+                  {pg.tentativeEnd ? pg.tentativeEnd.slice(5).replace('-', '/') : ''}
+                </span>
               )}
               {sortMode === 'deadline' && pg.companyName && (
                 <span style={{
