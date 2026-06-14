@@ -892,7 +892,8 @@ function simulateFormSchedule(form, allTasks, settings, projectOrder, now) {
   // 納期チェック：視点の終了予定（日付）が納期（日付）より後なら違反
   const deadlineViolations = [];
   for (const vp of (form.viewpoints || [])) {
-    const dl = (vp.deadline || '').trim();
+    // 実効納期＝個別（視点）＞全体（案件）
+    const dl = ((vp.deadline || '').trim() || (form.projectDeadline || '').trim());
     if (!dl) continue;
     const name = (vp.viewpointName || '').trim() || '視点';
     const r = vpEnds.get(name);
@@ -930,7 +931,9 @@ function groupByViewpoint(tasks) {
         assignee: task.assignee,
         memo: task.memo || '',
         tentative: !!task.tentative,
-        deadline: task.deadline || '',
+        deadline: task.deadline || '',                       // 実効納期（後で個別＞全体で確定）
+        individualDeadline: task.deadline || '',             // 個別納期（視点）
+        projectDeadline: task.projectDeadline || '',         // 全体納期（案件）
         tasks: [],
         minPriority: task.priority,
       };
@@ -938,11 +941,14 @@ function groupByViewpoint(tasks) {
     groups[key].tasks.push(task);
     if (!groups[key].memo && task.memo) groups[key].memo = task.memo;
     if (task.tentative) groups[key].tentative = true;
-    if (task.deadline && (!groups[key].deadline || task.deadline < groups[key].deadline)) groups[key].deadline = task.deadline;
+    if (task.deadline && (!groups[key].individualDeadline || task.deadline < groups[key].individualDeadline)) groups[key].individualDeadline = task.deadline;
+    if (task.projectDeadline && !groups[key].projectDeadline) groups[key].projectDeadline = task.projectDeadline;
     if (task.priority < groups[key].minPriority) groups[key].minPriority = task.priority;
   }
   // 各グループ内：stepOrder → priority → createdAt の順
   for (const g of Object.values(groups)) {
+    // 実効納期＝個別（視点）＞全体（案件）
+    g.deadline = g.individualDeadline || g.projectDeadline || '';
     g.tasks.sort((a, b) => {
       const ao = a.stepOrder == null ? -1 : a.stepOrder;
       const bo = b.stepOrder == null ? -1 : b.stepOrder;
@@ -1003,8 +1009,10 @@ export default function App() {
   const makeEmptyViewpoint = () => makeViewpointFromPreset(VIEWPOINT_PRESETS[0]);
   const emptyForm = {
     projectName: '', projectNameInternal: '', companyName: '', customerContact: '', assignee: '', priority: '', memo: '', tentative: false,
+    // 案件全体の納期（全体設定）。各視点の納期（個別設定）が未設定のとき適用する
+    projectDeadline: '',
     // 視点（担当タスク）の動的リスト。各視点の中にステップ（工程）を持つ。
-    // 開始時間・終了時間・納期は視点ごとに設定する（案件の大枠設定は廃止）
+    // 開始時間・終了時間は視点ごとに設定。納期は「全体（案件）＋個別（視点）」で、個別が優先される
     viewpoints: [makeEmptyViewpoint()],
   };
   const [form, setForm] = useState(emptyForm);
@@ -1328,7 +1336,8 @@ export default function App() {
             priority, hours: stepHours, completedHours: stepCompleted,
             memo: (form.memo || '').trim(),
             tentative: !!form.tentative,
-            deadline: vp.deadline || null,
+            deadline: vp.deadline || null,               // 個別納期（視点）
+            projectDeadline: (form.projectDeadline || '').trim() || null, // 全体納期（案件）
             // ステップ個別の開始・終了指定は維持（フォームの欄は下で先頭/末尾の未完了ステップに適用）
             manualStart: existing?.manualStart || null,
             manualEnd: existing?.manualEnd || null,
@@ -1486,6 +1495,7 @@ export default function App() {
       priority: String(task.priority),
       memo: task.memo || '',
       tentative: !!task.tentative,
+      projectDeadline: task.projectDeadline || '',
       viewpoints: [{
         viewpointName: task.viewpointName || '',
         assignee: task.assignee || '',
@@ -1551,6 +1561,7 @@ export default function App() {
       priority: priorityPool.length > 0 ? String(Math.min(...priorityPool.map(t => t.priority))) : '',
       memo: (projectTasks.find(t => t.memo) || {}).memo || '',
       tentative: projectTasks.some(t => t.tentative),
+      projectDeadline: (projectTasks.find(t => t.projectDeadline) || {}).projectDeadline || '',
       viewpoints,
     });
     setEditingId(null);
@@ -1614,6 +1625,7 @@ export default function App() {
       customerContact: sibling?.customerContact || '',
       memo: sibling?.memo || '',
       tentative: !!sibling?.tentative,
+      projectDeadline: sibling?.projectDeadline || '',
       viewpoints: [makeEmptyViewpoint()],
     });
     setEditingId(null);
@@ -1654,6 +1666,7 @@ export default function App() {
       customerContact: group.customerContact || first.customerContact || '',
       assignee: group.assignee,
       priority: String(group.minPriority || first.priority),
+      projectDeadline: group.projectDeadline || first.projectDeadline || '',
       viewpoints,
     });
     setEditingId(null);
@@ -1672,8 +1685,9 @@ export default function App() {
       customerContact: group.customerContact || '',
       assignee: group.assignee,
       priority: String(group.minPriority),
-      // 追加ステップはこの視点の納期を引き継ぐ（開始・終了の指定は既存ステップ側を維持）
-      viewpoints: [{ viewpointName: group.viewpointName, assignee: group.assignee, manualStart: '', manualEnd: '', deadline: group.deadline || '', steps: [{ name: '', hours: '', completedHours: '' }] }],
+      projectDeadline: group.projectDeadline || '',
+      // 追加ステップはこの視点の個別納期を引き継ぐ（開始・終了の指定は既存ステップ側を維持）
+      viewpoints: [{ viewpointName: group.viewpointName, assignee: group.assignee, manualStart: '', manualEnd: '', deadline: group.individualDeadline || '', steps: [{ name: '', hours: '', completedHours: '' }] }],
     });
     setEditingId(null);
     setEditMode(null);
@@ -1689,11 +1703,18 @@ export default function App() {
     saveTasks(prev => normalizePriorities(prev.map(t => ids.has(t.id) ? { ...t, assignee: na } : t)));
   };
 
-  // 納期の変更（視点内の全ステップに一括反映）。空なら納期なしにする
+  // 個別納期の変更（視点内の全ステップに一括反映）。空なら個別を解除（＝全体納期に従う）
   const setViewpointDeadline = (group, value) => {
     const dl = (value || '').trim();
     const ids = new Set(group.tasks.map(t => t.id));
     saveTasks(prev => prev.map(t => ids.has(t.id) ? { ...t, deadline: dl || null } : t));
+  };
+
+  // 全体納期（案件共通）の変更。その案件の全タスク（完了済み含む）に一括反映する。
+  // 空なら全体納期なし（各視点は個別納期があればそれを使い、無ければ納期なし）
+  const setProjectDeadline = (projectName, value) => {
+    const dl = (value || '').trim();
+    saveTasks(prev => prev.map(t => t.projectName === projectName ? { ...t, projectDeadline: dl || null } : t));
   };
 
   // 進行中タスクの案件ヘッダーからインラインで案件情報を編集する。
@@ -2087,7 +2108,8 @@ export default function App() {
         projectName: first.projectName,
         viewpointName: first.viewpointName,
         assignee: first.assignee,
-        deadline: (vtasks.find(t => t.deadline) || {}).deadline || '',
+        // 実効納期＝個別（視点）＞全体（案件）
+        deadline: (vtasks.find(t => t.deadline) || {}).deadline || (vtasks.find(t => t.projectDeadline) || {}).projectDeadline || '',
         tasks: vtasks, endTs, endDate: new Date(endTs),
       });
     }
@@ -2311,7 +2333,7 @@ export default function App() {
             handleDeleteViewpoint={handleDeleteViewpoint}
             handleDelete={handleDelete} toggleStatus={toggleStatus}
             moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={setDragTaskId} onDropTask={reorderTaskPriority} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} completeProject={completeProject} cancelProject={cancelProject} completeViewpoint={completeViewpoint}
-            handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} saveProjectInfo={saveProjectInfo}
+            handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline}
             finalizeReview={finalizeReview} reopenReview={reopenReview} setReviewNote={setReviewNote} setReviewActualEnd={setReviewActualEnd}
             projectList={projectList} projectInternalList={projectInternalList} viewpointList={viewpointList} assigneeList={assigneeList} assigneeOrder={assigneeOrder}
             settings={settings} now={now}
@@ -2324,7 +2346,7 @@ export default function App() {
         )}
         {view === 'byAssignee' && (
           <AssigneeView scheduled={scheduled} selectedAssignee={selectedAssignee} setSelectedAssignee={setSelectedAssignee} now={now} assigneeOrder={assigneeOrder}
-            companyOrder={settings.companyOrder || []} companyList={companyList} saveProjectInfo={saveProjectInfo}
+            companyOrder={settings.companyOrder || []} companyList={companyList} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline}
             projectOrder={projectOrder} saveProjectOrder={saveProjectOrderPartial}
             handleEdit={handleEdit} handleEditProject={handleEditProject} handleEditViewpoint={handleEditViewpoint}
             handleAddViewpointToProject={handleAddViewpointToProject}
@@ -2515,7 +2537,7 @@ function NavButton({ active, onClick, icon, label, badge }) {
 }
 
 // ============ 入力ビュー ============
-function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdit, tasks, scheduled, projectOrder, saveProjectOrder, companyList, customerMaster, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, saveProjectInfo, finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, projectList, projectInternalList, viewpointList, assigneeList, assigneeOrder, settings, now, colors, fontJP, fontDisplay }) {
+function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdit, tasks, scheduled, projectOrder, saveProjectOrder, companyList, customerMaster, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, saveProjectInfo, setProjectDeadline, finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, projectList, projectInternalList, viewpointList, assigneeList, assigneeOrder, settings, now, colors, fontJP, fontDisplay }) {
   // お客様担当者の候補：会社名を選んでいればその会社の担当者を優先表示
   const contactOptions = useMemo(() => {
     const rows = customerMaster || [];
@@ -2618,7 +2640,9 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
     for (const t of scheduled.active) {
       if (!t.projectName) continue;
       const e = map.get(t.projectName) || { projectName: t.projectName, projectNameInternal: t.projectNameInternal || '', deadline: '', endTs: null };
-      if (t.deadline && (!e.deadline || t.deadline < e.deadline)) e.deadline = t.deadline;
+      // 実効納期＝個別（視点）＞全体（案件）
+      const eff = t.deadline || t.projectDeadline || '';
+      if (eff && (!e.deadline || eff < e.deadline)) e.deadline = eff;
       if (t.scheduledEnd) {
         const ts = t.scheduledEnd.getTime() + (t.scheduledEndMin || 0) * 60000;
         if (e.endTs == null || ts > e.endTs) e.endTs = ts;
@@ -2667,7 +2691,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
 
   const isFormDirty = () => {
     const f = form;
-    if ((f.projectName || f.projectNameInternal || f.companyName || f.customerContact || f.assignee || f.priority || '').toString().trim()) return true;
+    if ((f.projectName || f.projectNameInternal || f.companyName || f.customerContact || f.assignee || f.priority || f.projectDeadline || '').toString().trim()) return true;
     for (const vp of (f.viewpoints || [])) {
       if ((vp.viewpointName || '').trim() || (vp.assignee || '').trim()) return true;
       if ((vp.manualStart || '').trim() || (vp.manualEnd || '').trim() || (vp.deadline || '').trim()) return true;
@@ -2839,6 +2863,21 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
               onChange={(e) => setForm({ ...form, priority: e.target.value })}
               placeholder="未入力なら末尾に追加" style={inputStyle} />
           </div>
+          <div>
+            <label style={labelStyle}>全体納期（案件共通・任意）</label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input type="date" value={form.projectDeadline || ''}
+                onChange={(e) => setForm({ ...form, projectDeadline: e.target.value })}
+                style={{ ...inputStyle, flex: '0 0 160px', width: 'auto' }} />
+              {form.projectDeadline && (
+                <button type="button" onClick={() => setForm({ ...form, projectDeadline: '' })}
+                  style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '6px 10px', borderRadius: 3, fontSize: 11, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP }}>
+                  クリア
+                </button>
+              )}
+            </div>
+            <div style={{ fontSize: 10, color: colors.textMute, marginTop: 4 }}>案件全体の納期。各視点の「納期」（個別設定）が入っていればそちらを優先します</div>
+          </div>
           <div style={{ gridColumn: 'span 2' }}>
             <label style={labelStyle}>スケジュールプレビュー（他タスクを含めた実際の予定・開始/終了/納期は下の各視点の欄で設定）</label>
             {previewSchedule ? (
@@ -2981,7 +3020,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                       <span style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', minWidth: 64, fontWeight: 600 }}>
-                        納期
+                        納期（個別）
                       </span>
                       <input type="date" value={vp.deadline || ''}
                         onChange={(e) => setVpDeadline(vi, e.target.value)}
@@ -2992,7 +3031,9 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                           クリア
                         </button>
                       )}
-                      <span style={{ fontSize: 10, color: colors.textMute }}>任意・お客様への提出日。「納期順」表示と納期超過の警告に使用</span>
+                      <span style={{ fontSize: 10, color: colors.textMute }}>
+                        任意・この視点の個別納期。未設定なら全体納期{form.projectDeadline ? `（${form.projectDeadline}）` : ''}を使用
+                      </span>
                     </div>
                   </div>
 
@@ -3209,7 +3250,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                   handleDeleteViewpoint={handleDeleteViewpoint}
                   handleDelete={handleDelete} toggleStatus={toggleStatus}
                   moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={onDragTask} onDropTask={onDropTask} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} completeProject={completeProject} cancelProject={cancelProject} completeViewpoint={completeViewpoint}
-                  handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} saveProjectInfo={saveProjectInfo} companyList={companyList} assigneeList={assigneeList}
+                  handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline} companyList={companyList} assigneeList={assigneeList}
                   colors={colors} fontJP={fontJP} />
               </section>
             );
@@ -3229,7 +3270,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
             handleDeleteViewpoint={handleDeleteViewpoint}
             handleDelete={handleDelete} toggleStatus={toggleStatus}
             moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={onDragTask} onDropTask={onDropTask} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} completeProject={completeProject} cancelProject={cancelProject} completeViewpoint={completeViewpoint}
-            handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} saveProjectInfo={saveProjectInfo} companyList={companyList} assigneeList={assigneeList}
+            handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline} companyList={companyList} assigneeList={assigneeList}
             colors={colors} fontJP={fontJP} />
         )}
       </section>
@@ -3452,7 +3493,7 @@ function ProjectInfoEditor({ pg, companyList, onSave, onCancel, colors, fontJP }
 }
 
 // ============ 視点グループリスト ============
-function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder, saveProjectOrder, sortMode, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, saveProjectInfo, companyList, assigneeList, colors, fontJP }) {
+function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder, saveProjectOrder, sortMode, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, saveProjectInfo, setProjectDeadline, companyList, assigneeList, colors, fontJP }) {
   // 案件情報をインライン編集中の案件名（null = 非編集）
   const [editingInfo, setEditingInfo] = useState(null);
   // 全タスクのグローバルなインデックス（移動可否判定用）
@@ -3487,7 +3528,8 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
           customerContact: g.customerContact || '',
           memo: g.memo || '',
           tentative: !!g.tentative,
-          deadline: g.deadline || '',
+          deadline: g.deadline || '',           // 表示・納期順ソート用＝視点ごと実効納期の最早
+          projectDeadline: g.projectDeadline || '', // 全体納期（案件共通）
           viewpointGroups: [],
           totalHours: 0,
           completedHours: 0,
@@ -3508,8 +3550,10 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
       if (!pg.customerContact && g.customerContact) pg.customerContact = g.customerContact;
       if (!pg.memo && g.memo) pg.memo = g.memo;
       if (g.tentative) pg.tentative = true;
-      // 案件の納期 ＝ 視点ごとの納期のうち最も早いもの（表示・納期順ソート用）
+      // 案件の納期 ＝ 視点ごとの実効納期のうち最も早いもの（表示・納期順ソート用）
       if (g.deadline && (!pg.deadline || g.deadline < pg.deadline)) pg.deadline = g.deadline;
+      // 全体納期（案件共通）はどの視点でも同じ値（最初に見つかったもの）
+      if (g.projectDeadline && !pg.projectDeadline) pg.projectDeadline = g.projectDeadline;
       if (g.assignee) pg.assigneeSet.add(g.assignee);
       // 案件全体の開始＝最早の視点開始、終了＝最遅の視点終了
       if (g.scheduledStart) {
@@ -3788,7 +3832,35 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
                   お客様: {pg.customerContact}
                 </span>
               )}
-              {pg.deadline && (() => {
+              {setProjectDeadline ? (() => {
+                // 案件ヘッダーで「全体納期」を直接編集（案件の全タスクに反映）。個別納期があれば各視点側が優先
+                const todayYmd = fmtYMD(new Date());
+                const endYmd = pg.scheduledEnd ? fmtYMD(pg.scheduledEnd) : null;
+                const danger = pg.projectDeadline && (todayYmd > pg.projectDeadline || (endYmd && endYmd > pg.projectDeadline));
+                const d = pg.projectDeadline ? new Date(pg.projectDeadline + 'T00:00:00') : null;
+                return (
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}
+                    title="案件全体の納期（全体設定）。各視点に個別納期があればそちらが優先されます">
+                    <span style={{ fontSize: 11, fontWeight: 700, color: danger ? '#c1272d' : '#7a8471' }}>全体納期{danger ? ' ⚠' : ''}</span>
+                    <input type="date" value={pg.projectDeadline || ''}
+                      onChange={(e) => setProjectDeadline(pg.projectName, e.target.value)}
+                      style={{
+                        fontFamily: fontJP, fontSize: 11, padding: '2px 4px',
+                        border: `1px solid ${danger ? '#c1272d' : '#c9d4c2'}`, borderRadius: 2,
+                        background: danger ? '#fbeaea' : '#eef2ea',
+                        color: danger ? '#c1272d' : '#5a6a51', cursor: 'pointer',
+                      }} />
+                    {d && <span style={{ fontSize: 10, color: colors.textMute }}>（{dayName(d)}）</span>}
+                    {pg.projectDeadline && (
+                      <button type="button" title="全体納期をクリア（納期なしにする）"
+                        onClick={() => setProjectDeadline(pg.projectName, '')}
+                        style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: colors.textMute, padding: 0, display: 'flex', alignItems: 'center' }}>
+                        <X size={11} />
+                      </button>
+                    )}
+                  </span>
+                );
+              })() : (pg.deadline && (() => {
                 const todayYmd = fmtYMD(new Date());
                 const endYmd = pg.scheduledEnd ? fmtYMD(pg.scheduledEnd) : null;
                 const danger = todayYmd > pg.deadline || (endYmd && endYmd > pg.deadline);
@@ -3802,7 +3874,7 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
                     borderRadius: 2, padding: '1px 7px',
                   }}>納期 {fmtMD(d)}（{dayName(d)}）{danger ? ' ⚠' : ''}</span>
                 );
-              })()}
+              })())}
               {pg.memo && (
                 <span title={pg.memo} style={{
                   fontSize: 11, color: '#8a7a4a', background: '#faf5e4', border: '1px solid #e8dcb8',
@@ -3996,9 +4068,13 @@ function ViewpointCard({ group, now, allSortedIds, companyFirstIds, companyLastI
             {(() => {
               const todayYmd = fmtYMD(new Date());
               const endYmd = group.scheduledEnd ? fmtYMD(group.scheduledEnd) : null;
+              // 実効納期＝個別＞全体（group.deadline は集約済み）。危険判定は実効で行う
               const danger = group.deadline && (todayYmd > group.deadline || (endYmd && endYmd > group.deadline));
+              const indiv = group.individualDeadline || '';
+              const proj = group.projectDeadline || '';
+              const inherited = !indiv && !!proj; // 個別なし＝全体納期を継承
               const dl = group.deadline ? new Date(group.deadline + 'T00:00:00') : null;
-              // 納期はこの場で直接編集できる（視点内の全ステップに即反映）
+              // 読み取り専用フォールバック（ハンドラ未配線時）
               if (!setViewpointDeadline) {
                 if (!group.deadline) return null;
                 return (
@@ -4013,9 +4089,9 @@ function ViewpointCard({ group, now, allSortedIds, companyFirstIds, companyLastI
               }
               return (
                 <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}
-                  title="この視点の納期（お客様への提出日）。変更すると視点内の全ステップに即反映されます">
-                  <span style={{ fontSize: 10, fontWeight: 700, color: danger ? '#c1272d' : '#7a8471' }}>納期{danger ? ' ⚠' : ''}</span>
-                  <input type="date" value={group.deadline || ''}
+                  title="この視点の個別納期。空にすると全体納期（案件共通）に従います。変更は視点内の全ステップに即反映されます">
+                  <span style={{ fontSize: 10, fontWeight: 700, color: danger ? '#c1272d' : '#7a8471' }}>納期（個別）{danger ? ' ⚠' : ''}</span>
+                  <input type="date" value={indiv}
                     onChange={(e) => setViewpointDeadline(group, e.target.value)}
                     style={{
                       fontFamily: fontJP, fontSize: 11, padding: '2px 4px',
@@ -4023,13 +4099,17 @@ function ViewpointCard({ group, now, allSortedIds, companyFirstIds, companyLastI
                       background: danger ? '#fbeaea' : '#eef2ea',
                       color: danger ? '#c1272d' : '#5a6a51', cursor: 'pointer',
                     }} />
-                  {dl && <span style={{ fontSize: 10, color: colors.textMute }}>（{dayName(dl)}）</span>}
-                  {group.deadline && (
-                    <button type="button" title="納期をクリア（納期なしにする）"
+                  {indiv && (
+                    <button type="button" title="個別納期をクリア（全体納期に従う）"
                       onClick={() => setViewpointDeadline(group, '')}
                       style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: colors.textMute, padding: 0, display: 'flex', alignItems: 'center' }}>
                       <X size={11} />
                     </button>
+                  )}
+                  {inherited && dl && (
+                    <span style={{ fontSize: 10, color: danger ? '#c1272d' : colors.textMute }}>
+                      全体 {fmtMD(dl)}（{dayName(dl)}）を適用中
+                    </span>
                   )}
                 </span>
               );
@@ -5155,7 +5235,8 @@ function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact
   }
   const cancelled = !!task.cancelled;
   const tentative = !done && !!task.tentative;
-  const memoLine = (task.deadline ? `\n納期 ${(() => { const d = new Date(task.deadline + 'T00:00:00'); return isNaN(d.getTime()) ? task.deadline : `${d.getMonth() + 1}/${d.getDate()}`; })()}` : '') + (task.memo ? `\n📝 ${task.memo}` : '');
+  const effDeadline = task.deadline || task.projectDeadline || ''; // 実効納期＝個別＞全体
+  const memoLine = (effDeadline ? `\n納期 ${(() => { const d = new Date(effDeadline + 'T00:00:00'); return isNaN(d.getTime()) ? effDeadline : `${d.getMonth() + 1}/${d.getDate()}`; })()}` : '') + (task.memo ? `\n📝 ${task.memo}` : '');
   const title = done
     ? `【${cancelled ? '中止' : '完了'}】${nameLine}\n${minToTime(slot.startMin)}〜${minToTime(slot.endMin)} (${slot.hours}h)${aeStr ? `\n実終了 ${aeStr}` : ''}${memoLine}${onClick ? '\nクリックで案件を編集（終了時間の実績は完了タブで）' : '\n※終了時間（実績）は完了タブで編集できます'}`
     : `${tentative ? '【仮】' : ''}#${task.priority} ${nameLine}\n${minToTime(slot.startMin)}〜${minToTime(slot.endMin)} (${slot.hours}h)\n残り ${remaining}h / 全${task.hours}h${memoLine}${task.manualStart ? '\n※開始時間指定あり' : ''}${task.manualEnd ? '\n※終了予定指定あり' : ''}${task.delays && task.delays.length ? `\n※遅延履歴あり（${task.delays.length}回）` : ''}${onClick ? '\nクリックで案件を編集' : ''}${canDragProject ? '\nドラッグで案件の順番を変更' : ''}`;
@@ -5223,7 +5304,7 @@ function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact
 }
 
 // ============ 担当者別ビュー ============
-function AssigneeView({ scheduled, selectedAssignee, setSelectedAssignee, now, assigneeOrder, companyOrder, companyList, saveProjectInfo, projectOrder, saveProjectOrder, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, assigneeList, colors, fontJP, fontDisplay }) {
+function AssigneeView({ scheduled, selectedAssignee, setSelectedAssignee, now, assigneeOrder, companyOrder, companyList, saveProjectInfo, setProjectDeadline, projectOrder, saveProjectOrder, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, assigneeList, colors, fontJP, fontDisplay }) {
   const assignees = sortAssigneesByMaster([...new Set(scheduled.active.map(t => t.assignee))], assigneeOrder);
   if (assignees.length === 0) {
     return (
@@ -5310,7 +5391,7 @@ function AssigneeView({ scheduled, selectedAssignee, setSelectedAssignee, now, a
               handleDeleteViewpoint={handleDeleteViewpoint}
               handleDelete={handleDelete} toggleStatus={toggleStatus}
               moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={onDragTask} onDropTask={onDropTask} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} completeProject={completeProject} cancelProject={cancelProject} completeViewpoint={completeViewpoint}
-              handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} saveProjectInfo={saveProjectInfo} companyList={companyList} assigneeList={assigneeList}
+              handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline} companyList={companyList} assigneeList={assigneeList}
               colors={colors} fontJP={fontJP} />
           </section>
         );
