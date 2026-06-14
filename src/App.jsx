@@ -4507,7 +4507,8 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
   const [projDrag, setProjDrag] = useState(null);
   const today = startOfDay(new Date());
   // 表示モード：1日 / 週間 / 月間 / 全期間（従来のスクロール表示）
-  const [viewMode, setViewMode] = useState('scroll');
+  // 初期は「1日」表示で今日（今日が休みなら次の営業日）を表示する
+  const [viewMode, setViewMode] = useState('day');
   const [anchor, setAnchor] = useState(today);
 
   // モードごとに表示する営業日の列を決める
