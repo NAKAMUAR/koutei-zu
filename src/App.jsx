@@ -2703,7 +2703,8 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
         </div>
       )}
       <section style={{ background: colors.surface, border: `1px solid ${colors.border}`, borderRadius: 6, padding: 24 }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 20, flexWrap: 'wrap', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, flexWrap: 'wrap', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <h2 style={{ fontFamily: fontDisplay, fontSize: 18, margin: 0, fontWeight: 500 }}>
             {editMode?.type === 'step'
               ? 'ステップを編集'
@@ -2713,6 +2714,31 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                   ? `案件「${editMode.projectName}」を編集`
                   : '新規タスク登録'}
           </h2>
+            {/* 仮案件チェック（タイトルの右隣）。チェック時は対応想定期間も表示 */}
+            <label style={{
+              display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer',
+              background: form.tentative ? '#fdf3e7' : '#fff', border: `1px solid ${form.tentative ? '#c46a16' : colors.border}`,
+              borderRadius: 4, padding: '7px 12px', fontSize: 13, fontFamily: fontJP,
+              color: form.tentative ? '#c46a16' : colors.text, fontWeight: form.tentative ? 700 : 400,
+            }}>
+              <input type="checkbox" checked={!!form.tentative}
+                onChange={(e) => setForm({ ...form, tentative: e.target.checked })}
+                style={{ width: 15, height: 15, accentColor: '#c46a16', cursor: 'pointer' }} />
+              仮案件（仮予定）として登録する
+            </label>
+            {form.tentative && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 12, color: '#c46a16', fontWeight: 600, whiteSpace: 'nowrap' }}>対応想定期間</span>
+                <input type="date" value={form.tentativeStart || ''}
+                  onChange={(e) => setForm({ ...form, tentativeStart: e.target.value })}
+                  style={{ ...inputStyle, width: 'auto', flex: '0 0 150px' }} />
+                <span style={{ fontSize: 12, color: colors.textMute }}>〜</span>
+                <input type="date" value={form.tentativeEnd || ''}
+                  onChange={(e) => setForm({ ...form, tentativeEnd: e.target.value })}
+                  style={{ ...inputStyle, width: 'auto', flex: '0 0 150px' }} />
+              </div>
+            )}
+          </div>
           {editMode ? (
             <button onClick={cancelEdit} style={{ background: 'transparent', border: 'none', color: colors.textMute, cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
               <X size={14} /> 編集をやめる
@@ -2831,39 +2857,13 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
               );
             })}
           </div>
-          <div style={{ gridColumn: 'span 2' }}>
+          <div style={{ gridColumn: '1 / -1' }}>
             <label style={labelStyle}>メモ（任意・一覧の案件ヘッダーとカレンダーのツールチップに表示）</label>
             <textarea value={form.memo || ''}
               onChange={(e) => setForm({ ...form, memo: e.target.value })}
               placeholder="例: 6/20 受注確定予定。確定したら本登録に切り替える"
               rows={2}
               style={{ ...inputStyle, resize: 'vertical', minHeight: 40 }} />
-          </div>
-          <div style={{ gridColumn: 'span 2' }}>
-            <label style={{
-              display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer',
-              background: form.tentative ? '#fdf3e7' : '#fff', border: `1px solid ${form.tentative ? '#c46a16' : colors.border}`,
-              borderRadius: 4, padding: '9px 14px', fontSize: 13, fontFamily: fontJP,
-              color: form.tentative ? '#c46a16' : colors.text, fontWeight: form.tentative ? 700 : 400,
-            }}>
-              <input type="checkbox" checked={!!form.tentative}
-                onChange={(e) => setForm({ ...form, tentative: e.target.checked })}
-                style={{ width: 15, height: 15, accentColor: '#c46a16', cursor: 'pointer' }} />
-              仮案件（仮予定）として登録する
-            </label>
-            {form.tentative && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
-                <span style={{ fontSize: 12, color: '#c46a16', fontWeight: 600, whiteSpace: 'nowrap', minWidth: 84 }}>対応想定期間</span>
-                <input type="date" value={form.tentativeStart || ''}
-                  onChange={(e) => setForm({ ...form, tentativeStart: e.target.value })}
-                  style={{ ...inputStyle, width: 'auto', flex: '0 0 160px' }} />
-                <span style={{ fontSize: 12, color: colors.textMute }}>〜</span>
-                <input type="date" value={form.tentativeEnd || ''}
-                  onChange={(e) => setForm({ ...form, tentativeEnd: e.target.value })}
-                  style={{ ...inputStyle, width: 'auto', flex: '0 0 160px' }} />
-                <span style={{ fontSize: 10, color: colors.textMute }}>任意・いつ頃対応する見込みかの目安（開始予定日〜終了予定日）</span>
-              </div>
-            )}
           </div>
         </div>
 
