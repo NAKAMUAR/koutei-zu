@@ -3896,52 +3896,41 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
                   </button>
                 </div>
               )}
+              {/* 操作ボタンは記号＋色のみ（視点の追加は「案件を編集」の編集フォームから行う） */}
               {handleEditProject && (
                 <button type="button" onClick={() => handleEditProject(pg.projectName)}
                   style={{
                     background: '#fff', border: `1px solid ${colors.border}`,
-                    padding: '6px 10px', borderRadius: 3, cursor: 'pointer',
-                    fontFamily: fontJP, fontSize: 11, color: colors.textMute,
-                    display: 'flex', alignItems: 'center', gap: 4,
+                    padding: 6, borderRadius: 3, cursor: 'pointer',
+                    fontFamily: fontJP, color: colors.textMute,
+                    display: 'flex', alignItems: 'center',
                   }}
-                  title="案件名・案件コードを編集">
-                  <Edit2 size={12} /> 案件を編集
-                </button>
-              )}
-              {handleAddViewpointToProject && (
-                <button type="button" onClick={() => handleAddViewpointToProject(pg.projectName, pg.projectNameInternal)}
-                  style={{
-                    background: colors.accentSoft, border: `1px solid ${colors.accent}`,
-                    padding: '6px 10px', borderRadius: 3, cursor: 'pointer',
-                    fontFamily: fontJP, fontSize: 11, color: colors.accent, fontWeight: 600,
-                    display: 'flex', alignItems: 'center', gap: 4,
-                  }}
-                  title="この案件に新しい視点を追加（新規登録フォームを案件名入りで開く）">
-                  <Plus size={12} /> 視点を追加
+                  title="案件を編集（視点の追加・案件名/コードの変更もこの画面から）">
+                  <Edit2 size={14} />
                 </button>
               )}
               {completeProject && (
                 <button type="button" onClick={() => completeProject(pg.projectName)}
                   style={{
                     background: colors.progress, color: '#fff',
-                    border: 'none', borderRadius: 3, padding: '6px 12px',
-                    cursor: 'pointer', fontFamily: fontJP, fontSize: 11, fontWeight: 600,
-                    display: 'flex', alignItems: 'center', gap: 4,
+                    border: 'none', borderRadius: 3, padding: 6,
+                    cursor: 'pointer', fontFamily: fontJP,
+                    display: 'flex', alignItems: 'center',
                   }}
-                  title="この案件の未完了タスクを全て完了にして完了タブへ移動">
-                  <CheckCircle2 size={13} /> 案件完了
+                  title="案件完了：この案件の未完了タスクを全て完了にして完了タブへ移動">
+                  <CheckCircle2 size={14} />
                 </button>
               )}
               {cancelProject && (
                 <button type="button" onClick={() => cancelProject(pg.projectName)}
                   style={{
                     background: '#a05252', color: '#fff',
-                    border: 'none', borderRadius: 3, padding: '6px 12px',
-                    cursor: 'pointer', fontFamily: fontJP, fontSize: 11, fontWeight: 600,
-                    display: 'flex', alignItems: 'center', gap: 4,
+                    border: 'none', borderRadius: 3, padding: 6,
+                    cursor: 'pointer', fontFamily: fontJP,
+                    display: 'flex', alignItems: 'center',
                   }}
-                  title="この案件の未完了タスクを「中止」として完了タブへ移動（実績はそのまま・後続スケジュールに影響しない）">
-                  <X size={13} /> 案件中止
+                  title="案件中止：この案件の未完了タスクを「中止」として完了タブへ移動（実績はそのまま・後続スケジュールに影響しない）">
+                  <X size={14} />
                 </button>
               )}
             </div>
