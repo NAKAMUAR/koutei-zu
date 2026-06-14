@@ -2476,6 +2476,11 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
     for (const r of base) for (const ct of (r.contacts || [])) if (ct.name) names.push(ct.name);
     return [...new Set(names)];
   }, [customerMaster, form.companyName]);
+  // 契約形態が「オフショア」の会社名の集合（進行中タスク一覧で「オフショア（その他）」へ集約する）
+  const offshoreCompanies = useMemo(
+    () => new Set((customerMaster || []).filter(c => c.contractType === 'offshore').map(c => (c.company || '').trim()).filter(Boolean)),
+    [customerMaster]
+  );
   const inputStyle = {
     width: '100%', padding: '10px 12px', border: `1px solid ${colors.border}`,
     borderRadius: 4, fontFamily: fontJP, fontSize: 14, background: '#fff',
@@ -3179,7 +3184,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                   handleDeleteViewpoint={handleDeleteViewpoint}
                   handleDelete={handleDelete} toggleStatus={toggleStatus}
                   moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={onDragTask} onDropTask={onDropTask} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} completeProject={completeProject} cancelProject={cancelProject} completeViewpoint={completeViewpoint}
-                  handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline} companyList={companyList} assigneeList={assigneeList}
+                  handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline} companyList={companyList} assigneeList={assigneeList} offshoreCompanies={offshoreCompanies}
                   colors={colors} fontJP={fontJP} />
               </section>
             );
@@ -3199,7 +3204,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
             handleDeleteViewpoint={handleDeleteViewpoint}
             handleDelete={handleDelete} toggleStatus={toggleStatus}
             moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={onDragTask} onDropTask={onDropTask} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} completeProject={completeProject} cancelProject={cancelProject} completeViewpoint={completeViewpoint}
-            handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline} companyList={companyList} assigneeList={assigneeList}
+            handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline} companyList={companyList} assigneeList={assigneeList} offshoreCompanies={offshoreCompanies}
             colors={colors} fontJP={fontJP} />
         )}
       </section>
@@ -3434,9 +3439,13 @@ function ProjectInfoEditor({ pg, companyList, onSave, onCancel, colors, fontJP }
 }
 
 // ============ 視点グループリスト ============
-function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder, saveProjectOrder, sortMode, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, saveProjectInfo, setProjectDeadline, companyList, assigneeList, colors, fontJP }) {
+function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder, saveProjectOrder, sortMode, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, saveProjectInfo, setProjectDeadline, companyList, assigneeList, offshoreCompanies, colors, fontJP }) {
   // 案件情報をインライン編集中の案件名（null = 非編集）
   const [editingInfo, setEditingInfo] = useState(null);
+  // 契約形態「オフショア」の会社（お客様マスタ由来）。会社別表示で「オフショア（その他）」へ集約する。
+  // 渡されない（担当者別など）場合は集約しない。
+  const isOffshore = (c) => !!offshoreCompanies && offshoreCompanies.has(c || '');
+  const groupKeyOf = (c) => isOffshore(c) ? 'オフショア（その他）' : (c || '');
   // 全タスクのグローバルなインデックス（移動可否判定用）
   const allSortedIds = allActive.map(t => t.id);
 
@@ -3555,14 +3564,15 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
     }
     const map = new Map();
     for (const pg of orderedProjectGroups) {
-      const c = pg.companyName || '';
+      // 契約形態オフショアの会社は「オフショア（その他）」グループに集約（会社名は各案件カードに表示）
+      const c = groupKeyOf(pg.companyName || '');
       if (!map.has(c)) map.set(c, { companyName: c, projects: [], remaining: 0 });
       const sec = map.get(c);
       sec.projects.push(pg);
       sec.remaining += (pg.totalHours - pg.completedHours);
     }
     return [...map.values()].sort((a, b) => compareCompanyDisplay(a.companyName, b.companyName, companyOrder));
-  }, [orderedProjectGroups, companyOrder, sortMode]);
+  }, [orderedProjectGroups, companyOrder, sortMode, offshoreCompanies]);
 
   // 実際に表示される案件の並び（会社グループを連結した順）。ドラッグ並べ替えの基準にする
   const displayedProjectNames = useMemo(
@@ -3756,7 +3766,7 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
                     {pg.tentativeEnd ? pg.tentativeEnd.slice(5).replace('-', '/') : ''}
                   </span>
                 )}
-                {sortMode === 'deadline' && pg.companyName && (
+                {(sortMode === 'deadline' || isOffshore(pg.companyName)) && pg.companyName && (
                   <span style={{
                     fontSize: 10, fontWeight: 600, color: '#fff',
                     background: getProjectColor(pg.companyName), borderRadius: 10,
@@ -6008,6 +6018,14 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
                   onBlur={commitCustomersNow}
                   placeholder="例: リノべる株式会社"
                   style={{ ...inputStyle, flex: 1, fontWeight: 600 }} />
+                <span style={{ fontSize: 11, fontWeight: 700, color: colors.textMute, flexShrink: 0 }}>契約形態</span>
+                <select value={c.contractType || 'labo'}
+                  onChange={(e) => commitCustomers(customers.map(x => x.id === c.id ? { ...x, contractType: e.target.value } : x))}
+                  title="ラボ＝会社名でグループ表示／オフショア＝進行中タスク一覧で「オフショア（その他）」に集約（会社名は各案件に表示）"
+                  style={{ ...inputStyle, width: 'auto', flex: '0 0 120px', fontWeight: 600 }}>
+                  <option value="labo">ラボ</option>
+                  <option value="offshore">オフショア</option>
+                </select>
                 <button type="button" onClick={() => removeCompany(c.id)}
                   style={{ ...delBtnStyle, display: 'flex', alignItems: 'center', gap: 4, padding: '6px 10px', fontSize: 11, fontFamily: fontJP }}
                   title="この会社を削除">
