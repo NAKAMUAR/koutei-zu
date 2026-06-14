@@ -3733,41 +3733,49 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
                   <GripVertical size={14} />
                 </span>
               )}
-              <button type="button" onClick={() => toggle(pg.projectName)}
-                style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, color: colors.textMute, display: 'flex', alignItems: 'center' }}
-                title={isCollapsed ? '展開' : '折りたたみ'}>
-                {isCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
-              </button>
-              {pg.tentative && (
-                <span style={{
-                  fontSize: 10, fontWeight: 700, color: '#fff', background: '#c46a16',
-                  borderRadius: 2, padding: '2px 6px', flexShrink: 0,
-                }} title="仮案件（仮予定）です。編集フォームで本登録に切り替えられます">仮</span>
-              )}
-              {pg.tentative && (pg.tentativeStart || pg.tentativeEnd) && (
-                <span style={{
-                  fontSize: 10, fontWeight: 600, color: '#c46a16', flexShrink: 0, whiteSpace: 'nowrap',
-                }} title="仮案件の対応想定期間（開始予定日〜終了予定日）">
-                  {pg.tentativeStart ? pg.tentativeStart.slice(5).replace('-', '/') : ''}
-                  〜
-                  {pg.tentativeEnd ? pg.tentativeEnd.slice(5).replace('-', '/') : ''}
+              {/* 折りたたみ＋各バッジ＋案件名を固定幅にまとめ、案件名は見切れ表示。
+                  これで案件名の長さに関わらず、以降の要素がどの案件でも同じ位置に揃う */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: '0 0 300px', minWidth: 0, overflow: 'hidden' }}>
+                <button type="button" onClick={() => toggle(pg.projectName)}
+                  style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, color: colors.textMute, display: 'flex', alignItems: 'center', flexShrink: 0 }}
+                  title={isCollapsed ? '展開' : '折りたたみ'}>
+                  {isCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+                </button>
+                {pg.tentative && (
+                  <span style={{
+                    fontSize: 10, fontWeight: 700, color: '#fff', background: '#c46a16',
+                    borderRadius: 2, padding: '2px 6px', flexShrink: 0,
+                  }} title="仮案件（仮予定）です。編集フォームで本登録に切り替えられます">仮</span>
+                )}
+                {pg.tentative && (pg.tentativeStart || pg.tentativeEnd) && (
+                  <span style={{
+                    fontSize: 10, fontWeight: 600, color: '#c46a16', flexShrink: 0, whiteSpace: 'nowrap',
+                  }} title="仮案件の対応想定期間（開始予定日〜終了予定日）">
+                    {pg.tentativeStart ? pg.tentativeStart.slice(5).replace('-', '/') : ''}
+                    〜
+                    {pg.tentativeEnd ? pg.tentativeEnd.slice(5).replace('-', '/') : ''}
+                  </span>
+                )}
+                {sortMode === 'deadline' && pg.companyName && (
+                  <span style={{
+                    fontSize: 10, fontWeight: 600, color: '#fff',
+                    background: getProjectColor(pg.companyName), borderRadius: 10,
+                    padding: '1px 8px', flexShrink: 0, maxWidth: 90, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                  }} title={pg.companyName}>{pg.companyName}</span>
+                )}
+                <span onClick={() => toggle(pg.projectName)}
+                  title={pg.projectNameInternal ? `${pg.projectNameInternal}（${pg.projectName}）` : pg.projectName}
+                  style={{ flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>
+                  {pg.projectNameInternal ? (
+                    <>
+                      <span style={{ fontSize: 14, fontWeight: 600, color: nameColor }}>{pg.projectNameInternal}</span>
+                      <span style={{ fontSize: 11, color: deadlinePassed ? '#c1272d' : colors.textMute, marginLeft: 6 }}>{pg.projectName}</span>
+                    </>
+                  ) : (
+                    <span style={{ fontSize: 14, fontWeight: 600, color: nameColor }}>{pg.projectName}</span>
+                  )}
                 </span>
-              )}
-              {sortMode === 'deadline' && pg.companyName && (
-                <span style={{
-                  fontSize: 10, fontWeight: 600, color: '#fff',
-                  background: getProjectColor(pg.companyName), borderRadius: 10,
-                  padding: '1px 8px', flexShrink: 0,
-                }}>{pg.companyName}</span>
-              )}
-              {pg.projectNameInternal ? (
-                <>
-                  <span style={{ fontSize: 14, fontWeight: 600, color: nameColor, cursor: 'pointer' }} onClick={() => toggle(pg.projectName)}>{pg.projectNameInternal}</span>
-                  <span style={{ fontSize: 11, color: deadlinePassed ? '#c1272d' : colors.textMute, cursor: 'pointer' }} onClick={() => toggle(pg.projectName)}>{pg.projectName}</span>
-                </>
-              ) : (
-                <span style={{ fontSize: 14, fontWeight: 600, color: nameColor, cursor: 'pointer' }} onClick={() => toggle(pg.projectName)}>{pg.projectName}</span>
-              )}
+              </div>
               {saveProjectInfo && (
                 <button type="button"
                   onClick={(e) => { e.stopPropagation(); setEditingInfo(editingInfo === pg.projectName ? null : pg.projectName); }}
@@ -3782,7 +3790,7 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
                 </button>
               )}
               {pg.customerContact && (
-                <span style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                <span title={`お客様: ${pg.customerContact}`} style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', flexShrink: 0, maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   お客様: {pg.customerContact}
                 </span>
               )}
