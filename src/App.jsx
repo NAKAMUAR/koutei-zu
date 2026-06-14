@@ -4547,6 +4547,11 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
     }
   }
   const todayIndex = allDates.findIndex(d => isSameDay(d, today));
+  // 全期間ビューで左端に置く列＝今日。今日が休み（土日・祝日）で一覧に無いときは
+  // 「今日以降の最初の営業日」を左端にする（次の営業日を表示）。
+  const leftEdgeIndex = todayIndex >= 0
+    ? todayIndex
+    : Math.max(0, allDates.findIndex(d => d.getTime() >= today.getTime()));
 
   // ナビゲーション（1日・週間・月間モード）
   const goStep = (dir) => {
@@ -4621,9 +4626,9 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
     const key = `${viewMode}|${fmtYMD(anchor)}`;
     if (isFlexWidth) { el.scrollLeft = 0; didScrollKey.current = key; return; }
     if (didScrollKey.current === key) return; // この モード/期間 では設定済み
-    el.scrollLeft = (todayIndex >= 0 ? todayIndex : 0) * dayCellWidth;
+    el.scrollLeft = leftEdgeIndex * dayCellWidth;
     didScrollKey.current = key;
-  }, [viewMode, anchor, isFlexWidth, todayIndex, dayCellWidth, allDates.length, assignees.length]);
+  }, [viewMode, anchor, isFlexWidth, leftEdgeIndex, dayCellWidth, allDates.length, assignees.length]);
 
   // 現在時刻の縦ライン位置（今日の列の中の横位置）
   let nowLineX = null;
