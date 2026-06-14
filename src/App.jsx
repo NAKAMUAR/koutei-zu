@@ -4626,18 +4626,11 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
       if (!isNonWorkingDay(d)) allDates.push(new Date(d));
     }
   } else {
-    // 全期間：過去30営業日 + 今日 + 未来42営業日（今日を初期スクロールの左端に置く）
+    // 全期間：今日（休みなら翌営業日）を先頭に、未来の営業日を並べる。
+    // 先頭＝今日 なので、初期表示で必ず左端が今日になる（過去日は表示しない）。
     let cursor = new Date(today);
     let count = 0;
-    const past = [];
-    while (count < 30) {
-      cursor = addDays(cursor, -1);
-      if (!isNonWorkingDay(cursor)) { past.unshift(new Date(cursor)); count++; }
-    }
-    allDates.push(...past);
-    cursor = new Date(today);
-    count = 0;
-    while (count < 42) {
+    while (count < 72) {
       if (!isNonWorkingDay(cursor)) { allDates.push(new Date(cursor)); count++; }
       cursor = addDays(cursor, 1);
     }
@@ -4715,18 +4708,24 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
   // 初回はタスク未ロード（担当者0件で領域未描画）のことがあるため、データ到着後に再実行できるよう
   // assignees 件数なども依存に含め、didScrollKey で「同一モード/期間で1回だけ」を担保する。
   const scrollRef = useRef(null);
+  const todayCellRef = useRef(null); // 全期間/月間グリッドの「今日（または翌営業日）」列ヘッダー
   const didScrollKey = useRef('');
   // useLayoutEffect ＝ 描画前に scrollLeft を確定（タブ表示直後のチラつき防止）。
-  // タブ切替で再マウントされた直後は scrollWidth が未確定のことがあるため、rAF でも再設定する。
+  // 実際の列位置（offsetLeft）を読むことで強制リフローし、scrollWidth 未確定でも確実に反映させる。
+  // タブ切替で再マウントされた直後にも効くよう rAF でも再設定する。
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     const key = `${viewMode}|${fmtYMD(anchor)}`;
     if (isFlexWidth) { el.scrollLeft = 0; didScrollKey.current = key; return; }
     if (didScrollKey.current === key) return; // この モード/期間 では設定済み
-    const target = leftEdgeIndex * dayCellWidth;
-    el.scrollLeft = target;
-    requestAnimationFrame(() => { if (scrollRef.current) scrollRef.current.scrollLeft = target; });
+    const apply = () => {
+      const cell = todayCellRef.current;
+      const target = cell ? Math.max(0, cell.offsetLeft - labelWidth) : leftEdgeIndex * dayCellWidth;
+      el.scrollLeft = target;
+    };
+    apply();
+    requestAnimationFrame(apply);
     didScrollKey.current = key;
   }, [viewMode, anchor, isFlexWidth, leftEdgeIndex, dayCellWidth, allDates.length, assignees.length]);
 
@@ -5111,7 +5110,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
             {allDates.map((d, i) => {
               const isToday = isSameDay(d, new Date());
               return (
-                <div key={i} style={{
+                <div key={i} ref={i === leftEdgeIndex ? todayCellRef : null} style={{
                   width: colWidth, padding: '6px 4px 2px', textAlign: 'center', flexShrink: 0,
                   borderRight: i < allDates.length - 1 ? `1px solid ${colors.border}` : 'none',
                   background: isToday ? colors.accentSoft : 'transparent',
