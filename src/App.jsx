@@ -4766,7 +4766,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                         width: labelWidth, padding: '12px 8px', fontSize: 13, fontWeight: 500,
                         flexShrink: 0, borderRight: `1px solid ${colors.border}`,
                         display: 'flex', alignItems: 'center', gap: 5, background: '#fbf9f4',
-                        boxSizing: 'border-box', position: 'sticky', left: 0, zIndex: 2,
+                        boxSizing: 'border-box', position: 'sticky', left: 0, zIndex: 3,
                         boxShadow: rowDragOver === assignee && rowDrag && rowDrag !== assignee
                           ? `0 0 0 2px ${colors.accent} inset` : '2px 0 4px rgba(0,0,0,0.04)',
                         opacity: rowDrag === assignee ? 0.5 : 1,
@@ -4903,7 +4903,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                       width: labelWidth, padding: '12px 8px', fontSize: 13, fontWeight: 500,
                       flexShrink: 0, borderRight: `1px solid ${colors.border}`,
                       display: 'flex', alignItems: 'center', gap: 5, background: '#fbf9f4',
-                      boxSizing: 'border-box', position: 'sticky', left: 0, zIndex: 2,
+                      boxSizing: 'border-box', position: 'sticky', left: 0, zIndex: 3,
                       boxShadow: rowDragOver === assignee && rowDrag && rowDrag !== assignee
                         ? `0 0 0 2px ${colors.accent} inset` : '2px 0 4px rgba(0,0,0,0.04)',
                       opacity: rowDrag === assignee ? 0.5 : 1,
@@ -5044,7 +5044,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                 flexShrink: 0, borderRight: `1px solid ${colors.border}`,
                 display: 'flex', alignItems: 'center', gap: 5, background: '#fbf9f4',
                 boxSizing: 'border-box',
-                position: 'sticky', left: 0, zIndex: 2,
+                position: 'sticky', left: 0, zIndex: 3,
                 boxShadow: rowDragOver === assignee && rowDrag && rowDrag !== assignee
                   ? `0 0 0 2px ${colors.accent} inset`
                   : '2px 0 4px rgba(0,0,0,0.04)',
