@@ -4507,8 +4507,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
   const [projDrag, setProjDrag] = useState(null);
   const today = startOfDay(new Date());
   // 表示モード：1日 / 週間 / 月間 / 全期間（従来のスクロール表示）
-  // 初期は「1日」表示で今日（今日が休みなら次の営業日）を表示する
-  const [viewMode, setViewMode] = useState('day');
+  const [viewMode, setViewMode] = useState('scroll');
   const [anchor, setAnchor] = useState(today);
 
   // モードごとに表示する営業日の列を決める
@@ -4611,15 +4610,20 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
   const compact = viewMode === 'month';
 
   // 初期スクロール位置を「今日が左端」に設定（全期間・月間のみ。モード/期間の切替時に再設定）
+  // 同じモード／期間の間は一度だけ実行し、以後はユーザーのスクロール位置を尊重する。
+  // 初回はタスク未ロード（担当者0件で領域未描画）のことがあるため、データ到着後に再実行できるよう
+  // assignees 件数なども依存に含め、didScrollKey で「同一モード/期間で1回だけ」を担保する。
   const scrollRef = useRef(null);
+  const didScrollKey = useRef('');
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    if (isFlexWidth) { el.scrollLeft = 0; return; }
+    const key = `${viewMode}|${fmtYMD(anchor)}`;
+    if (isFlexWidth) { el.scrollLeft = 0; didScrollKey.current = key; return; }
+    if (didScrollKey.current === key) return; // この モード/期間 では設定済み
     el.scrollLeft = (todayIndex >= 0 ? todayIndex : 0) * dayCellWidth;
-    // データ更新では再スクロールしない（ユーザーのスクロール位置を保つ）
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewMode, anchor]);
+    didScrollKey.current = key;
+  }, [viewMode, anchor, isFlexWidth, todayIndex, dayCellWidth, allDates.length, assignees.length]);
 
   // 現在時刻の縦ライン位置（今日の列の中の横位置）
   let nowLineX = null;
