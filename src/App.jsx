@@ -231,73 +231,6 @@ function parseYMD(s) {
   if (!y || !m || !d) return null;
   return new Date(y, m - 1, d);
 }
-function prevBusinessDay(d) {
-  const r = startOfDay(d);
-  do { r.setDate(r.getDate() - 1); } while (isNonWorkingDay(r));
-  return r;
-}
-// 営業日数を厳密に間にカウント（from・to は含まない）
-function countBusinessDaysBetween(fromYMD, toYMD) {
-  const from = parseYMD(fromYMD);
-  const to = parseYMD(toYMD);
-  if (!from || !to || from >= to) return 0;
-  let count = 0;
-  const cur = new Date(from);
-  cur.setDate(cur.getDate() + 1);
-  while (cur < to) {
-    if (!isNonWorkingDay(cur)) count++;
-    cur.setDate(cur.getDate() + 1);
-  }
-  return count;
-}
-// 期間中の総作業可能時間（土曜は午前のみ）
-function workingHoursBetween(fromYMD, toYMD, settings) {
-  const from = parseYMD(fromYMD);
-  const to = parseYMD(toYMD);
-  if (!from || !to || from >= to) return 0;
-  let hours = 0;
-  const cur = new Date(from);
-  cur.setDate(cur.getDate() + 1);
-  while (cur < to) {
-    if (!isNonWorkingDay(cur)) hours += getDayWorkingHours(cur, settings);
-    cur.setDate(cur.getDate() + 1);
-  }
-  return hours;
-}
-// 担当者ごとに優先度順で時間をカスケード加算
-function advanceTasksByAssignee(tasks, hoursPerAssignee) {
-  if (hoursPerAssignee <= 0) return tasks;
-  const byAssignee = {};
-  for (const t of tasks) {
-    if (t.status === 'done') continue;
-    if (!byAssignee[t.assignee]) byAssignee[t.assignee] = [];
-    byAssignee[t.assignee].push(t);
-  }
-  for (const a in byAssignee) {
-    byAssignee[a].sort((x, y) => (x.priority - y.priority) || (x.createdAt - y.createdAt));
-  }
-  const updates = new Map();
-  for (const list of Object.values(byAssignee)) {
-    let remaining = hoursPerAssignee;
-    for (const t of list) {
-      if (remaining <= 0) break;
-      const cap = (t.hours || 0) - (t.completedHours || 0);
-      if (cap <= 0) continue;
-      const use = Math.min(cap, remaining);
-      const newCompleted = (t.completedHours || 0) + use;
-      const done = newCompleted >= (t.hours || 0);
-      updates.set(t.id, {
-        ...t,
-        completedHours: newCompleted,
-        status: done ? 'done' : t.status,
-        completedAt: done ? Date.now() : t.completedAt,
-      });
-      remaining -= use;
-    }
-  }
-  return tasks.map(t => updates.get(t.id) || t);
-}
-
 // ============ マイグレーション ============
 function migrateTask(task) {
   let priority = task.priority;
@@ -1141,8 +1074,8 @@ export default function App() {
   const saveSettings = async (newSettings) => {
     setSettings(newSettings);
     try {
-      const { morningStart, morningEnd, afternoonStart, afternoonEnd, startDate, startTime, lastAdvancedDate, absences, overtimes, endPromptState, companyOrder, holidays } = newSettings;
-      await storage.set('settings', JSON.stringify({ morningStart, morningEnd, afternoonStart, afternoonEnd, startDate, startTime, lastAdvancedDate, absences: absences || [], overtimes: overtimes || [], endPromptState: endPromptState || {}, companyOrder: companyOrder || [], holidays: holidays || [] }));
+      const { morningStart, morningEnd, afternoonStart, afternoonEnd, startDate, startTime, absences, overtimes, endPromptState, companyOrder, holidays } = newSettings;
+      await storage.set('settings', JSON.stringify({ morningStart, morningEnd, afternoonStart, afternoonEnd, startDate, startTime, absences: absences || [], overtimes: overtimes || [], endPromptState: endPromptState || {}, companyOrder: companyOrder || [], holidays: holidays || [] }));
     } catch (e) { console.error(e); }
   };
   // 会社の表示順を保存
@@ -2143,45 +2076,6 @@ export default function App() {
   }, [tasks, customerMaster]);
   const hoursPerDay = getHoursPerDay(settings);
 
-  const todayYMD = fmtYMD(new Date());
-  const pendingAdvanceDays = useMemo(() => {
-    if (!settings.lastAdvancedDate) return 0;
-    return countBusinessDaysBetween(settings.lastAdvancedDate, todayYMD);
-  }, [settings.lastAdvancedDate, todayYMD]);
-  const pendingAdvanceHours = useMemo(() => {
-    if (!settings.lastAdvancedDate) return 0;
-    return workingHoursBetween(settings.lastAdvancedDate, todayYMD, settings);
-  }, [settings.lastAdvancedDate, todayYMD, settings]);
-  const todayUncredited = settings.lastAdvancedDate
-    ? parseYMD(settings.lastAdvancedDate) < parseYMD(todayYMD)
-    : false;
-  const todayWorkingHours = getDayWorkingHours(new Date(), settings);
-
-  // 初回起動時：lastAdvancedDate を「前営業日」に初期化（過去分を遡って勝手に反映しない）
-  useEffect(() => {
-    if (loading || !auth.allowed) return;
-    if (!settings.lastAdvancedDate) {
-      saveSettings({ ...settings, lastAdvancedDate: fmtYMD(prevBusinessDay(new Date())) });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, auth.allowed, settings.lastAdvancedDate]);
-
-  const advanceByHours = (hours) => {
-    if (hours <= 0) return;
-    saveTasks(prev => normalizePriorities(advanceTasksByAssignee(prev, hours)));
-  };
-  const applyPendingAdvance = () => {
-    if (pendingAdvanceHours > 0) advanceByHours(pendingAdvanceHours);
-    saveSettings({ ...settings, lastAdvancedDate: fmtYMD(prevBusinessDay(new Date())) });
-  };
-  const skipPendingAdvance = () => {
-    saveSettings({ ...settings, lastAdvancedDate: fmtYMD(prevBusinessDay(new Date())) });
-  };
-  const advanceToday = () => {
-    advanceByHours(todayWorkingHours);
-    saveSettings({ ...settings, lastAdvancedDate: todayYMD });
-  };
-
   const colors = {
     bg: '#faf8f3', surface: '#ffffff', border: '#e8e3d6',
     text: '#1a1a1a', textMute: '#6b6b6b',
@@ -2310,18 +2204,6 @@ export default function App() {
       </header>
 
       <main style={{ maxWidth: 1600, margin: '0 auto', padding: '28px' }}>
-        <AdvanceBar
-          pendingDays={pendingAdvanceDays}
-          pendingHours={pendingAdvanceHours}
-          todayUncredited={todayUncredited}
-          todayWorkingHours={todayWorkingHours}
-          lastAdvancedDate={settings.lastAdvancedDate}
-          onApply={applyPendingAdvance}
-          onSkip={skipPendingAdvance}
-          onAdvanceToday={advanceToday}
-          colors={colors}
-          fontJP={fontJP}
-        />
         {view === 'input' && (
           <InputView form={form} setForm={setForm} handleSubmit={handleSubmit} editingId={editingId} editMode={editMode}
             cancelEdit={() => { setEditingId(null); setEditMode(null); setForm(emptyForm); }}
@@ -4208,49 +4090,6 @@ function ViewpointCard({ group, now, allSortedIds, companyFirstIds, companyLastI
             colors={colors} fontJP={fontJP} />
         );
       })}
-    </div>
-  );
-}
-
-function AdvanceBar({ pendingDays, pendingHours, todayUncredited, todayWorkingHours, lastAdvancedDate, onApply, onSkip, onAdvanceToday, colors, fontJP }) {
-  if (pendingDays <= 0 && !todayUncredited) return null;
-  const btnPrimary = {
-    padding: '6px 14px', background: colors.accent, color: '#fff',
-    border: 'none', borderRadius: 3, cursor: 'pointer',
-    fontFamily: fontJP, fontSize: 12, fontWeight: 600,
-  };
-  const btnGhost = {
-    padding: '6px 12px', background: 'transparent', color: colors.textMute,
-    border: `1px solid ${colors.border}`, borderRadius: 3, cursor: 'pointer',
-    fontFamily: fontJP, fontSize: 12,
-  };
-  return (
-    <div style={{
-      background: '#fff8ec', border: `1px solid ${colors.border}`,
-      borderRadius: 4, padding: '12px 16px', marginBottom: 20,
-      display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
-    }}>
-      {pendingDays > 0 ? (
-        <>
-          <span style={{ fontSize: 12, color: colors.text }}>
-            前回（{lastAdvancedDate}）から <strong>{pendingDays}営業日</strong> 経過しています。
-            担当者ごとに <strong>{pendingHours}h</strong> を反映しますか？
-          </span>
-          <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
-            <button onClick={onApply} style={btnPrimary}>反映する</button>
-            <button onClick={onSkip} style={btnGhost}>今回はスキップ</button>
-          </div>
-        </>
-      ) : (
-        <>
-          <span style={{ fontSize: 12, color: colors.text }}>
-            今日（{fmtYMD(new Date())}）の進捗 <strong>{todayWorkingHours}h</strong> を担当者ごとに反映できます。
-          </span>
-          <div style={{ display: 'flex', gap: 6, marginLeft: 'auto' }}>
-            <button onClick={onAdvanceToday} style={btnPrimary}>今日分を進める</button>
-          </div>
-        </>
-      )}
     </div>
   );
 }
