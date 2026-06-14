@@ -2520,6 +2520,13 @@ function InputView({ embedded, form, setForm, handleSubmit, editingId, editMode,
   const switchTab = (t) => { setInputTab(t); if (t !== 'list' && !editMode) setFormCollapsed(true); };
   // 編集を開始したら自動で展開する
   useEffect(() => { if (editMode) setFormCollapsed(false); }, [editMode]);
+  // カレンダー／担当者別を選んだら、その表（スケジュール表）が上端に来るようスクロール
+  const tabBarRef = useRef(null);
+  useEffect(() => {
+    if (inputTab !== 'list' && tabBarRef.current) {
+      tabBarRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [inputTab]);
   const inputStyle = {
     width: '100%', padding: '10px 12px', border: `1px solid ${colors.border}`,
     borderRadius: 4, fontFamily: fontJP, fontSize: 14, background: '#fff',
@@ -3114,7 +3121,7 @@ function InputView({ embedded, form, setForm, handleSubmit, editingId, editMode,
       </section>
 
       {/* 表示切替：進行中一覧 / カレンダー / 担当者別 */}
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+      <div ref={tabBarRef} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', scrollMarginTop: 12 }}>
         {[{ id: 'list', label: '進行中一覧' }, { id: 'calendar', label: 'カレンダー' }, { id: 'assignee', label: '担当者別' }].map(t => (
           <button key={t.id} type="button" onClick={() => switchTab(t.id)}
             style={{
@@ -3242,7 +3249,7 @@ function InputView({ embedded, form, setForm, handleSubmit, editingId, editMode,
                   handleDeleteViewpoint={handleDeleteViewpoint}
                   handleDelete={handleDelete} toggleStatus={toggleStatus}
                   moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={onDragTask} onDropTask={onDropTask} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} completeProject={completeProject} cancelProject={cancelProject} completeViewpoint={completeViewpoint}
-                  handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline} companyList={companyList} assigneeList={assigneeList} offshoreCompanies={offshoreCompanies}
+                  handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline} companyList={companyList} assigneeList={assigneeList} offshoreCompanies={offshoreCompanies} defaultCollapsed
                   colors={colors} fontJP={fontJP} />
               </section>
             );
@@ -3262,7 +3269,7 @@ function InputView({ embedded, form, setForm, handleSubmit, editingId, editMode,
             handleDeleteViewpoint={handleDeleteViewpoint}
             handleDelete={handleDelete} toggleStatus={toggleStatus}
             moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={onDragTask} onDropTask={onDropTask} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} completeProject={completeProject} cancelProject={cancelProject} completeViewpoint={completeViewpoint}
-            handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline} companyList={companyList} assigneeList={assigneeList} offshoreCompanies={offshoreCompanies}
+            handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline} companyList={companyList} assigneeList={assigneeList} offshoreCompanies={offshoreCompanies} defaultCollapsed
             colors={colors} fontJP={fontJP} />
         )}
       </section>
@@ -3515,7 +3522,7 @@ function ProjectInfoEditor({ pg, companyList, onSave, onCancel, colors, fontJP }
 }
 
 // ============ 視点グループリスト ============
-function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder, saveProjectOrder, sortMode, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, saveProjectInfo, setProjectDeadline, companyList, assigneeList, offshoreCompanies, colors, fontJP }) {
+function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder, saveProjectOrder, sortMode, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, saveProjectInfo, setProjectDeadline, companyList, assigneeList, offshoreCompanies, defaultCollapsed, colors, fontJP }) {
   // 案件情報をインライン編集中の案件名（null = 非編集）
   const [editingInfo, setEditingInfo] = useState(null);
   // 契約形態「オフショア」の会社（お客様マスタ由来）。会社別表示で「オフショア（その他）」へ集約する。
@@ -3706,6 +3713,14 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
   };
 
   const [collapsed, setCollapsed] = useState(() => new Set());
+  // 進行中一覧（defaultCollapsed）は標準で全案件を閉じる（データ初回到着時に1回だけ。以後は手動操作を尊重）
+  const didInitCollapse = useRef(false);
+  useEffect(() => {
+    if (defaultCollapsed && !didInitCollapse.current && orderedProjectGroups.length > 0) {
+      setCollapsed(new Set(orderedProjectGroups.map(p => p.projectName)));
+      didInitCollapse.current = true;
+    }
+  }, [defaultCollapsed, orderedProjectGroups]);
   const toggle = (pname) => setCollapsed(prev => {
     const next = new Set(prev);
     if (next.has(pname)) next.delete(pname); else next.add(pname);
