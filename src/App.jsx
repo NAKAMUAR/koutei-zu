@@ -945,6 +945,8 @@ export default function App() {
   const [editingId, setEditingId] = useState(null);
   // 編集モード：{ type: 'step'|'viewpoint'|'project', ... }（フォーム上部の見出し・保存スコープを切替）
   const [editMode, setEditMode] = useState(null);
+  // カレンダーから案件編集を開いた場合 true（入力へ遷移せず、カレンダーのすぐ下にフォームを表示）
+  const [calendarEdit, setCalendarEdit] = useState(false);
   // 案件の並び順（ドラッグ＆ドロップ用）。Firestore に projectOrder として保存
   const [projectOrder, setProjectOrder] = useState([]);
   // お客様マスタ（[{ id, company, contact }]）・従業員マスタ（[{ id, name, role }]）
@@ -1439,6 +1441,7 @@ export default function App() {
       setEditMode(null);
       setEditingId(null);
       setForm(emptyForm);
+      setCalendarEdit(false);
       return;
     }
 
@@ -1487,7 +1490,7 @@ export default function App() {
   };
 
   // 案件を編集：新規登録フォームに案件全体（全視点・全ステップ、完了済み含む）を pre-populate
-  const handleEditProject = (projectName) => {
+  const handleEditProject = (projectName, fromCalendar = false) => {
     const projectTasks = tasksRef.current.filter(t => t.projectName === projectName);
     if (projectTasks.length === 0) { alert('この案件には編集できるタスクがありません'); return; }
     // 視点ごとにグループ化（出現順）→ 各視点内は stepOrder 順
@@ -1538,8 +1541,14 @@ export default function App() {
     });
     setEditingId(null);
     setEditMode({ type: 'project', projectName: first.projectName });
-    setView('input');
-    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (fromCalendar) {
+      // カレンダーのすぐ下にインライン表示（入力タブへは遷移しない）
+      setCalendarEdit(true);
+    } else {
+      setCalendarEdit(false);
+      setView('input');
+      if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
   };
 
   // 視点を削除（ぶら下がる全ステップ＝アクティブ＋完了済みを一括削除）
@@ -2268,9 +2277,31 @@ export default function App() {
             colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
         )}
         {view === 'calendar' && (
+          <>
           <CalendarView scheduled={scheduled} settings={settings} now={now} colors={colors} fontDisplay={fontDisplay} fontJP={fontJP}
-            onEditProject={handleEditProject} assigneeOrder={assigneeOrder}
+            onEditProject={(p) => handleEditProject(p, true)} assigneeOrder={assigneeOrder}
             onReorderAssignee={reorderAssigneeFromCalendar} onReorderProject={reorderProjectFromCalendar} />
+          {/* カレンダーから案件編集を開いた場合、入力へ遷移せずスケジュールのすぐ下にフォームを表示 */}
+          {calendarEdit && editMode && (
+            <div style={{ marginTop: 24 }}>
+              <InputView embedded form={form} setForm={setForm} handleSubmit={handleSubmit} editingId={editingId} editMode={editMode}
+                cancelEdit={() => { setEditingId(null); setEditMode(null); setForm(emptyForm); setCalendarEdit(false); }}
+                tasks={tasks} scheduled={scheduled}
+                projectOrder={projectOrder} saveProjectOrder={saveProjectOrderPartial}
+                companyList={companyList} customerMaster={customerMaster}
+                handleEdit={handleEdit} handleEditProject={handleEditProject} handleEditViewpoint={handleEditViewpoint}
+                handleAddViewpointToProject={handleAddViewpointToProject}
+                handleDeleteViewpoint={handleDeleteViewpoint}
+                handleDelete={handleDelete} toggleStatus={toggleStatus}
+                moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={setDragTaskId} onDropTask={reorderTaskPriority} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} completeProject={completeProject} cancelProject={cancelProject} completeViewpoint={completeViewpoint}
+                handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline}
+                finalizeReview={finalizeReview} reopenReview={reopenReview} setReviewNote={setReviewNote} setReviewActualEnd={setReviewActualEnd}
+                projectList={projectList} projectInternalList={projectInternalList} viewpointList={viewpointList} assigneeList={assigneeList} assigneeOrder={assigneeOrder}
+                settings={settings} now={now}
+                colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
+            </div>
+          )}
+          </>
         )}
         {view === 'byAssignee' && (
           <AssigneeView scheduled={scheduled} selectedAssignee={selectedAssignee} setSelectedAssignee={setSelectedAssignee} now={now} assigneeOrder={assigneeOrder}
@@ -2465,7 +2496,7 @@ function NavButton({ active, onClick, icon, label, badge }) {
 }
 
 // ============ 入力ビュー ============
-function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdit, tasks, scheduled, projectOrder, saveProjectOrder, companyList, customerMaster, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, saveProjectInfo, setProjectDeadline, finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, projectList, projectInternalList, viewpointList, assigneeList, assigneeOrder, settings, now, colors, fontJP, fontDisplay }) {
+function InputView({ embedded, form, setForm, handleSubmit, editingId, editMode, cancelEdit, tasks, scheduled, projectOrder, saveProjectOrder, companyList, customerMaster, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, saveProjectInfo, setProjectDeadline, finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, projectList, projectInternalList, viewpointList, assigneeList, assigneeOrder, settings, now, colors, fontJP, fontDisplay }) {
   // お客様担当者の候補：会社名を選んでいればその会社の担当者を優先表示
   const contactOptions = useMemo(() => {
     const rows = customerMaster || [];
@@ -2657,7 +2688,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
         <QuoteModal projects={pastProjects} onSelect={selectQuote} onClose={() => setQuoteOpen(false)}
           colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
       )}
-      {atRiskProjects.length > 0 && !riskAck && (
+      {!embedded && atRiskProjects.length > 0 && !riskAck && (
         <div onClick={() => setRiskAck(true)}
           style={{
             position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000,
@@ -3067,6 +3098,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
         </div>
       </section>
 
+      {!embedded && (<>
       <section>
         <h2 style={{ fontFamily: fontDisplay, fontSize: 18, margin: '0 0 16px 0', fontWeight: 500, display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
           進行中タスク
@@ -3211,6 +3243,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
         review={scheduled.review} now={now}
         finalizeReview={finalizeReview} reopenReview={reopenReview} setReviewNote={setReviewNote} setReviewActualEnd={setReviewActualEnd}
         colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
+      </>)}
     </div>
   );
 }
