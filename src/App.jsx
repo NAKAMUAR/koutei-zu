@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useLayoutEffect } from 'react';
 import { Plus, Trash2, Edit2, Calendar as CalIcon, MessageSquare, Settings as SettingsIcon, Check, X, Clock, Folder, User, ChevronUp, ChevronDown, Users, CheckCircle2, RotateCcw, TrendingUp, ArrowRight, GripVertical, Search, AlertTriangle } from 'lucide-react';
 import { storage, tasksStore, signIn, signOutUser, subscribeAuth } from './firebase.js';
 
@@ -4700,13 +4700,17 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
   // assignees 件数なども依存に含め、didScrollKey で「同一モード/期間で1回だけ」を担保する。
   const scrollRef = useRef(null);
   const didScrollKey = useRef('');
-  useEffect(() => {
+  // useLayoutEffect ＝ 描画前に scrollLeft を確定（タブ表示直後のチラつき防止）。
+  // タブ切替で再マウントされた直後は scrollWidth が未確定のことがあるため、rAF でも再設定する。
+  useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     const key = `${viewMode}|${fmtYMD(anchor)}`;
     if (isFlexWidth) { el.scrollLeft = 0; didScrollKey.current = key; return; }
     if (didScrollKey.current === key) return; // この モード/期間 では設定済み
-    el.scrollLeft = leftEdgeIndex * dayCellWidth;
+    const target = leftEdgeIndex * dayCellWidth;
+    el.scrollLeft = target;
+    requestAnimationFrame(() => { if (scrollRef.current) scrollRef.current.scrollLeft = target; });
     didScrollKey.current = key;
   }, [viewMode, anchor, isFlexWidth, leftEdgeIndex, dayCellWidth, allDates.length, assignees.length]);
 
