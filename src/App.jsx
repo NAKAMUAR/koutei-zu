@@ -3907,6 +3907,16 @@ function ReviewSection({ review, now, finalizeReview, reopenReview, setReviewNot
         <span style={{ fontSize: 12, color: colors.textMute, fontFamily: fontJP }}>
           {groups.length}件 ・ 視点完了後の確認フェーズ（{REVIEW_AUTO_DONE_DAYS}日更新がなければ自動で完了へ）
         </span>
+        <span style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignSelf: 'center' }}>
+          <button type="button" onClick={() => setCollapsed(new Set(byProject.map(p => p.projectName)))}
+            style={{ display: 'flex', alignItems: 'center', gap: 3, padding: '4px 10px', background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, color: colors.textMute }}>
+            <ChevronDown size={13} />全て閉じる
+          </button>
+          <button type="button" onClick={() => setCollapsed(new Set())}
+            style={{ display: 'flex', alignItems: 'center', gap: 3, padding: '4px 10px', background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, color: colors.textMute }}>
+            <ChevronUp size={13} />全て開く
+          </button>
+        </span>
       </h2>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginTop: 12 }}>
         {byProject.map(pg => {
@@ -3940,7 +3950,7 @@ function ReviewSection({ review, now, finalizeReview, reopenReview, setReviewNot
                 <span style={{ fontSize: 11, color: colors.textMute, flexShrink: 0 }}>{pg.items.length}視点 確認待ち</span>
               </div>
               {!isCollapsed && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginLeft: 22 }}>
                   {pg.items.map(g => (
                     <ReviewCard key={g.key} g={g} now={now}
                       finalizeReview={finalizeReview} reopenReview={reopenReview} setReviewNote={setReviewNote} setReviewActualEnd={setReviewActualEnd}
