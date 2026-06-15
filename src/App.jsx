@@ -2509,8 +2509,9 @@ function DeadlineConfirmModal({ info, onCancel, onSubmit, colors, fontJP, fontDi
   const reorder = info.reorder || {};
   const sameBump = reorder.sameBump || null;
   const globalBump = reorder.globalBump || null;
-  // 既定の選択肢：同担当者の繰り上げ＞全体繰り上げ＞検討保留
-  const [choice, setChoice] = useState(sameBump ? 'same' : globalBump ? 'global' : 'defer');
+  // 既定は「並べ替えない（検討保留）」。並び順の入れ替えはユーザーが繰り上げ案を
+  // 能動的に選んで「繰り上げて登録」を押したときだけ実行する（システムが勝手に入れ替えない）。
+  const [choice, setChoice] = useState('defer');
 
   const fmtEnd = (b) => `${fmtMD(b.endDate)}(${dayName(b.endDate)}) ${minToTime(b.endMin)}`;
   const apply = () => {
