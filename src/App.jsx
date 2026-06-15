@@ -463,7 +463,6 @@ function dayFreeIntervals(assignee, date, settings, busyMap, absences) {
 }
 
 function scheduleTasks(tasks, settings, projectOrder, now) {
-  const nowTs = (now || new Date()).getTime();
   const dailySlots = getDailySlots(settings);
   const configuredStart = startOfDay(settings.startDate ? new Date(settings.startDate + 'T00:00:00') : new Date());
   // 過去には予定を置かない：起点は「設定された開始日」と「本日」の遅い方にする
@@ -517,17 +516,15 @@ function scheduleTasks(tasks, settings, projectOrder, now) {
   // 終了予定の指定（manualEnd）もこの下限に反映される
   const lastEndByAssignee = {};
 
-  // 経過進捗を反映した実効的な所要時間（h）。
-  // 開始（eTs）が現在より過去のタスクは「開始〜現在の経過稼働時間＋残作業時間（制作時間−完了時間）」
-  // で枠を取り直す。完了時間が経過どおりなら終了予定は変わらず、
-  // 遅れていれば終了予定が後ろへ、進んでいれば前へ自動調整される。
-  const effectiveDuration = (task, eTs) => {
+  // スケジュール用の所要時間（h）＝残作業（制作時間−完了時間）。
+  // 経過時間では終了予定を膨張させない（未記録のまま時間が経っても枠は伸びない）。
+  // 例: 0.5h タスクは常に 0.5h 枠で配置され、開始予定どおりに表示される。
+  // 遅れの反映は「完了時の実終了時刻（actualEnd）」を入力したときだけ後続へ伝播する
+  // （doneFloor / lastEndByAssignee 経由で次タスクの開始下限が後ろへずれる）。
+  const effectiveDuration = (task) => {
     const fullHours = Math.max(0, task.hours || 0);
     if (fullHours <= 0) return 0;
-    if (eTs >= nowTs) return fullHours;
-    const elapsedH = workingHoursBetweenTs(eTs, nowTs, task.assignee, settings);
-    const remainingH = Math.max(0, fullHours - (task.completedHours || 0));
-    return elapsedH + remainingH;
+    return Math.max(0, fullHours - (task.completedHours || 0));
   };
 
   // eTs 以降の空き営業時間に durationHours ぶんを詰める（予約済み・休日/不在は飛ばす）。
@@ -587,7 +584,7 @@ function scheduleTasks(tasks, settings, projectOrder, now) {
     );
     if (hasEarlierUnpinned) continue;
     const eTs = startOfDay(ms).getTime() + (ms.getHours() * 60 + ms.getMinutes()) * 60000;
-    pinnedResults.set(task.id, fillTaskSlots(task, eTs, effectiveDuration(task, eTs)));
+    pinnedResults.set(task.id, fillTaskSlots(task, eTs, effectiveDuration(task)));
   }
 
   const scheduled = sorted.map(task => {
@@ -617,7 +614,7 @@ function scheduleTasks(tasks, settings, projectOrder, now) {
         }
       }
       if (vpLastEnd[vkey] && vpLastEnd[vkey] > eTs) eTs = vpLastEnd[vkey];
-      res = fillTaskSlots(task, eTs, effectiveDuration(task, eTs));
+      res = fillTaskSlots(task, eTs, effectiveDuration(task));
     }
     const { slots, meTs, meDate, meMin } = res;
 
