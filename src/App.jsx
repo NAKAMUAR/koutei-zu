@@ -5513,7 +5513,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                           <TaskBlock key={si} task={task} slot={slot} done={done}
                             projectColor={getProjectColor(task.projectName)}
                             timeline={{ left: `${((s - dayStart) / totalMin) * 100}%`, width: `${((e - s) / totalMin) * 100}%` }}
-                            projDrag={projDrag} onProjDragStart={onReorderProject ? setProjDrag : null} onDropProject={onReorderProject} onVpDragStart={onReassignViewpoint ? setVpDrag : null}
+                            projDrag={projDrag} onProjDragStart={onReorderProject ? setProjDrag : null} onDropProject={onReorderProject} onVpDragStart={onReassignViewpoint ? setVpDrag : null} vpDrag={vpDrag} onReassign={onReassignViewpoint}
                             onClick={onEditProject && (() => onEditProject(task.projectName))} />
                         );
                       })}
@@ -5655,7 +5655,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                               left: `${di * dayW + ((s - dayStart) / totalMin) * dayW}px`,
                               width: `${((e - s) / totalMin) * dayW}px`,
                             }}
-                            projDrag={projDrag} onProjDragStart={onReorderProject ? setProjDrag : null} onDropProject={onReorderProject} onVpDragStart={onReassignViewpoint ? setVpDrag : null}
+                            projDrag={projDrag} onProjDragStart={onReorderProject ? setProjDrag : null} onDropProject={onReorderProject} onVpDragStart={onReassignViewpoint ? setVpDrag : null} vpDrag={vpDrag} onReassign={onReassignViewpoint}
                             onClick={onEditProject && (() => onEditProject(task.projectName))} />
                         );
                       });
@@ -5763,7 +5763,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                           heightPct={(slot.hours / morningHours) * 100}
                           projectColor={getProjectColor(task.projectName)}
                           separator={si === 0 ? null : (morningItems[si - 1].task.projectName !== task.projectName ? 'strong' : 'weak')}
-                          projDrag={projDrag} onProjDragStart={onReorderProject ? setProjDrag : null} onDropProject={onReorderProject} onVpDragStart={onReassignViewpoint ? setVpDrag : null}
+                          projDrag={projDrag} onProjDragStart={onReorderProject ? setProjDrag : null} onDropProject={onReorderProject} onVpDragStart={onReassignViewpoint ? setVpDrag : null} vpDrag={vpDrag} onReassign={onReassignViewpoint}
                           onClick={onEditProject && (() => onEditProject(task.projectName))} />
                       ))}
                     </div>
@@ -5775,7 +5775,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                           heightPct={(slot.hours / pmHours) * 100}
                           projectColor={getProjectColor(task.projectName)}
                           separator={si === 0 ? null : (afternoonItems[si - 1].task.projectName !== task.projectName ? 'strong' : 'weak')}
-                          projDrag={projDrag} onProjDragStart={onReorderProject ? setProjDrag : null} onDropProject={onReorderProject} onVpDragStart={onReassignViewpoint ? setVpDrag : null}
+                          projDrag={projDrag} onProjDragStart={onReorderProject ? setProjDrag : null} onDropProject={onReorderProject} onVpDragStart={onReassignViewpoint ? setVpDrag : null} vpDrag={vpDrag} onReassign={onReassignViewpoint}
                           onClick={onEditProject && (() => onEditProject(task.projectName))} />
                       ))}
                     </div>
@@ -5810,18 +5810,22 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
       )}
 
       <div style={{ marginTop: 20, fontSize: 11, color: colors.textMute }}>
-        セル内の色は案件ごと（パステル・「ホワイト」工程は1段階薄い色） ・ 右上の #番号 が優先順位 ・ 斜線ストライプ＋「仮」は仮案件 ・ グレーの実線ブロックは完了済（「済」）／中止（「止」、実終了時刻から遡って表示） ・ グレーの斜線は休日・不在 ・ マウスオーバーで詳細表示 ・ クリックで案件編集フォームを開く（完了済みの案件も編集可） ・ ブロックをドラッグ＆ドロップで案件の順番（優先順位）を変更 ・ ブロックを別の担当者名の上へドロップでその視点の担当者を変更 ・ 左端の担当者名をドラッグ＆ドロップで担当者の表示順を変更
+        セル内の色は案件ごと（パステル・「ホワイト」工程は1段階薄い色） ・ 右上の #番号 が優先順位 ・ 斜線ストライプ＋「仮」は仮案件 ・ グレーの実線ブロックは完了済（「済」）／中止（「止」、実終了時刻から遡って表示） ・ グレーの斜線は休日・不在 ・ マウスオーバーで詳細表示 ・ クリックで案件編集フォームを開く（完了済みの案件も編集可） ・ ブロックを同じ担当者の行内でドラッグ＆ドロップすると案件の順番（優先順位）を変更 ・ ブロックを別の担当者の行（ブロックや担当者名の上）へドロップするとその視点の担当者を変更 ・ 左端の担当者名をドラッグ＆ドロップで担当者の表示順を変更
       </div>
     </div>
   );
 }
 
-function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact, separator, projDrag, onProjDragStart, onDropProject, onVpDragStart, timeline }) {
+function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact, separator, projDrag, onProjDragStart, onDropProject, onVpDragStart, vpDrag, onReassign, timeline }) {
   const [projHover, setProjHover] = useState(false);
   // 案件の並び替えドラッグは進行中ブロックのみ（完了・中止のグレーは対象外）
   const canDragProject = !!onDropProject && !done;
   // 担当者付け替え（視点を別担当者の行へドロップ）も進行中ブロックのみ
   const canDrag = (!!onDropProject || !!onVpDragStart) && !done;
+  // このブロックをドロップ先にできるか（進行中のみ）。別担当者の視点がドラッグ中なら付け替え、同担当者なら並び替え。
+  const canBeDropTarget = !done && (!!onDropProject || !!onReassign);
+  const reassignHere = vpDrag && onReassign && vpDrag.assignee !== task.assignee;
+  const reorderHere = projDrag && onDropProject && projDrag !== task.projectName && (!vpDrag || vpDrag.assignee === task.assignee);
   // パステル表示：通常ステップは基本パステル、「ホワイト」工程はさらに1段階薄く。完了は薄いグレー
   const isWhiteStep = !done && (task.stepName || '').includes('ホワイト');
   const blockBg = done ? '#d4d4cd' : pastelize(projectColor, isWhiteStep ? 0.82 : 0.6);
@@ -5849,9 +5853,15 @@ function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact
       draggable={canDrag}
       onDragStart={canDrag ? ((e) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', task.projectName); if (onProjDragStart) onProjDragStart(task.projectName); if (onVpDragStart) onVpDragStart({ projectName: task.projectName, viewpointName: task.viewpointName, assignee: task.assignee }); }) : undefined}
       onDragEnd={canDrag ? (() => { if (onProjDragStart) onProjDragStart(null); if (onVpDragStart) onVpDragStart(null); }) : undefined}
-      onDragOver={canDragProject ? ((e) => { if (projDrag && projDrag !== task.projectName) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (!projHover) setProjHover(true); } }) : undefined}
-      onDragLeave={canDragProject ? (() => { if (projHover) setProjHover(false); }) : undefined}
-      onDrop={canDragProject ? ((e) => { e.preventDefault(); setProjHover(false); if (projDrag && projDrag !== task.projectName) onDropProject(projDrag, task.projectName); if (onProjDragStart) onProjDragStart(null); }) : undefined}
+      onDragOver={canBeDropTarget ? ((e) => { if (reassignHere || reorderHere) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (!projHover) setProjHover(true); } }) : undefined}
+      onDragLeave={canBeDropTarget ? (() => { if (projHover) setProjHover(false); }) : undefined}
+      onDrop={canBeDropTarget ? ((e) => {
+        e.preventDefault(); e.stopPropagation(); setProjHover(false);
+        if (reassignHere) onReassign(vpDrag.projectName, vpDrag.viewpointName, vpDrag.assignee, task.assignee);
+        else if (reorderHere) onDropProject(projDrag, task.projectName);
+        if (onProjDragStart) onProjDragStart(null);
+        if (onVpDragStart) onVpDragStart(null);
+      }) : undefined}
       style={{
         background: blockBg, color: blockText,
         // 仮案件は斜線ストライプを重ねて区別する（パステル地でも見えるよう薄い濃色）
