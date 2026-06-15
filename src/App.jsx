@@ -1108,14 +1108,46 @@ export default function App() {
       } catch (e) { console.error('タスク移行エラー:', e); }
     })();
 
+    // 休日(holidays)・休み(absences) を旧 settings から独立キーへ一度だけ移行する。
+    // （settings は1ドキュメント集中型で全体上書きのため、他設定の保存で巻き込まれて消える事故を防ぐ）
+    (async () => {
+      try {
+        const [hRaw, aRaw, sRaw] = await Promise.all([
+          storage.get('holidays'), storage.get('absences'), storage.get('settings'),
+        ]);
+        let legacy = {};
+        if (sRaw && sRaw.value) { try { legacy = JSON.parse(sRaw.value); } catch (e) {} }
+        if (!hRaw && Array.isArray(legacy.holidays) && legacy.holidays.length) {
+          await storage.set('holidays', JSON.stringify(legacy.holidays));
+        }
+        if (!aRaw && Array.isArray(legacy.absences) && legacy.absences.length) {
+          await storage.set('absences', JSON.stringify(legacy.absences));
+        }
+      } catch (e) { console.warn('休日・休みの移行に失敗:', e); }
+    })();
+
     const unsubSettings = storage.subscribe('settings', (val) => {
       if (val) {
         try {
           const parsed = JSON.parse(val);
-          setSettings({ ...DEFAULT_SETTINGS, ...parsed });
+          // holidays/absences は専用キー（別購読）が真実の値。settings 側の旧データでは上書きしない。
+          setSettings(prev => ({ ...DEFAULT_SETTINGS, ...parsed, holidays: prev.holidays || [], absences: prev.absences || [] }));
         } catch (e) { }
       }
       setSettingsLoaded(true);
+    });
+
+    // 休日（祝日）・休み（欠勤・不在）は settings から分離した専用キーを購読
+    const unsubHolidays = storage.subscribe('holidays', (val) => {
+      let arr = [];
+      if (val) { try { const p = JSON.parse(val); if (Array.isArray(p)) arr = p; } catch (e) {} }
+      syncHolidays({ holidays: arr });
+      setSettings(prev => ({ ...prev, holidays: arr }));
+    });
+    const unsubAbsences = storage.subscribe('absences', (val) => {
+      let arr = [];
+      if (val) { try { const p = JSON.parse(val); if (Array.isArray(p)) arr = p; } catch (e) {} }
+      setSettings(prev => ({ ...prev, absences: arr }));
     });
 
     // 案件並び順（ドラッグ＆ドロップで並び替えた順序）を購読
@@ -1151,6 +1183,8 @@ export default function App() {
       clearTimeout(loadTimeout);
       if (unsubTasks) unsubTasks();
       unsubSettings();
+      unsubHolidays();
+      unsubAbsences();
       unsubOrder();
       unsubCustomer();
       unsubEmployee();
@@ -1195,9 +1229,22 @@ export default function App() {
   const saveSettings = async (newSettings) => {
     setSettings(newSettings);
     try {
-      const { morningStart, morningEnd, afternoonStart, afternoonEnd, startDate, startTime, absences, overtimes, endPromptState, companyOrder, holidays } = newSettings;
-      await storage.set('settings', JSON.stringify({ morningStart, morningEnd, afternoonStart, afternoonEnd, startDate, startTime, absences: absences || [], overtimes: overtimes || [], endPromptState: endPromptState || {}, companyOrder: companyOrder || [], holidays: holidays || [] }));
+      const { morningStart, morningEnd, afternoonStart, afternoonEnd, startDate, startTime, overtimes, endPromptState, companyOrder } = newSettings;
+      // 休日(holidays)・休み(absences) は巻き込み事故防止のため別ドキュメント（saveHolidays/saveAbsences）に分離。ここでは保存しない。
+      await storage.set('settings', JSON.stringify({ morningStart, morningEnd, afternoonStart, afternoonEnd, startDate, startTime, overtimes: overtimes || [], endPromptState: endPromptState || {}, companyOrder: companyOrder || [] }));
     } catch (e) { console.error(e); }
+  };
+  // 休日（祝日）・休み（欠勤・不在）は専用キーに保存する。状態には settings 内に保持して既存の参照を維持。
+  const saveHolidays = async (arr) => {
+    syncHolidays({ holidays: arr });
+    setSettings(prev => ({ ...prev, holidays: arr }));
+    try { await storage.set('holidays', JSON.stringify(arr)); }
+    catch (e) { console.error('祝日保存エラー:', e); }
+  };
+  const saveAbsences = async (arr) => {
+    setSettings(prev => ({ ...prev, absences: arr }));
+    try { await storage.set('absences', JSON.stringify(arr)); }
+    catch (e) { console.error('欠勤・不在保存エラー:', e); }
   };
   // 会社の表示順を保存
   const saveCompanyOrder = (order) => {
@@ -1211,13 +1258,12 @@ export default function App() {
     saveSettings({ ...settings, endPromptState: eps });
   };
 
-  // 欠勤・休日・不在の追加／削除
+  // 欠勤・休日・不在の追加／削除（専用キーへ保存）
   const addAbsence = (absence) => {
-    const next = [...(settings.absences || []), { ...absence, id: genId('abs') }];
-    saveSettings({ ...settings, absences: next });
+    saveAbsences([...(settings.absences || []), { ...absence, id: genId('abs') }]);
   };
   const removeAbsence = (id) => {
-    saveSettings({ ...settings, absences: (settings.absences || []).filter(a => a.id !== id) });
+    saveAbsences((settings.absences || []).filter(a => a.id !== id));
   };
 
   // 全体共通の祝日（ベトナム等）の追加／削除。重複日付は無視する
@@ -1233,10 +1279,10 @@ export default function App() {
       }
     }
     if (adds.length === 0) return;
-    saveSettings({ ...settings, holidays: [...cur, ...adds] });
+    saveHolidays([...cur, ...adds]);
   };
   const removeHoliday = (id) => {
-    saveSettings({ ...settings, holidays: (settings.holidays || []).filter(h => h.id !== id) });
+    saveHolidays((settings.holidays || []).filter(h => h.id !== id));
   };
 
   // 残業（稼働枠の追加）の追加／削除
