@@ -5714,6 +5714,23 @@ const tabStyle = (active, colors, fontJP) => ({
   display: 'flex', alignItems: 'center',
 });
 
+// 案件が無くても会社別連絡文に常に表示する会社
+const FORCED_COMPANIES = ['TAMAZEN', 'SUMUS'];
+// 案件が無い会社の連絡文。候補からランダムで1つ選んで本文にする。
+const NO_PROJECT_GREETINGS = [
+  `おはようございます。
+何かお手伝いできることがございましたら、いつでもお声がけくださいませ。
+本日もどうぞよろしくお願い致します(bow)`,
+  `おはようございます。
+新規案件がございましたら、ぜひご連絡いただけますと幸いに存じます。
+
+何卒よろしくお願い申し上げます`,
+  `おはようございます。
+何かお手伝いできることがございましたら、いつでもお声がけくださいませ。
+
+本日も一日、何卒よろしくお願い致します(bow)`,
+];
+
 // ============ メッセージビュー ============
 function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigneeOrder }) {
   const today = startOfDay(new Date());
@@ -5807,10 +5824,13 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
   const companies = useMemo(() => {
     const seq = companySequence(scheduled.active);
     const set = [...new Set(scheduled.active.map(t => t.companyName || ''))];
-    return set.sort((a, b) => {
+    const sorted = set.sort((a, b) => {
       const sa = seq.has(a) ? seq.get(a) : Infinity, sb = seq.has(b) ? seq.get(b) : Infinity;
       return sa - sb;
     });
+    // 案件の有無に関わらず常に表示する会社を末尾に追加（既にあれば重複させない）
+    for (const fc of FORCED_COMPANIES) if (!sorted.includes(fc)) sorted.push(fc);
+    return sorted;
   }, [scheduled.active]);
   const [msgCompany, setMsgCompany] = useState(null);
   const curCompany = (msgCompany !== null && companies.includes(msgCompany)) ? msgCompany : (companies[0] ?? '');
@@ -5824,6 +5844,10 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
       if ((t.companyName || '') !== company) continue;
       const p = t.projectName || '(案件名未設定)';
       if (!seen.has(p)) { seen.add(p); projectsInOrder.push(p); }
+    }
+    // 案件が無い会社（例：TAMAZEN / SUMUS で当日タスクなし）は、挨拶文をランダムで返す
+    if (projectsInOrder.length === 0) {
+      return NO_PROJECT_GREETINGS[Math.floor(Math.random() * NO_PROJECT_GREETINGS.length)];
     }
     const lines = [
       'お世話になっております。',
@@ -5841,10 +5865,26 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
       const pct = total > 0 ? Math.round(done / total * 100) : 0;
       const status = pct >= 100 ? '（完了）' : (pct > 0 ? '（制作中）' : '');
       const contact = (vpGroups.find(g => g.customerContact) || {}).customerContact || '';
-      // 制作枚数：視点（依頼項目）ごとのステップ数を「視点名N枚」で
-      const sheets = vpGroups
-        .filter(g => g.viewpointName)
-        .map(g => `${g.viewpointName}${g.tasks.length}枚`)
+      // 制作枚数：視点（依頼項目）を外観(EX)／内観(IN)に分類し、各分類の視点数を「分類N枚」で
+      // 例）視点 EX2, EX1, EX3, IN → 「外観3枚+内観1枚」
+      const sheetCounts = new Map(); // 分類ラベル → 枚数（視点数）
+      const sheetOrder = [];         // 出現順を保持（その他分類用）
+      for (const g of vpGroups) {
+        if (!g.viewpointName) continue;
+        const vn = g.viewpointName.trim().toUpperCase();
+        let label;
+        if (vn.startsWith('EX')) label = '外観';
+        else if (vn.startsWith('IN')) label = '内観';
+        else label = g.viewpointName.trim();
+        if (!sheetCounts.has(label)) { sheetCounts.set(label, 0); sheetOrder.push(label); }
+        sheetCounts.set(label, sheetCounts.get(label) + 1);
+      }
+      // 外観→内観→その他（出現順）の順に並べる
+      const sheetRank = (l) => l === '外観' ? 0 : l === '内観' ? 1 : 2;
+      const sheets = sheetOrder
+        .slice()
+        .sort((a, b) => (sheetRank(a) - sheetRank(b)) || (sheetOrder.indexOf(a) - sheetOrder.indexOf(b)))
+        .map(l => `${l}${sheetCounts.get(l)}枚`)
         .join('+');
       // 着手・納期：案件内の最早開始～最遅終了
       let sTs = null, eTs = null, sD = null, eD = null;
@@ -5939,7 +5979,7 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
             fontFamily: fontJP, fontSize: 13, lineHeight: 1.7, color: colors.text, background: '#fbf9f4', whiteSpace: 'pre-wrap',
           }} />
         <div style={{ fontSize: 10, color: colors.textMute, marginTop: 8 }}>
-          ※ 会社を選ぶと、その会社の案件だけの連絡文になります ・ 制作枚数は「視点（依頼項目）ごとのステップ数」で集計しています
+          ※ 会社を選ぶと、その会社の案件だけの連絡文になります ・ 制作枚数は視点(依頼項目)を外観(EX)／内観(IN)で分類した件数です ・ 案件が無い会社は挨拶文をランダム表示します
         </div>
       </div>
 
