@@ -860,7 +860,82 @@ function simulateFormSchedule(form, allTasks, settings, projectOrder, now) {
   return { startDate: sD, startMin: sM, endDate: eD, endMin: eM, moved, requested, deadlineViolations };
 }
 
-// 担当者の表示順：従業員マスタの並び順 → マスタ未登録は末尾（出現順を維持）
+// 納期超過の新規/編集案件に対する「繰り上げ（並べ替え）提案」を算出する。
+// - sameBump : 同じ担当者の案件の中だけで、納期がこの案件より遅い案件の前へ繰り上げる案（推奨）
+// - globalBump: 担当者・会社をまたいで全体の先頭へ繰り上げる案（同じ担当者内で解決できない時の提案）
+// それぞれ実スケジュールで再試算し、この案件の納期超過が解消する場合のみ返す（解消しなければ null）。
+function computeDeadlineReorder(form, allTasks, settings, projectOrder, now) {
+  const P = (form.projectName || '').trim();
+  if (!P) return null;
+  const editIds = formEditIds(form);
+  const activeOthers = allTasks.filter(t => t.status !== 'done' && !editIds.has(t.id));
+  const baseNames = computeProjectOrder(activeOthers, projectOrder);
+  const namesWithP = baseNames.includes(P) ? baseNames.slice() : [...baseNames, P];
+
+  // この案件の実効納期（フォームの視点の最早）
+  const pDlKey = Math.min(...(form.viewpoints || []).map(v =>
+    deadlineKey((v.deadline || '').trim() || (form.projectDeadline || '').trim())));
+  // この案件の担当者集合
+  const pAssignees = new Set();
+  for (const v of (form.viewpoints || [])) {
+    const a = (v.assignee || form.assignee || '').trim();
+    if (a) pAssignees.add(a);
+  }
+
+  // 既存案件 → 担当者集合・実効納期
+  const projMeta = new Map();
+  for (const t of activeOthers) {
+    const p = t.projectName || '';
+    if (!projMeta.has(p)) projMeta.set(p, { assignees: new Set(), dlKey: Infinity });
+    const m = projMeta.get(p);
+    if (t.assignee) m.assignees.add(t.assignee);
+    const k = effectiveDeadlineKey(t);
+    if (k < m.dlKey) m.dlKey = k;
+  }
+  const sharesAssignee = (proj) => {
+    const m = projMeta.get(proj); if (!m) return false;
+    for (const a of pAssignees) if (m.assignees.has(a)) return true;
+    return false;
+  };
+
+  // P を抜いて、beforeProj の直前（null なら先頭）へ挿入した完全順リスト
+  const moveP = (beforeProj) => {
+    const without = namesWithP.filter(n => n !== P);
+    const idx = beforeProj ? without.indexOf(beforeProj) : 0;
+    const at = idx < 0 ? 0 : idx;
+    return [...without.slice(0, at), P, ...without.slice(at)];
+  };
+  const simResolves = (order) => {
+    const sim = simulateFormSchedule(form, allTasks, settings, order, now);
+    if (sim && (sim.deadlineViolations || []).length === 0) return sim;
+    return null;
+  };
+
+  // 同じ担当者の中で、P より前にある「P より納期が遅い」最初の案件の直前へ繰り上げ
+  let sameBump = null, sameTarget = null;
+  for (const n of namesWithP) {
+    if (n === P) break;
+    if (sharesAssignee(n) && (projMeta.get(n)?.dlKey ?? Infinity) > pDlKey) { sameTarget = n; break; }
+  }
+  if (sameTarget) {
+    const order = moveP(sameTarget);
+    const sim = simResolves(order);
+    if (sim) sameBump = { order, target: sameTarget, endDate: sim.endDate, endMin: sim.endMin };
+  }
+
+  // 全体の先頭へ繰り上げ（同じ担当者内で解決できない時の提案）
+  let globalBump = null;
+  if (!sameBump) {
+    const order = moveP(null);
+    const sim = simResolves(order);
+    if (sim) globalBump = { order, endDate: sim.endDate, endMin: sim.endMin };
+  }
+
+  if (!sameBump && !globalBump) return null;
+  return { sameBump, globalBump };
+}
+
+
 function sortAssigneesByMaster(names, masterNames) {
   const idx = new Map((masterNames || []).map((n, i) => [n, i]));
   return [...names].sort((a, b) => {
@@ -1251,21 +1326,28 @@ export default function App() {
       const moved = !!(sim && sim.moved && hasStartPin);
       const violations = (sim && sim.deadlineViolations) || [];
       if (moved || violations.length > 0) {
+        let reorder = null;
+        if (violations.length > 0) {
+          try { reorder = computeDeadlineReorder(form, tasksRef.current, settings, projectOrder, new Date()); }
+          catch (e) { console.warn('並べ替え提案の算出に失敗:', e); }
+        }
         setStartMoveConfirm({
           moved,
           requested: sim.requested,
           actualDate: sim.startDate,
           actualMin: sim.startMin,
           violations,
+          reorder,
         });
-        return; // モーダルの「登録する」で performSubmit を呼ぶ
+        return; // モーダルの選択肢で performSubmit を呼ぶ
       }
     }
     await performSubmit();
   };
 
   // 登録/更新の本体（確認モーダルを通過したあとに実際に保存する処理）
-  const performSubmit = async () => {
+  // opts.orderOverride: 納期超過時の繰り上げで採用する案件並び順（完全な案件名リスト）
+  const performSubmit = async (opts = {}) => {
     if (!form.projectName.trim()) {
       alert('案件名を入力してください');
       return;
@@ -1462,6 +1544,7 @@ export default function App() {
       try { await tasksStore.batch(finalUpserts, deletedIds); }
       catch (e) { console.error('編集保存エラー:', e); alert('保存に失敗しました：' + (e?.message || e)); }
 
+      if (opts.orderOverride) saveProjectOrder(opts.orderOverride);
       setEditMode(null);
       setEditingId(null);
       setForm(emptyForm);
@@ -1475,6 +1558,7 @@ export default function App() {
     const records = result.upserts;
     if (records.length === 0) { alert('少なくとも1つの視点とステップを入力してください'); return; }
     saveTasks(prev => normalizePriorities([...prev, ...records]));
+    if (opts.orderOverride) saveProjectOrder(opts.orderOverride);
     setForm(emptyForm);
   };
 
@@ -2375,54 +2459,11 @@ export default function App() {
       )}
 
       {startMoveConfirm && (
-        <ConfirmModal
-          title="スケジュールの確認"
-          colors={colors} fontJP={fontJP} fontDisplay={fontDisplay}
-          confirmLabel="このまま登録する"
-          cancelLabel="戻る"
-          onConfirm={async () => { setStartMoveConfirm(null); await performSubmit(); }}
-          onCancel={() => setStartMoveConfirm(null)}>
-          {startMoveConfirm.moved && (
-            <>
-              <p style={{ margin: '0 0 10px 0', lineHeight: 1.7 }}>
-                指定した開始時間{' '}
-                <strong>
-                  {startMoveConfirm.requested
-                    ? `${fmtMD(startMoveConfirm.requested.date)}(${dayName(startMoveConfirm.requested.date)}) ${minToTime(startMoveConfirm.requested.min)}`
-                    : ''}
-                </strong>{' '}
-                には空きがありません。
-              </p>
-              <p style={{ margin: '0 0 10px 0', lineHeight: 1.7 }}>
-                実際の開始は{' '}
-                <strong style={{ color: '#c46a16' }}>
-                  {fmtMD(startMoveConfirm.actualDate)}({dayName(startMoveConfirm.actualDate)}) {minToTime(startMoveConfirm.actualMin)}
-                </strong>{' '}
-                になります。
-              </p>
-            </>
-          )}
-          {(startMoveConfirm.violations || []).length > 0 && (
-            <div style={{ margin: '0 0 10px 0' }}>
-              <p style={{ margin: '0 0 6px 0', lineHeight: 1.7, color: colors.accent, fontWeight: 600 }}>
-                ⚠ 終了予定が納期を超える視点があります
-              </p>
-              {(startMoveConfirm.violations || []).map((v, i) => {
-                const dl = new Date(v.deadline + 'T00:00:00');
-                return (
-                  <p key={i} style={{ margin: '0 0 4px 0', lineHeight: 1.7, fontSize: 12 }}>
-                    視点「{v.viewpointName}」：終了予定{' '}
-                    <strong style={{ color: colors.accent }}>
-                      {fmtMD(v.endDate)}({dayName(v.endDate)}) {minToTime(v.endMin)}
-                    </strong>
-                    {' '}＞ 納期 {fmtMD(dl)}（{dayName(dl)}）
-                  </p>
-                );
-              })}
-            </div>
-          )}
-          <p style={{ margin: 0, lineHeight: 1.7 }}>このまま登録しますか？</p>
-        </ConfirmModal>
+        <DeadlineConfirmModal
+          info={startMoveConfirm}
+          onCancel={() => setStartMoveConfirm(null)}
+          onSubmit={async (opts) => { setStartMoveConfirm(null); await performSubmit(opts); }}
+          colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
       )}
 
       {overdueViewpoints.length > 0 && (
@@ -2454,6 +2495,119 @@ function ConfirmModal({ title, children, confirmLabel, cancelLabel, onConfirm, o
           <button type="button" onClick={onConfirm}
             style={{ padding: '8px 18px', background: colors.text, color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13, fontWeight: 600 }}>
             {confirmLabel || 'OK'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============ 登録確認モーダル（開始移動・納期超過＋繰り上げ提案） ============
+function DeadlineConfirmModal({ info, onCancel, onSubmit, colors, fontJP, fontDisplay }) {
+  const violations = info.violations || [];
+  const hasViolation = violations.length > 0;
+  const reorder = info.reorder || {};
+  const sameBump = reorder.sameBump || null;
+  const globalBump = reorder.globalBump || null;
+  // 既定の選択肢：同担当者の繰り上げ＞全体繰り上げ＞検討保留
+  const [choice, setChoice] = useState(sameBump ? 'same' : globalBump ? 'global' : 'defer');
+
+  const fmtEnd = (b) => `${fmtMD(b.endDate)}(${dayName(b.endDate)}) ${minToTime(b.endMin)}`;
+  const apply = () => {
+    if (choice === 'same' && sameBump) onSubmit({ orderOverride: sameBump.order });
+    else if (choice === 'global' && globalBump) onSubmit({ orderOverride: globalBump.order });
+    else onSubmit({});
+  };
+
+  const optStyle = (active) => ({
+    display: 'flex', gap: 8, alignItems: 'flex-start', padding: '10px 12px',
+    border: `1px solid ${active ? colors.accent : colors.border}`, borderRadius: 6,
+    background: active ? colors.accentSoft : '#fff', cursor: 'pointer', marginBottom: 8,
+  });
+  const Radio = ({ value, title, desc, accent }) => (
+    <label style={optStyle(choice === value)} onClick={() => setChoice(value)}>
+      <input type="radio" name="reorderChoice" checked={choice === value} onChange={() => setChoice(value)} style={{ marginTop: 3 }} />
+      <span>
+        <span style={{ fontSize: 13, fontWeight: 600, color: accent || colors.text }}>{title}</span>
+        {desc && <span style={{ display: 'block', fontSize: 11, color: colors.textMute, marginTop: 2, lineHeight: 1.6 }}>{desc}</span>}
+      </span>
+    </label>
+  );
+
+  return (
+    <div onClick={onCancel}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}>
+      <div onClick={(e) => e.stopPropagation()}
+        style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 8, padding: 24, width: '100%', maxWidth: 460, maxHeight: '88vh', overflowY: 'auto', fontFamily: fontJP, boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
+        <h3 style={{ fontFamily: fontDisplay, fontSize: 17, margin: '0 0 12px 0', fontWeight: 600 }}>
+          {hasViolation ? '納期超過の確認' : 'スケジュールの確認'}
+        </h3>
+        <div style={{ fontSize: 13, color: colors.text }}>
+          {info.moved && (
+            <>
+              <p style={{ margin: '0 0 10px 0', lineHeight: 1.7 }}>
+                指定した開始時間{' '}
+                <strong>{info.requested ? `${fmtMD(info.requested.date)}(${dayName(info.requested.date)}) ${minToTime(info.requested.min)}` : ''}</strong>{' '}
+                には空きがありません。実際の開始は{' '}
+                <strong style={{ color: '#c46a16' }}>{fmtMD(info.actualDate)}({dayName(info.actualDate)}) {minToTime(info.actualMin)}</strong>{' '}になります。
+              </p>
+            </>
+          )}
+
+          {hasViolation && (
+            <>
+              <p style={{ margin: '0 0 6px 0', lineHeight: 1.7, color: colors.accent, fontWeight: 600 }}>
+                ⚠ 終了予定が納期を超える視点があります
+              </p>
+              <div style={{ margin: '0 0 14px 0' }}>
+                {violations.map((v, i) => {
+                  const dl = new Date(v.deadline + 'T00:00:00');
+                  return (
+                    <p key={i} style={{ margin: '0 0 4px 0', lineHeight: 1.7, fontSize: 12 }}>
+                      視点「{v.viewpointName}」：終了予定{' '}
+                      <strong style={{ color: colors.accent }}>{fmtMD(v.endDate)}({dayName(v.endDate)}) {minToTime(v.endMin)}</strong>
+                      {' '}＞ 納期 {fmtMD(dl)}（{dayName(dl)}）
+                    </p>
+                  );
+                })}
+              </div>
+
+              <p style={{ margin: '0 0 8px 0', fontSize: 12, fontWeight: 600, color: colors.textMute }}>対応を選んでください</p>
+
+              {sameBump && (
+                <Radio value="same" accent={colors.progress}
+                  title="✓ 同じ担当者の中で繰り上げる（推奨）"
+                  desc={`「${sameBump.target}」より前に詰めます。終了予定 ${fmtEnd(sameBump)}（納期内）／他の担当者の予定は変えません。`} />
+              )}
+              {globalBump && (
+                <Radio value="global"
+                  title="全体の先頭へ繰り上げる（要確認）"
+                  desc={`終了予定 ${fmtEnd(globalBump)}（納期内）。※納期がより早い案件より前に詰めるため、他の案件の納期に影響する場合があります。`} />
+              )}
+              {!sameBump && !globalBump && (
+                <p style={{ margin: '0 0 8px 0', fontSize: 12, color: colors.textMute, lineHeight: 1.7 }}>
+                  並べ替えでは納期に間に合いません。納期の見直し・担当者の変更・制作時間の調整をご検討ください。
+                </p>
+              )}
+              <Radio value="defer"
+                title="後で検討する（このまま登録・検討保留）"
+                desc="並べ替えずにこのまま登録します。納期超過の赤バッジが付くので、一覧から後で並べ替えできます。" />
+            </>
+          )}
+
+          {!hasViolation && (
+            <p style={{ margin: '8px 0 0 0', lineHeight: 1.7 }}>このまま登録しますか？</p>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
+          <button type="button" onClick={onCancel}
+            style={{ padding: '8px 16px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13, color: colors.textMute }}>
+            戻る
+          </button>
+          <button type="button" onClick={hasViolation ? apply : () => onSubmit({})}
+            style={{ padding: '8px 18px', background: colors.text, color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13, fontWeight: 600 }}>
+            {hasViolation ? (choice === 'defer' ? 'このまま登録' : '繰り上げて登録') : 'このまま登録する'}
           </button>
         </div>
       </div>
