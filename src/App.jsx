@@ -5944,6 +5944,8 @@ function sheetsLabel(viewpointNames) {
 
 // 案件が無くても会社別連絡文に常に表示する会社
 const FORCED_COMPANIES = ['TAMAZEN', 'SUMUS'];
+// 会社切替の「全社まとめ」を表す内部値（全会社の案件を1通にまとめて案件ごとに表示）
+const ALL_COMPANIES = '__all__';
 // 案件が無い会社の連絡文。候補からランダムで1つ選んで本文にする。
 const NO_PROJECT_GREETINGS = [
   `おはようございます。
@@ -6080,16 +6082,19 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
   }, [scheduled.active]);
   const [msgCompany, setMsgCompany] = useState(null);
   const [msgMode, setMsgMode] = useState('morning'); // 'morning'=業務開始 / 'evening'=業務終了
-  const curCompany = (msgCompany !== null && companies.includes(msgCompany)) ? msgCompany : (companies[0] ?? '');
+  // 既定は「全社まとめ」。個別会社を選べば従来どおりその会社だけの連絡文になる。
+  const curCompany = (msgCompany !== null && (msgCompany === ALL_COMPANIES || companies.includes(msgCompany))) ? msgCompany : ALL_COMPANIES;
 
   const fmtDateDow = (d) => `${fmtMD(d)}(${dayName(d)})`;
   const buildCompanyMessage = (company, mode = 'morning') => {
     const evening = mode === 'evening';
-    // この会社の案件を、スケジュール順（scheduled.active の並び）で
+    const isAll = company === ALL_COMPANIES;
+    const matchCompany = (c) => isAll || (c || '') === company;
+    // 案件（projectName）ごとに、スケジュール順（scheduled.active の並び）で1エントリ
     const projectsInOrder = [];
     const seen = new Set();
     for (const t of scheduled.active) {
-      if ((t.companyName || '') !== company) continue;
+      if (!matchCompany(t.companyName)) continue;
       const p = t.projectName || '(案件名未設定)';
       if (!seen.has(p)) { seen.add(p); projectsInOrder.push(p); }
     }
@@ -6103,7 +6108,7 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
     const deliveredMap = new Map(); // 案件名 → 完了タスク配列（本日納品・中止除く）
     const deliveredOrder = [];
     for (const t of scheduled.done) {
-      if ((t.companyName || '') !== company || t.cancelled) continue;
+      if (!matchCompany(t.companyName) || t.cancelled) continue;
       const dd = deliveryDateOf(t);
       if (!dd || fmtYMD(dd) !== todayYmd) continue;
       const p = t.projectName || '(案件名未設定)';
@@ -6123,7 +6128,7 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
     let i = 0;
     for (const p of projectsInOrder) {
       i++;
-      const vpGroups = allGroups.filter(g => (g.companyName || '') === company && g.projectName === p);
+      const vpGroups = allGroups.filter(g => g.projectName === p && matchCompany(g.companyName));
       const total = vpGroups.reduce((s, g) => s + g.totalHours, 0);
       const done = vpGroups.reduce((s, g) => s + g.completedHours, 0);
       const pct = total > 0 ? Math.round(done / total * 100) : 0;
@@ -6222,7 +6227,7 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
       <div style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 6, padding: 24, marginBottom: 28 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 14 }}>
           <h3 style={{ fontFamily: fontDisplay, fontSize: 16, margin: 0, fontWeight: 500, display: 'flex', alignItems: 'center', gap: 8 }}>
-            <MessageSquare size={16} /> 会社別 業務連絡文
+            <MessageSquare size={16} /> 業務連絡文（全社まとめ／会社別）
           </h3>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             {/* 業務開始（朝）／業務終了（夕）の切替 */}
@@ -6240,13 +6245,13 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
             </div>
             <button type="button" onClick={copyCompanyText}
               style={{ padding: '8px 16px', background: companyCopied ? colors.progress : colors.text, color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
-              {companyCopied ? <><Check size={15} /> コピーしました</> : <>この会社の連絡文をコピー</>}
+              {companyCopied ? <><Check size={15} /> コピーしました</> : <>{curCompany === ALL_COMPANIES ? '連絡文をコピー' : 'この会社の連絡文をコピー'}</>}
             </button>
           </div>
         </div>
-        {/* 会社の切り替え */}
+        {/* 会社の切り替え（全社まとめ＋個別会社） */}
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
-          {companies.map(c => (
+          {[ALL_COMPANIES, ...companies].map(c => (
             <button key={c || '__none__'} type="button" onClick={() => setMsgCompany(c)}
               style={{
                 padding: '6px 12px', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12,
@@ -6254,7 +6259,7 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
                 background: c === curCompany ? colors.text : '#fff',
                 color: c === curCompany ? '#fff' : colors.text, fontWeight: c === curCompany ? 600 : 400,
               }}>
-              {companyLabel(c)}
+              {c === ALL_COMPANIES ? '全社まとめ' : companyLabel(c)}
             </button>
           ))}
         </div>
@@ -6266,7 +6271,7 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
             fontFamily: fontJP, fontSize: 13, lineHeight: 1.7, color: colors.text, background: '#fbf9f4', whiteSpace: 'pre-wrap',
           }} />
         <div style={{ fontSize: 10, color: colors.textMute, marginTop: 8 }}>
-          ※ 「業務開始（朝）／業務終了（夕）」で挨拶文を切り替えます ・ 会社を選ぶとその会社の案件だけの連絡文になります ・ 制作枚数は視点(依頼項目)を外観(EX)／内観(IN)で分類した件数です ・ 「■納品済み」は本日納品分（実終了日が本日の完了案件）を表示します ・ 案件が無い会社は挨拶文をランダム表示します
+          ※ 「全社まとめ」は全会社の案件を1通にまとめて案件ごとに表示します（会社を選ぶとその会社だけ） ・ 「業務開始（朝）／業務終了（夕）」で挨拶文を切り替えます ・ 制作枚数は視点(依頼項目)を外観(EX)／内観(IN)で分類した件数です ・ 「■納品済み」は本日納品分（実終了日が本日の完了案件）を表示します
         </div>
       </div>
 
