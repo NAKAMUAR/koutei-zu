@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useLayoutEffect } from 'react';
-import { Plus, Trash2, Edit2, Calendar as CalIcon, MessageSquare, Settings as SettingsIcon, Check, X, Clock, Folder, User, ChevronUp, ChevronDown, Users, CheckCircle2, RotateCcw, TrendingUp, ArrowRight, GripVertical, Search, AlertTriangle, StickyNote } from 'lucide-react';
+import { Plus, Trash2, Edit2, Calendar as CalIcon, MessageSquare, Settings as SettingsIcon, Check, X, Clock, Folder, User, ChevronUp, ChevronDown, Users, CheckCircle2, RotateCcw, TrendingUp, ArrowRight, GripVertical, Search, AlertTriangle, StickyNote, Bell, BellOff } from 'lucide-react';
 import { storage, tasksStore, signIn, signOutUser, subscribeAuth } from './firebase.js';
 
 // ============ 定数・ユーティリティ ============
@@ -1044,6 +1044,35 @@ export default function App() {
     const id = setInterval(() => setNow(new Date()), 60000);
     return () => clearInterval(id);
   }, []);
+
+  // タスクメモの通知：開始時刻（終日は朝の始業時刻）が来たらOS通知＋アプリ内バナーを出す。
+  // アプリを開いている間のみ。プッシュ基盤が無いため、タブを閉じている間は通知できない。
+  const [memoToasts, setMemoToasts] = useState([]); // [{ id, title, body }]
+  const notifiedMemoRef = useRef(new Set());        // 通知済みキー（重複防止）
+  const lastNotifyTickRef = useRef(null);           // 前回チェック時刻（初回は過去分を鳴らさない）
+  useEffect(() => {
+    const nowTs = now.getTime();
+    const prev = lastNotifyTickRef.current;
+    lastNotifyTickRef.current = nowTs;
+    if (prev == null) return; // 初回ティックでは過去メモを鳴らさない
+    const canNotify = typeof Notification !== 'undefined' && Notification.permission === 'granted';
+    for (const m of (memos || [])) {
+      if (!m || !m.date) continue;
+      const hhmm = m.allDay ? (settings.morningStart || '08:00') : (m.startTime || '');
+      if (!hhmm) continue;
+      const ts = new Date(`${m.date}T${hhmm}:00`).getTime();
+      if (isNaN(ts) || !(ts > prev && ts <= nowTs)) continue;
+      const key = `${m.id}@${m.date}T${hhmm}`;
+      if (notifiedMemoRef.current.has(key)) continue;
+      notifiedMemoRef.current.add(key);
+      const title = (m.title || '').trim() || 'タスクメモ';
+      const body = `${m.allDay ? '終日' : hhmm}${m.note ? ' ・ ' + m.note : ''}`;
+      if (canNotify) { try { new Notification(title, { body, tag: key }); } catch (e) {} }
+      const toastId = key + ':' + Date.now();
+      setMemoToasts(prev2 => [...prev2, { id: toastId, title, body }]);
+      setTimeout(() => setMemoToasts(prev2 => prev2.filter(t => t.id !== toastId)), 12000);
+    }
+  }, [now, memos, settings.morningStart]);
   const [showSettings, setShowSettings] = useState(false);
   const [selectedAssignee, setSelectedAssignee] = useState(null);
   const [auth, setAuth] = useState({ user: null, allowed: false, ready: false });
@@ -2541,6 +2570,22 @@ export default function App() {
           colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
       )}
 
+      {/* タスクメモ通知のアプリ内バナー（右上・数秒で消える） */}
+      {memoToasts.length > 0 && (
+        <div style={{ position: 'fixed', top: 16, right: 16, zIndex: 2000, display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 320 }}>
+          {memoToasts.map(t => (
+            <div key={t.id} onClick={() => setMemoToasts(prev => prev.filter(x => x.id !== t.id))}
+              style={{ background: colors.surface, border: `1px solid ${colors.border}`, borderLeft: `4px solid ${colors.accent}`, borderRadius: 6, padding: '12px 14px', boxShadow: '0 8px 24px rgba(0,0,0,0.15)', cursor: 'pointer', fontFamily: fontJP }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: colors.accent, fontWeight: 700, marginBottom: 4 }}>
+                <StickyNote size={13} /> タスクメモ
+              </div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: colors.text, marginBottom: 2 }}>{t.title}</div>
+              <div style={{ fontSize: 12, color: colors.textMute, whiteSpace: 'pre-wrap' }}>{t.body}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
     </div>
   );
 }
@@ -2769,6 +2814,12 @@ function MemoView({ memos, upsertMemo, deleteMemo, now, colors, fontJP, fontDisp
   });
   const [editing, setEditing] = useState(null); // 編集中メモ（null=非表示）
   const [search, setSearch] = useState('');
+  // 通知許可の状態（'granted'/'default'/'denied'/'unsupported'）
+  const [notifPerm, setNotifPerm] = useState(() => (typeof Notification !== 'undefined' ? Notification.permission : 'unsupported'));
+  const requestNotif = async () => {
+    if (typeof Notification === 'undefined') { setNotifPerm('unsupported'); return; }
+    try { const p = await Notification.requestPermission(); setNotifPerm(p); } catch (e) {}
+  };
 
   const today = todayStr(now);
 
@@ -2835,6 +2886,23 @@ function MemoView({ memos, upsertMemo, deleteMemo, now, colors, fontJP, fontDisp
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18, gap: 12, flexWrap: 'wrap' }}>
           <h2 style={{ fontFamily: fontDisplay, fontSize: 20, fontWeight: 700, margin: 0, letterSpacing: '0.04em' }}>タスクメモ</h2>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {/* 通知の有効化 */}
+            {notifPerm === 'granted' ? (
+              <span title="このブラウザでメモの通知が有効です（アプリを開いている間に通知します）"
+                style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 10px', border: `1px solid ${colors.border}`, borderRadius: 4, fontFamily: fontJP, fontSize: 12, color: colors.progress, fontWeight: 600 }}>
+                <Bell size={14} /> 通知ON
+              </span>
+            ) : notifPerm === 'denied' ? (
+              <span title="ブラウザの設定で通知がブロックされています。サイトの通知を許可に変更してください。"
+                style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 10px', border: `1px solid ${colors.border}`, borderRadius: 4, fontFamily: fontJP, fontSize: 12, color: colors.textMute }}>
+                <BellOff size={14} /> 通知ブロック中
+              </span>
+            ) : notifPerm === 'unsupported' ? null : (
+              <button onClick={requestNotif} title="メモの開始時刻に通知します（アプリを開いている間）"
+                style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '6px 11px', background: '#fff', color: colors.text, border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, fontWeight: 500 }}>
+                <Bell size={14} /> 通知を有効にする
+              </button>
+            )}
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, border: `1px solid ${colors.border}`, borderRadius: 4, padding: '5px 9px', background: '#fff' }}>
               <Search size={14} color={colors.textMute} />
               <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="検索"
