@@ -3869,6 +3869,9 @@ function InputView({ embedded, form, setForm, handleSubmit, editingId, editMode,
 const REVIEW_GRAY_DAYS = 3;
 const REVIEW_AUTO_DONE_DAYS = 7;
 function ReviewSection({ review, now, finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, colors, fontJP, fontDisplay }) {
+  // 案件ごとの折りたたみ状態（進行中タスク一覧と同じ形式）
+  const [collapsed, setCollapsed] = useState(() => new Set());
+  const toggle = (p) => setCollapsed(prev => { const n = new Set(prev); n.has(p) ? n.delete(p) : n.add(p); return n; });
   if (!review || review.length === 0) return null;
   // 視点単位にまとめ、確認待ちのメタ情報（開始・最終更新・メモ・完了日・完了時刻）を付与
   const groups = groupByViewpoint(review).map(g => {
@@ -3885,6 +3888,18 @@ function ReviewSection({ review, now, finalizeReview, reopenReview, setReviewNot
   // 最終更新が古い順（＝自動完了が近い順）に並べる
   groups.sort((a, b) => (a.reviewUpdatedAt || 0) - (b.reviewUpdatedAt || 0));
 
+  // 同じ案件ごとにまとめる（並びは上の順を保持）
+  const byProject = [];
+  const pmap = new Map();
+  for (const g of groups) {
+    const p = g.projectName || '(案件名未設定)';
+    if (!pmap.has(p)) {
+      const e = { projectName: p, projectNameInternal: g.projectNameInternal || '', companyName: g.companyName || '', items: [] };
+      pmap.set(p, e); byProject.push(e);
+    }
+    pmap.get(p).items.push(g);
+  }
+
   return (
     <section>
       <h2 style={{ fontFamily: fontDisplay, fontSize: 18, margin: '0 0 4px 0', fontWeight: 500, display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
@@ -3893,12 +3908,49 @@ function ReviewSection({ review, now, finalizeReview, reopenReview, setReviewNot
           {groups.length}件 ・ 視点完了後の確認フェーズ（{REVIEW_AUTO_DONE_DAYS}日更新がなければ自動で完了へ）
         </span>
       </h2>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 12 }}>
-        {groups.map(g => (
-          <ReviewCard key={g.key} g={g} now={now}
-            finalizeReview={finalizeReview} reopenReview={reopenReview} setReviewNote={setReviewNote} setReviewActualEnd={setReviewActualEnd}
-            colors={colors} fontJP={fontJP} />
-        ))}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginTop: 12 }}>
+        {byProject.map(pg => {
+          const isCollapsed = collapsed.has(pg.projectName);
+          const pcolor = getProjectColor(pg.projectName);
+          return (
+            <div key={pg.projectName} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {/* 案件ヘッダー（クリックで折りたたみ） */}
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                background: '#fff', border: `1px solid ${colors.border}`, borderLeft: `4px solid ${pcolor}`,
+                padding: '10px 14px', borderRadius: 4, fontFamily: fontJP,
+              }}>
+                <button type="button" onClick={() => toggle(pg.projectName)}
+                  style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, color: colors.textMute, display: 'flex', alignItems: 'center', flexShrink: 0 }}
+                  title={isCollapsed ? '展開' : '折りたたみ'}>
+                  {isCollapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+                </button>
+                <span onClick={() => toggle(pg.projectName)}
+                  title={pg.projectNameInternal ? `${pg.projectNameInternal}（${pg.projectName}）` : pg.projectName}
+                  style={{ flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>
+                  {pg.projectNameInternal ? (
+                    <>
+                      <span style={{ fontSize: 14, fontWeight: 600, color: colors.text }}>{pg.projectNameInternal}</span>
+                      <span style={{ fontSize: 12, color: colors.textMute, marginLeft: 6 }}>{pg.projectName}</span>
+                    </>
+                  ) : (
+                    <span style={{ fontSize: 14, fontWeight: 600, color: colors.text }}>{pg.projectName}</span>
+                  )}
+                </span>
+                <span style={{ fontSize: 11, color: colors.textMute, flexShrink: 0 }}>{pg.items.length}視点 確認待ち</span>
+              </div>
+              {!isCollapsed && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {pg.items.map(g => (
+                    <ReviewCard key={g.key} g={g} now={now}
+                      finalizeReview={finalizeReview} reopenReview={reopenReview} setReviewNote={setReviewNote} setReviewActualEnd={setReviewActualEnd}
+                      colors={colors} fontJP={fontJP} />
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </section>
   );
