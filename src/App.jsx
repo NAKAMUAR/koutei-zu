@@ -6028,6 +6028,15 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
 
   // ===== 会社別 業務連絡文（挨拶文形式） =====
   const allGroups = useMemo(() => groupByViewpoint(scheduled.active), [scheduled.active]);
+  // 完了タスクの「着手日」復元：actualEnd から制作時間ぶん遡った最早スロット日（タスクID→Date）
+  const doneStartByTask = useMemo(() => {
+    const m = new Map();
+    for (const { task, slot } of buildDoneSlots(scheduled.done, settings)) {
+      const cur = m.get(task.id);
+      if (cur == null || slot.date.getTime() < cur.getTime()) m.set(task.id, slot.date);
+    }
+    return m;
+  }, [scheduled.done, settings]);
   // 会社一覧（スケジュール順）
   const companies = useMemo(() => {
     const seq = companySequence(scheduled.active);
@@ -6053,8 +6062,26 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
       const p = t.projectName || '(案件名未設定)';
       if (!seen.has(p)) { seen.add(p); projectsInOrder.push(p); }
     }
-    // 案件が無い会社（例：TAMAZEN / SUMUS で当日タスクなし）は、挨拶文をランダムで返す
-    if (projectsInOrder.length === 0) {
+    // ===== 本日納品分（納品済み）を案件ごとに集計 =====
+    const todayYmd = fmtYMD(new Date());
+    const deliveryDateOf = (t) => {
+      if (t.actualEnd) { const d = new Date(t.actualEnd); if (!isNaN(d.getTime())) return d; }
+      if (t.completedAt) { const d = new Date(t.completedAt); if (!isNaN(d.getTime())) return d; }
+      return null;
+    };
+    const deliveredMap = new Map(); // 案件名 → 完了タスク配列（本日納品・中止除く）
+    const deliveredOrder = [];
+    for (const t of scheduled.done) {
+      if ((t.companyName || '') !== company || t.cancelled) continue;
+      const dd = deliveryDateOf(t);
+      if (!dd || fmtYMD(dd) !== todayYmd) continue;
+      const p = t.projectName || '(案件名未設定)';
+      if (!deliveredMap.has(p)) { deliveredMap.set(p, []); deliveredOrder.push(p); }
+      deliveredMap.get(p).push(t);
+    }
+
+    // 案件も本日納品も無い会社（例：TAMAZEN / SUMUS で当日タスクなし）は、挨拶文をランダムで返す
+    if (projectsInOrder.length === 0 && deliveredOrder.length === 0) {
       return NO_PROJECT_GREETINGS[Math.floor(Math.random() * NO_PROJECT_GREETINGS.length)];
     }
     const lines = [
@@ -6062,8 +6089,8 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
       '本日の業務を開始いたします。',
       '各案件の進捗および作業予定は以下の通りです。',
       '',
-      '■作業予定',
     ];
+    if (projectsInOrder.length > 0) lines.push('■作業予定');
     let i = 0;
     for (const p of projectsInOrder) {
       i++;
@@ -6108,10 +6135,37 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
       if (eD) lines.push(`納期予定：${fmtDateDow(eD)}`);
       lines.push('');
     }
+    // ===== ■納品済み（本日納品分） =====
+    if (deliveredOrder.length > 0) {
+      lines.push('■納品済み');
+      for (const p of deliveredOrder) {
+        const dtasks = deliveredMap.get(p);
+        const contact = (dtasks.find(t => t.customerContact) || {}).customerContact || '';
+        // 制作枚数：この案件の視点（依頼項目）数を「N枚」で
+        const vpNames = new Set(dtasks.map(t => (t.viewpointName || '').trim()).filter(Boolean));
+        const sheets = vpNames.size;
+        // 納品日＝実終了日の最遅、着手日＝復元スロットの最早（無ければ納品日）
+        let delTs = null, delD = null, stTs = null, stD = null;
+        for (const t of dtasks) {
+          const dd = deliveryDateOf(t);
+          if (dd && (delTs == null || dd.getTime() > delTs)) { delTs = dd.getTime(); delD = dd; }
+          const sd = doneStartByTask.get(t.id);
+          if (sd && (stTs == null || sd.getTime() < stTs)) { stTs = sd.getTime(); stD = sd; }
+        }
+        if (!stD) stD = delD;
+        lines.push(`【${p}】`);
+        if (contact) lines.push(`担当者様：${contact}ご担当`);
+        lines.push('制作状況：100%（納品済み）');
+        if (sheets > 0) lines.push(`制作枚数：${sheets}枚`);
+        if (stD) lines.push(`着手予定：${fmtDateDow(stD)}`);
+        if (delD) lines.push(`納品予定：${fmtDateDow(delD)}`);
+        lines.push('');
+      }
+    }
     lines.push('以上になります、本日もよろしくお願いいたします');
     return lines.join('\n');
   };
-  const companyText = useMemo(() => curCompany !== undefined ? buildCompanyMessage(curCompany) : '', [curCompany, allGroups, scheduled.active]);
+  const companyText = useMemo(() => curCompany !== undefined ? buildCompanyMessage(curCompany) : '', [curCompany, allGroups, scheduled.active, scheduled.done, doneStartByTask]);
   const [companyCopied, setCompanyCopied] = useState(false);
   const copyCompanyText = async () => {
     try {
@@ -6187,7 +6241,7 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
             fontFamily: fontJP, fontSize: 13, lineHeight: 1.7, color: colors.text, background: '#fbf9f4', whiteSpace: 'pre-wrap',
           }} />
         <div style={{ fontSize: 10, color: colors.textMute, marginTop: 8 }}>
-          ※ 会社を選ぶと、その会社の案件だけの連絡文になります ・ 制作枚数は視点(依頼項目)を外観(EX)／内観(IN)で分類した件数です ・ 案件が無い会社は挨拶文をランダム表示します
+          ※ 会社を選ぶと、その会社の案件だけの連絡文になります ・ 制作枚数は視点(依頼項目)を外観(EX)／内観(IN)で分類した件数です ・ 「■納品済み」は本日納品分（実終了日が本日の完了案件）を表示します ・ 案件が無い会社は挨拶文をランダム表示します
         </div>
       </div>
 
