@@ -416,6 +416,14 @@ function dayAbsence(assignee, date, absences) {
   return { allDay, intervals };
 }
 
+// 担当者が指定時刻に休み（対応不可）かどうか。終日休み、または現在時刻が不在時間帯に入っている。
+function isOnLeaveAt(assignee, when, absences) {
+  const abs = dayAbsence(assignee, when, absences);
+  if (abs.allDay) return true;
+  const min = when.getHours() * 60 + when.getMinutes();
+  return abs.intervals.some(([s, e]) => min >= s && min < e);
+}
+
 // その担当者・その日の残業時間帯。[[s,e],...]（分）
 function dayOvertimeIntervals(assignee, date, overtimes) {
   const ymd = fmtYMD(date);
@@ -2199,6 +2207,8 @@ export default function App() {
       const snoozeActive = st.snoozedUntil && st.snoozedUntil > nowTs && st.lastPromptedEnd === endTs;
       if (snoozeActive) continue;
       const first = vtasks[0];
+      // 休みの担当者は対応できないため、終了超過ポップアップを出さない
+      if (isOnLeaveAt(first.assignee, now, settings.absences || [])) continue;
       result.push({
         key,
         projectName: first.projectName,
