@@ -5922,6 +5922,26 @@ const tabStyle = (active, colors, fontJP) => ({
   display: 'flex', alignItems: 'center',
 });
 
+// 視点名リスト → 「外観N枚+内観M枚」形式の制作枚数ラベル（EX→外観, IN→内観, それ以外は視点名）。
+// 各視点（依頼項目）を1枚と数え、分類ごとに件数を集計する。
+function sheetsLabel(viewpointNames) {
+  const counts = new Map();
+  const order = [];
+  for (const raw of (viewpointNames || [])) {
+    const vn = (raw || '').trim();
+    if (!vn) continue;
+    const u = vn.toUpperCase();
+    const label = u.startsWith('EX') ? '外観' : u.startsWith('IN') ? '内観' : vn;
+    if (!counts.has(label)) { counts.set(label, 0); order.push(label); }
+    counts.set(label, counts.get(label) + 1);
+  }
+  const rank = (l) => l === '外観' ? 0 : l === '内観' ? 1 : 2;
+  return order.slice()
+    .sort((a, b) => (rank(a) - rank(b)) || (order.indexOf(a) - order.indexOf(b)))
+    .map(l => `${l}${counts.get(l)}枚`)
+    .join('+');
+}
+
 // 案件が無くても会社別連絡文に常に表示する会社
 const FORCED_COMPANIES = ['TAMAZEN', 'SUMUS'];
 // 案件が無い会社の連絡文。候補からランダムで1つ選んで本文にする。
@@ -5937,6 +5957,15 @@ const NO_PROJECT_GREETINGS = [
 何かお手伝いできることがございましたら、いつでもお声がけくださいませ。
 
 本日も一日、何卒よろしくお願い致します(bow)`,
+];
+// 業務終了（夕方）で、案件も納品も無い会社の連絡文。候補からランダムで1つ選ぶ。
+const NO_PROJECT_GREETINGS_EVENING = [
+  `お疲れ様です。
+本日もお世話になり、誠にありがとうございました。
+引き続きよろしくお願いいたします(bow)`,
+  `お疲れ様です。
+本日も一日、誠にありがとうございました。
+明日もどうぞよろしくお願いいたします(bow)`,
 ];
 
 // ============ メッセージビュー ============
@@ -6050,10 +6079,12 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
     return sorted;
   }, [scheduled.active]);
   const [msgCompany, setMsgCompany] = useState(null);
+  const [msgMode, setMsgMode] = useState('morning'); // 'morning'=業務開始 / 'evening'=業務終了
   const curCompany = (msgCompany !== null && companies.includes(msgCompany)) ? msgCompany : (companies[0] ?? '');
 
   const fmtDateDow = (d) => `${fmtMD(d)}(${dayName(d)})`;
-  const buildCompanyMessage = (company) => {
+  const buildCompanyMessage = (company, mode = 'morning') => {
+    const evening = mode === 'evening';
     // この会社の案件を、スケジュール順（scheduled.active の並び）で
     const projectsInOrder = [];
     const seen = new Set();
@@ -6082,14 +6113,12 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
 
     // 案件も本日納品も無い会社（例：TAMAZEN / SUMUS で当日タスクなし）は、挨拶文をランダムで返す
     if (projectsInOrder.length === 0 && deliveredOrder.length === 0) {
-      return NO_PROJECT_GREETINGS[Math.floor(Math.random() * NO_PROJECT_GREETINGS.length)];
+      const pool = evening ? NO_PROJECT_GREETINGS_EVENING : NO_PROJECT_GREETINGS;
+      return pool[Math.floor(Math.random() * pool.length)];
     }
-    const lines = [
-      'お世話になっております。',
-      '本日の業務を開始いたします。',
-      '各案件の進捗および作業予定は以下の通りです。',
-      '',
-    ];
+    const lines = evening
+      ? ['お疲れ様です。', '本日の業務の進捗結果および作業予定は以下の通りです。', '']
+      : ['お世話になっております。', '本日の業務を開始いたします。', '各案件の進捗および作業予定は以下の通りです。', ''];
     if (projectsInOrder.length > 0) lines.push('■作業予定');
     let i = 0;
     for (const p of projectsInOrder) {
@@ -6102,25 +6131,7 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
       const contact = (vpGroups.find(g => g.customerContact) || {}).customerContact || '';
       // 制作枚数：視点（依頼項目）を外観(EX)／内観(IN)に分類し、各分類の視点数を「分類N枚」で
       // 例）視点 EX2, EX1, EX3, IN → 「外観3枚+内観1枚」
-      const sheetCounts = new Map(); // 分類ラベル → 枚数（視点数）
-      const sheetOrder = [];         // 出現順を保持（その他分類用）
-      for (const g of vpGroups) {
-        if (!g.viewpointName) continue;
-        const vn = g.viewpointName.trim().toUpperCase();
-        let label;
-        if (vn.startsWith('EX')) label = '外観';
-        else if (vn.startsWith('IN')) label = '内観';
-        else label = g.viewpointName.trim();
-        if (!sheetCounts.has(label)) { sheetCounts.set(label, 0); sheetOrder.push(label); }
-        sheetCounts.set(label, sheetCounts.get(label) + 1);
-      }
-      // 外観→内観→その他（出現順）の順に並べる
-      const sheetRank = (l) => l === '外観' ? 0 : l === '内観' ? 1 : 2;
-      const sheets = sheetOrder
-        .slice()
-        .sort((a, b) => (sheetRank(a) - sheetRank(b)) || (sheetOrder.indexOf(a) - sheetOrder.indexOf(b)))
-        .map(l => `${l}${sheetCounts.get(l)}枚`)
-        .join('+');
+      const sheets = sheetsLabel(vpGroups.map(g => g.viewpointName));
       // 着手・納期：案件内の最早開始～最遅終了
       let sTs = null, eTs = null, sD = null, eD = null;
       for (const g of vpGroups) {
@@ -6141,9 +6152,8 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
       for (const p of deliveredOrder) {
         const dtasks = deliveredMap.get(p);
         const contact = (dtasks.find(t => t.customerContact) || {}).customerContact || '';
-        // 制作枚数：この案件の視点（依頼項目）数を「N枚」で
-        const vpNames = new Set(dtasks.map(t => (t.viewpointName || '').trim()).filter(Boolean));
-        const sheets = vpNames.size;
+        // 制作枚数：作業予定と同じく外観(EX)／内観(IN)の視点数で集計
+        const sheets = sheetsLabel([...new Set(dtasks.map(t => (t.viewpointName || '').trim()).filter(Boolean))]);
         // 納品日＝実終了日の最遅、着手日＝復元スロットの最早（無ければ納品日）
         let delTs = null, delD = null, stTs = null, stD = null;
         for (const t of dtasks) {
@@ -6155,17 +6165,17 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
         if (!stD) stD = delD;
         lines.push(`【${p}】`);
         if (contact) lines.push(`担当者様：${contact}ご担当`);
-        lines.push('制作状況：100%（納品済み）');
-        if (sheets > 0) lines.push(`制作枚数：${sheets}枚`);
+        lines.push('進捗状況：100%（納品済み）');
+        if (sheets) lines.push(`制作枚数：${sheets}`);
         if (stD) lines.push(`着手予定：${fmtDateDow(stD)}`);
-        if (delD) lines.push(`納品予定：${fmtDateDow(delD)}`);
+        if (delD) lines.push(`納期予定：${fmtDateDow(delD)}`);
         lines.push('');
       }
     }
-    lines.push('以上になります、本日もよろしくお願いいたします');
+    lines.push(evening ? '本日もありがとうございました(bow)' : '以上になります、本日もよろしくお願いいたします');
     return lines.join('\n');
   };
-  const companyText = useMemo(() => curCompany !== undefined ? buildCompanyMessage(curCompany) : '', [curCompany, allGroups, scheduled.active, scheduled.done, doneStartByTask]);
+  const companyText = useMemo(() => curCompany !== undefined ? buildCompanyMessage(curCompany, msgMode) : '', [curCompany, msgMode, allGroups, scheduled.active, scheduled.done, doneStartByTask]);
   const [companyCopied, setCompanyCopied] = useState(false);
   const copyCompanyText = async () => {
     try {
@@ -6214,10 +6224,25 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
           <h3 style={{ fontFamily: fontDisplay, fontSize: 16, margin: 0, fontWeight: 500, display: 'flex', alignItems: 'center', gap: 8 }}>
             <MessageSquare size={16} /> 会社別 業務連絡文
           </h3>
-          <button type="button" onClick={copyCompanyText}
-            style={{ padding: '8px 16px', background: companyCopied ? colors.progress : colors.text, color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
-            {companyCopied ? <><Check size={15} /> コピーしました</> : <>この会社の連絡文をコピー</>}
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            {/* 業務開始（朝）／業務終了（夕）の切替 */}
+            <div style={{ display: 'flex', border: `1px solid ${colors.border}`, borderRadius: 4, overflow: 'hidden' }}>
+              {[{ id: 'morning', label: '業務開始（朝）' }, { id: 'evening', label: '業務終了（夕）' }].map(m => (
+                <button key={m.id} type="button" onClick={() => setMsgMode(m.id)}
+                  style={{
+                    padding: '7px 12px', border: 'none', cursor: 'pointer', fontFamily: fontJP, fontSize: 12,
+                    background: msgMode === m.id ? colors.text : '#fff',
+                    color: msgMode === m.id ? '#fff' : colors.text, fontWeight: msgMode === m.id ? 600 : 400,
+                  }}>
+                  {m.label}
+                </button>
+              ))}
+            </div>
+            <button type="button" onClick={copyCompanyText}
+              style={{ padding: '8px 16px', background: companyCopied ? colors.progress : colors.text, color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+              {companyCopied ? <><Check size={15} /> コピーしました</> : <>この会社の連絡文をコピー</>}
+            </button>
+          </div>
         </div>
         {/* 会社の切り替え */}
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
@@ -6241,7 +6266,7 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
             fontFamily: fontJP, fontSize: 13, lineHeight: 1.7, color: colors.text, background: '#fbf9f4', whiteSpace: 'pre-wrap',
           }} />
         <div style={{ fontSize: 10, color: colors.textMute, marginTop: 8 }}>
-          ※ 会社を選ぶと、その会社の案件だけの連絡文になります ・ 制作枚数は視点(依頼項目)を外観(EX)／内観(IN)で分類した件数です ・ 「■納品済み」は本日納品分（実終了日が本日の完了案件）を表示します ・ 案件が無い会社は挨拶文をランダム表示します
+          ※ 「業務開始（朝）／業務終了（夕）」で挨拶文を切り替えます ・ 会社を選ぶとその会社の案件だけの連絡文になります ・ 制作枚数は視点(依頼項目)を外観(EX)／内観(IN)で分類した件数です ・ 「■納品済み」は本日納品分（実終了日が本日の完了案件）を表示します ・ 案件が無い会社は挨拶文をランダム表示します
         </div>
       </div>
 
