@@ -1341,6 +1341,17 @@ export default function App() {
     saveProjectOrder([...filtered.slice(0, ti), srcProj, ...filtered.slice(ti)]);
   };
 
+  // カレンダーから視点（案件×視点）の担当者を付け替える：
+  // ブロックを別の担当者の行へドロップしたときに、その視点の進行中タスクの担当者を変更する。
+  const reassignViewpointFromCalendar = (projectName, viewpointName, fromAssignee, toAssignee) => {
+    const na = (toAssignee || '').trim();
+    if (!na || na === fromAssignee) return;
+    saveTasks(prev => normalizePriorities(prev.map(t =>
+      (t.projectName === projectName && t.viewpointName === viewpointName && t.assignee === fromAssignee && t.status !== 'done')
+        ? { ...t, assignee: na } : t
+    )));
+  };
+
   // マスタの保存（楽観的に即反映 → Firestore 上書き → 他端末同期）
   const saveCustomerMaster = async (arr) => {
     setCustomerMaster(arr);
@@ -2438,14 +2449,14 @@ export default function App() {
             projectList={projectList} projectInternalList={projectInternalList} viewpointList={viewpointList} assigneeList={assigneeList} assigneeOrder={assigneeOrder}
             settings={settings} now={now}
             selectedAssignee={selectedAssignee} setSelectedAssignee={setSelectedAssignee} companyOrder={settings.companyOrder || []}
-            onReorderAssignee={reorderAssigneeFromCalendar} onReorderProject={reorderProjectFromCalendar}
+            onReorderAssignee={reorderAssigneeFromCalendar} onReorderProject={reorderProjectFromCalendar} onReassignViewpoint={reassignViewpointFromCalendar}
             colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
         )}
         {view === 'calendar' && (
           <>
           <CalendarView scheduled={scheduled} settings={settings} now={now} colors={colors} fontDisplay={fontDisplay} fontJP={fontJP}
             onEditProject={(p) => handleEditProject(p, true)} assigneeOrder={assigneeOrder}
-            onReorderAssignee={reorderAssigneeFromCalendar} onReorderProject={reorderProjectFromCalendar} />
+            onReorderAssignee={reorderAssigneeFromCalendar} onReorderProject={reorderProjectFromCalendar} onReassignViewpoint={reassignViewpointFromCalendar} />
           {/* カレンダーから案件編集を開いた場合、入力へ遷移せずスケジュールのすぐ下にフォームを表示 */}
           {calendarEdit && editMode && (
             <div style={{ marginTop: 24 }}>
@@ -2980,7 +2991,7 @@ function MemoView({ memos, upsertMemo, deleteMemo, now, colors, fontJP, fontDisp
 }
 
 // ============ 入力ビュー ============
-function InputView({ embedded, form, setForm, handleSubmit, editingId, editMode, cancelEdit, tasks, scheduled, projectOrder, saveProjectOrder, companyList, customerMaster, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, saveProjectInfo, setProjectDeadline, finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, projectList, projectInternalList, viewpointList, assigneeList, assigneeOrder, settings, now, selectedAssignee, setSelectedAssignee, companyOrder, onReorderAssignee, onReorderProject, colors, fontJP, fontDisplay }) {
+function InputView({ embedded, form, setForm, handleSubmit, editingId, editMode, cancelEdit, tasks, scheduled, projectOrder, saveProjectOrder, companyList, customerMaster, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, saveProjectInfo, setProjectDeadline, finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, projectList, projectInternalList, viewpointList, assigneeList, assigneeOrder, settings, now, selectedAssignee, setSelectedAssignee, companyOrder, onReorderAssignee, onReorderProject, onReassignViewpoint, colors, fontJP, fontDisplay }) {
   // お客様担当者の候補：会社名を選んでいればその会社の担当者を優先表示
   const contactOptions = useMemo(() => {
     const rows = customerMaster || [];
@@ -3766,7 +3777,7 @@ function InputView({ embedded, form, setForm, handleSubmit, editingId, editMode,
       {inputTab === 'calendar' && (
         <CalendarView scheduled={scheduled} settings={settings} now={now} colors={colors} fontDisplay={fontDisplay} fontJP={fontJP}
           onEditProject={handleEditProject} assigneeOrder={assigneeOrder}
-          onReorderAssignee={onReorderAssignee} onReorderProject={onReorderProject} />
+          onReorderAssignee={onReorderAssignee} onReorderProject={onReorderProject} onReassignViewpoint={onReassignViewpoint} />
       )}
       {inputTab === 'assignee' && (
         <AssigneeView scheduled={scheduled} selectedAssignee={selectedAssignee} setSelectedAssignee={setSelectedAssignee} now={now} assigneeOrder={assigneeOrder}
@@ -5080,11 +5091,39 @@ const progressBtnStyle = (colors, fontJP) => ({
 });
 
 // ============ カレンダービュー ============
-function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditProject, fontJP, assigneeOrder, onReorderAssignee, onReorderProject }) {
+function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditProject, fontJP, assigneeOrder, onReorderAssignee, onReorderProject, onReassignViewpoint }) {
   // ドラッグ＆ドロップ並び替え：担当者行（左端ラベル）と案件（タスクブロック）
   const [rowDrag, setRowDrag] = useState(null);
   const [rowDragOver, setRowDragOver] = useState(null);
   const [projDrag, setProjDrag] = useState(null);
+  // 視点ブロックを別の担当者の行（ラベル）へドロップして担当者を付け替える
+  const [vpDrag, setVpDrag] = useState(null); // { projectName, viewpointName, assignee }
+  // 担当者ラベルセルのドラッグ＆ドロップ props（表示順の入れ替え＋視点の担当者付け替え）を共通化
+  const labelActive = (assignee) => rowDragOver === assignee &&
+    ((rowDrag && rowDrag !== assignee) || (vpDrag && vpDrag.assignee !== assignee && !!onReassignViewpoint));
+  const labelDnD = (assignee) => ({
+    draggable: !!onReorderAssignee,
+    onDragStart: onReorderAssignee ? ((e) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', assignee); setRowDrag(assignee); }) : undefined,
+    onDragEnd: () => { setRowDrag(null); setRowDragOver(null); setVpDrag(null); },
+    onDragOver: (e) => {
+      const canRow = rowDrag && rowDrag !== assignee && onReorderAssignee;
+      const canVp = vpDrag && vpDrag.assignee !== assignee && onReassignViewpoint;
+      if (canRow || canVp) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (rowDragOver !== assignee) setRowDragOver(assignee); }
+    },
+    onDragLeave: () => { if (rowDragOver === assignee) setRowDragOver(null); },
+    onDrop: (e) => {
+      e.preventDefault();
+      if (vpDrag && vpDrag.assignee !== assignee && onReassignViewpoint) {
+        onReassignViewpoint(vpDrag.projectName, vpDrag.viewpointName, vpDrag.assignee, assignee);
+      } else if (rowDrag && rowDrag !== assignee && onReorderAssignee) {
+        onReorderAssignee(rowDrag, assignee);
+      }
+      setRowDrag(null); setRowDragOver(null); setVpDrag(null);
+    },
+    title: onReassignViewpoint
+      ? '案件ブロックをここ（担当者名）へドロップすると、その視点の担当者を変更します' + (onReorderAssignee ? '／ドラッグで担当者の表示順を変更' : '')
+      : (onReorderAssignee ? 'ドラッグして担当者の表示順を変更（従業員マスタの並びに反映）' : undefined),
+  });
   const today = startOfDay(new Date());
   // 表示モード：1日 / 週間 / 月間 / 全期間（従来のスクロール表示）
   const [viewMode, setViewMode] = useState('scroll');
@@ -5338,19 +5377,13 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                 return (
                   <div key={assignee} style={{ display: 'flex', borderBottom: ai < assignees.length - 1 ? `1px solid ${colors.border}` : 'none' }}>
                     <div
-                      draggable={!!onReorderAssignee}
-                      onDragStart={onReorderAssignee ? ((e) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', assignee); setRowDrag(assignee); }) : undefined}
-                      onDragEnd={onReorderAssignee ? (() => { setRowDrag(null); setRowDragOver(null); }) : undefined}
-                      onDragOver={onReorderAssignee ? ((e) => { if (rowDrag && rowDrag !== assignee) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (rowDragOver !== assignee) setRowDragOver(assignee); } }) : undefined}
-                      onDragLeave={onReorderAssignee ? (() => { if (rowDragOver === assignee) setRowDragOver(null); }) : undefined}
-                      onDrop={onReorderAssignee ? ((e) => { e.preventDefault(); if (rowDrag && rowDrag !== assignee) onReorderAssignee(rowDrag, assignee); setRowDrag(null); setRowDragOver(null); }) : undefined}
-                      title={onReorderAssignee ? 'ドラッグして担当者の表示順を変更（従業員マスタの並びに反映）' : undefined}
+                      {...labelDnD(assignee)}
                       style={{
                         width: labelWidth, padding: '12px 8px', fontSize: 13, fontWeight: 500,
                         flexShrink: 0, borderRight: `1px solid ${colors.border}`,
                         display: 'flex', alignItems: 'center', gap: 5, background: '#fbf9f4',
                         boxSizing: 'border-box', position: 'sticky', left: 0, zIndex: 3,
-                        boxShadow: rowDragOver === assignee && rowDrag && rowDrag !== assignee
+                        boxShadow: labelActive(assignee)
                           ? `0 0 0 2px ${colors.accent} inset` : '2px 0 4px rgba(0,0,0,0.04)',
                         opacity: rowDrag === assignee ? 0.5 : 1,
                         cursor: onReorderAssignee ? 'grab' : 'default',
@@ -5412,7 +5445,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                           <TaskBlock key={si} task={task} slot={slot} done={done}
                             projectColor={getProjectColor(task.projectName)}
                             timeline={{ left: `${((s - dayStart) / totalMin) * 100}%`, width: `${((e - s) / totalMin) * 100}%` }}
-                            projDrag={projDrag} onProjDragStart={onReorderProject ? setProjDrag : null} onDropProject={onReorderProject}
+                            projDrag={projDrag} onProjDragStart={onReorderProject ? setProjDrag : null} onDropProject={onReorderProject} onVpDragStart={onReassignViewpoint ? setVpDrag : null}
                             onClick={onEditProject && (() => onEditProject(task.projectName))} />
                         );
                       })}
@@ -5475,19 +5508,13 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
               {assignees.map((assignee, ai) => (
                 <div key={assignee} style={{ display: 'flex', borderBottom: ai < assignees.length - 1 ? `1px solid ${colors.border}` : 'none' }}>
                   <div
-                    draggable={!!onReorderAssignee}
-                    onDragStart={onReorderAssignee ? ((e) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', assignee); setRowDrag(assignee); }) : undefined}
-                    onDragEnd={onReorderAssignee ? (() => { setRowDrag(null); setRowDragOver(null); }) : undefined}
-                    onDragOver={onReorderAssignee ? ((e) => { if (rowDrag && rowDrag !== assignee) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (rowDragOver !== assignee) setRowDragOver(assignee); } }) : undefined}
-                    onDragLeave={onReorderAssignee ? (() => { if (rowDragOver === assignee) setRowDragOver(null); }) : undefined}
-                    onDrop={onReorderAssignee ? ((e) => { e.preventDefault(); if (rowDrag && rowDrag !== assignee) onReorderAssignee(rowDrag, assignee); setRowDrag(null); setRowDragOver(null); }) : undefined}
-                    title={onReorderAssignee ? 'ドラッグして担当者の表示順を変更（従業員マスタの並びに反映）' : undefined}
+                    {...labelDnD(assignee)}
                     style={{
                       width: labelWidth, padding: '12px 8px', fontSize: 13, fontWeight: 500,
                       flexShrink: 0, borderRight: `1px solid ${colors.border}`,
                       display: 'flex', alignItems: 'center', gap: 5, background: '#fbf9f4',
                       boxSizing: 'border-box', position: 'sticky', left: 0, zIndex: 3,
-                      boxShadow: rowDragOver === assignee && rowDrag && rowDrag !== assignee
+                      boxShadow: labelActive(assignee)
                         ? `0 0 0 2px ${colors.accent} inset` : '2px 0 4px rgba(0,0,0,0.04)',
                       opacity: rowDrag === assignee ? 0.5 : 1,
                       cursor: onReorderAssignee ? 'grab' : 'default',
@@ -5560,7 +5587,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                               left: `${di * dayW + ((s - dayStart) / totalMin) * dayW}px`,
                               width: `${((e - s) / totalMin) * dayW}px`,
                             }}
-                            projDrag={projDrag} onProjDragStart={onReorderProject ? setProjDrag : null} onDropProject={onReorderProject}
+                            projDrag={projDrag} onProjDragStart={onReorderProject ? setProjDrag : null} onDropProject={onReorderProject} onVpDragStart={onReassignViewpoint ? setVpDrag : null}
                             onClick={onEditProject && (() => onEditProject(task.projectName))} />
                         );
                       });
@@ -5615,20 +5642,14 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
           {assignees.map((assignee, ai) => (
             <div key={assignee} style={{ display: 'flex', borderBottom: ai < assignees.length - 1 ? `1px solid ${colors.border}` : 'none' }}>
               <div
-                draggable={!!onReorderAssignee}
-                onDragStart={onReorderAssignee ? ((e) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', assignee); setRowDrag(assignee); }) : undefined}
-                onDragEnd={onReorderAssignee ? (() => { setRowDrag(null); setRowDragOver(null); }) : undefined}
-                onDragOver={onReorderAssignee ? ((e) => { if (rowDrag && rowDrag !== assignee) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (rowDragOver !== assignee) setRowDragOver(assignee); } }) : undefined}
-                onDragLeave={onReorderAssignee ? (() => { if (rowDragOver === assignee) setRowDragOver(null); }) : undefined}
-                onDrop={onReorderAssignee ? ((e) => { e.preventDefault(); if (rowDrag && rowDrag !== assignee) onReorderAssignee(rowDrag, assignee); setRowDrag(null); setRowDragOver(null); }) : undefined}
-                title={onReorderAssignee ? 'ドラッグして担当者の表示順を変更（従業員マスタの並びに反映）' : undefined}
+                {...labelDnD(assignee)}
                 style={{
                 width: labelWidth, padding: '12px 8px', fontSize: 13, fontWeight: 500,
                 flexShrink: 0, borderRight: `1px solid ${colors.border}`,
                 display: 'flex', alignItems: 'center', gap: 5, background: '#fbf9f4',
                 boxSizing: 'border-box',
                 position: 'sticky', left: 0, zIndex: 3,
-                boxShadow: rowDragOver === assignee && rowDrag && rowDrag !== assignee
+                boxShadow: labelActive(assignee)
                   ? `0 0 0 2px ${colors.accent} inset`
                   : '2px 0 4px rgba(0,0,0,0.04)',
                 opacity: rowDrag === assignee ? 0.5 : 1,
@@ -5674,7 +5695,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                           heightPct={(slot.hours / morningHours) * 100}
                           projectColor={getProjectColor(task.projectName)}
                           separator={si === 0 ? null : (morningItems[si - 1].task.projectName !== task.projectName ? 'strong' : 'weak')}
-                          projDrag={projDrag} onProjDragStart={onReorderProject ? setProjDrag : null} onDropProject={onReorderProject}
+                          projDrag={projDrag} onProjDragStart={onReorderProject ? setProjDrag : null} onDropProject={onReorderProject} onVpDragStart={onReassignViewpoint ? setVpDrag : null}
                           onClick={onEditProject && (() => onEditProject(task.projectName))} />
                       ))}
                     </div>
@@ -5686,7 +5707,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                           heightPct={(slot.hours / pmHours) * 100}
                           projectColor={getProjectColor(task.projectName)}
                           separator={si === 0 ? null : (afternoonItems[si - 1].task.projectName !== task.projectName ? 'strong' : 'weak')}
-                          projDrag={projDrag} onProjDragStart={onReorderProject ? setProjDrag : null} onDropProject={onReorderProject}
+                          projDrag={projDrag} onProjDragStart={onReorderProject ? setProjDrag : null} onDropProject={onReorderProject} onVpDragStart={onReassignViewpoint ? setVpDrag : null}
                           onClick={onEditProject && (() => onEditProject(task.projectName))} />
                       ))}
                     </div>
@@ -5721,16 +5742,18 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
       )}
 
       <div style={{ marginTop: 20, fontSize: 11, color: colors.textMute }}>
-        セル内の色は案件ごと（パステル・「ホワイト」工程は1段階薄い色） ・ 右上の #番号 が優先順位 ・ 斜線ストライプ＋「仮」は仮案件 ・ グレーの実線ブロックは完了済（「済」）／中止（「止」、実終了時刻から遡って表示） ・ グレーの斜線は休日・不在 ・ マウスオーバーで詳細表示 ・ クリックで案件編集フォームを開く（完了済みの案件も編集可） ・ ブロックをドラッグ＆ドロップで案件の順番を変更 ・ 左端の担当者名をドラッグ＆ドロップで担当者の表示順を変更
+        セル内の色は案件ごと（パステル・「ホワイト」工程は1段階薄い色） ・ 右上の #番号 が優先順位 ・ 斜線ストライプ＋「仮」は仮案件 ・ グレーの実線ブロックは完了済（「済」）／中止（「止」、実終了時刻から遡って表示） ・ グレーの斜線は休日・不在 ・ マウスオーバーで詳細表示 ・ クリックで案件編集フォームを開く（完了済みの案件も編集可） ・ ブロックをドラッグ＆ドロップで案件の順番（優先順位）を変更 ・ ブロックを別の担当者名の上へドロップでその視点の担当者を変更 ・ 左端の担当者名をドラッグ＆ドロップで担当者の表示順を変更
       </div>
     </div>
   );
 }
 
-function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact, separator, projDrag, onProjDragStart, onDropProject, timeline }) {
+function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact, separator, projDrag, onProjDragStart, onDropProject, onVpDragStart, timeline }) {
   const [projHover, setProjHover] = useState(false);
   // 案件の並び替えドラッグは進行中ブロックのみ（完了・中止のグレーは対象外）
   const canDragProject = !!onDropProject && !done;
+  // 担当者付け替え（視点を別担当者の行へドロップ）も進行中ブロックのみ
+  const canDrag = (!!onDropProject || !!onVpDragStart) && !done;
   // パステル表示：通常ステップは基本パステル、「ホワイト」工程はさらに1段階薄く。完了は薄いグレー
   const isWhiteStep = !done && (task.stepName || '').includes('ホワイト');
   const blockBg = done ? '#d4d4cd' : pastelize(projectColor, isWhiteStep ? 0.82 : 0.6);
@@ -5751,13 +5774,13 @@ function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact
   const memoLine = (effDeadline ? `\n納期 ${(() => { const d = new Date(effDeadline + 'T00:00:00'); return isNaN(d.getTime()) ? effDeadline : `${d.getMonth() + 1}/${d.getDate()}`; })()}` : '') + (task.memo ? `\n📝 ${task.memo}` : '');
   const title = done
     ? `【${cancelled ? '中止' : '完了'}】${nameLine}\n${minToTime(slot.startMin)}〜${minToTime(slot.endMin)} (${slot.hours}h)${aeStr ? `\n実終了 ${aeStr}` : ''}${memoLine}${onClick ? '\nクリックで案件を編集（終了時間の実績は完了タブで）' : '\n※終了時間（実績）は完了タブで編集できます'}`
-    : `${tentative ? '【仮】' : ''}#${task.priority} ${nameLine}\n${minToTime(slot.startMin)}〜${minToTime(slot.endMin)} (${slot.hours}h)\n残り ${remaining}h / 全${task.hours}h${memoLine}${task.manualStart ? '\n※開始時間指定あり' : ''}${task.manualEnd ? '\n※終了予定指定あり' : ''}${task.delays && task.delays.length ? `\n※遅延履歴あり（${task.delays.length}回）` : ''}${onClick ? '\nクリックで案件を編集' : ''}${canDragProject ? '\nドラッグで案件の順番を変更' : ''}`;
+    : `${tentative ? '【仮】' : ''}#${task.priority} ${nameLine}\n${minToTime(slot.startMin)}〜${minToTime(slot.endMin)} (${slot.hours}h)\n残り ${remaining}h / 全${task.hours}h${memoLine}${task.manualStart ? '\n※開始時間指定あり' : ''}${task.manualEnd ? '\n※終了予定指定あり' : ''}${task.delays && task.delays.length ? `\n※遅延履歴あり（${task.delays.length}回）` : ''}${onClick ? '\nクリックで案件を編集' : ''}${canDragProject ? '\nドラッグで案件の順番を変更' : ''}${onVpDragStart ? '\n別の担当者名の上にドロップで担当者を変更' : ''}`;
   return (
     <div title={title}
       onClick={onClick || undefined}
-      draggable={canDragProject}
-      onDragStart={canDragProject ? ((e) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', task.projectName); if (onProjDragStart) onProjDragStart(task.projectName); }) : undefined}
-      onDragEnd={canDragProject ? (() => { if (onProjDragStart) onProjDragStart(null); }) : undefined}
+      draggable={canDrag}
+      onDragStart={canDrag ? ((e) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', task.projectName); if (onProjDragStart) onProjDragStart(task.projectName); if (onVpDragStart) onVpDragStart({ projectName: task.projectName, viewpointName: task.viewpointName, assignee: task.assignee }); }) : undefined}
+      onDragEnd={canDrag ? (() => { if (onProjDragStart) onProjDragStart(null); if (onVpDragStart) onVpDragStart(null); }) : undefined}
       onDragOver={canDragProject ? ((e) => { if (projDrag && projDrag !== task.projectName) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (!projHover) setProjHover(true); } }) : undefined}
       onDragLeave={canDragProject ? (() => { if (projHover) setProjHover(false); }) : undefined}
       onDrop={canDragProject ? ((e) => { e.preventDefault(); setProjHover(false); if (projDrag && projDrag !== task.projectName) onDropProject(projDrag, task.projectName); if (onProjDragStart) onProjDragStart(null); }) : undefined}
