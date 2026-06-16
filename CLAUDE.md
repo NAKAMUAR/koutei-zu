@@ -17,6 +17,11 @@
 
 > **即時反映は毎回必須（ユーザー指示・2026-06）**: どのセッション（ローカル / Claude Code on the web の作業ブランチ含む）でも、修正のたびに必ず `npm run deploy` を実行して本番（https://nakamuar.github.io/koutei-zu/）へ即時反映する。作業ブランチ運用の場合でも、ソースは指定ブランチへ push しつつ、デプロイ（gh-pages 公開）は毎回行う。デプロイ可否を都度確認しない。
 
+> **CI 自動デプロイ（GitHub Actions・2026-06）**: `.github/workflows/deploy.yml` により **main への push で自動ビルド＆ gh-pages 公開**される（`peaceiris/actions-gh-pages`、`GITHUB_TOKEN` 使用、Pages は従来どおり `gh-pages` ブランチ配信）。
+> - **ローカル作業（main へ直接 push）**: push すれば CI が自動デプロイするので、手元の `npm run deploy` は省略可（手元から即時反映したい場合は実行してもよい）。
+> - **Claude Code on the web の作業ブランチ**: CI は main 限定トリガーのため作業ブランチ push では動かない。**マージ前に即時反映が必要なので、従来どおり `npm run deploy` を手元（セッション内）で必ず実行する**こと。
+> - GitHub 側設定: Settings → Pages の Source は「Deploy from a branch: `gh-pages` / root」のまま（変更不要）。Actions の workflow permissions は read/write 必要（`permissions: contents: write` を workflow で明示済み）。
+
 ## ソースの場所（重要）
 
 - **作業対象の最新ソースはこのリポジトリ**: `/Users/nakamurakeisuke/Documents/koutei-zu`（`src/App.jsx` ほぼ単一ファイル）
