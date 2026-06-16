@@ -6,3 +6,8 @@ dist
 *.log
 service-account.json
 *-firebase-adminsdk-*.json
+# ローカル専用のお客様データ（PII。絶対にコミットしない）
+*.local.tsv
+*.local.json
+scripts/customers.*
+scripts/service-account*.json
