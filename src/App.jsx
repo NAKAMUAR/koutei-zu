@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useLayoutEffect } from 'react';
-import { Plus, Trash2, Edit2, Calendar as CalIcon, MessageSquare, Settings as SettingsIcon, Check, X, Clock, Folder, User, ChevronUp, ChevronDown, Users, CheckCircle2, RotateCcw, TrendingUp, ArrowRight, GripVertical, Search, AlertTriangle, StickyNote, Bell, BellOff } from 'lucide-react';
+import { Plus, Trash2, Edit2, Calendar as CalIcon, MessageSquare, Settings as SettingsIcon, Check, X, Clock, Folder, User, ChevronUp, ChevronDown, ChevronRight, Users, CheckCircle2, RotateCcw, TrendingUp, ArrowRight, GripVertical, Search, AlertTriangle, StickyNote, Bell, BellOff } from 'lucide-react';
 import { storage, tasksStore, signIn, signOutUser, subscribeAuth } from './firebase.js';
 
 // ============ 定数・ユーティリティ ============
@@ -2290,7 +2290,11 @@ export default function App() {
       const endTs = projectEndTs(vtasks);
       if (endTs == null || endTs > nowTs) continue;
       const st = eps[key] || {};
-      const snoozeActive = st.snoozedUntil && st.snoozedUntil > nowTs && st.lastPromptedEnd === endTs;
+      // 「後で」(30分スヌーズ) は終了予定が多少動いても30分間は確実に再表示しない。
+      // 以前は lastPromptedEnd === endTs も条件にしていたが、スケジュール再計算で
+      // 終了予定がわずかに変わると即座に一致しなくなり、押した直後に再表示され
+      // 事実上スヌーズできなかった。時刻のみで判定する。
+      const snoozeActive = st.snoozedUntil && st.snoozedUntil > nowTs;
       if (snoozeActive) continue;
       const first = vtasks[0];
       // 休みの担当者は対応できないため、終了超過ポップアップを出さない
@@ -6783,17 +6787,45 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
   useEffect(() => { setCustomers(customerMaster); }, [customerMaster]);
   useEffect(() => { setEmployees(employeeMaster); }, [employeeMaster]);
 
+  // お客様マスタの表示制御：セクション全体の折りたたみ・検索・会社ごとの折りたたみ
+  const [custSectionOpen, setCustSectionOpen] = useState(true);
+  const [custSearch, setCustSearch] = useState('');
+  // 展開中の会社ID集合（標準＝空＝すべて折りたたみ）
+  const [expandedCompanies, setExpandedCompanies] = useState(() => new Set());
+  const toggleCompany = (cid) => setExpandedCompanies(prev => {
+    const next = new Set(prev);
+    if (next.has(cid)) next.delete(cid); else next.add(cid);
+    return next;
+  });
+
   const newId = (p) => `${p}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
   // お客様マスタ（会社ごとに担当者をまとめる）
   const commitCustomers = (next) => { setCustomers(next); saveCustomerMaster(next); };
-  const addCompany = () => commitCustomers([...customers, { id: newId('cust'), company: '', contacts: [{ id: newId('cc'), name: '' }] }]);
+  const addCompany = () => {
+    const id = newId('cust');
+    commitCustomers([...customers, { id, company: '', contacts: [{ id: newId('cc'), name: '' }] }]);
+    setExpandedCompanies(prev => new Set(prev).add(id)); // 追加直後は入力できるよう展開
+  };
   const removeCompany = (cid) => commitCustomers(customers.filter(c => c.id !== cid));
   const setCompanyField = (cid, field, val) => setCustomers(cs => cs.map(c => c.id === cid ? { ...c, [field]: val } : c));
   const addContact = (cid) => commitCustomers(customers.map(c => c.id === cid ? { ...c, contacts: [...(c.contacts || []), { id: newId('cc'), name: '' }] } : c));
   const removeContact = (cid, ctid) => commitCustomers(customers.map(c => c.id === cid ? { ...c, contacts: (c.contacts || []).filter(ct => ct.id !== ctid) } : c));
   const setContactField = (cid, ctid, field, val) => setCustomers(cs => cs.map(c => c.id === cid ? { ...c, contacts: (c.contacts || []).map(ct => ct.id === ctid ? { ...ct, [field]: val } : ct) } : c));
   const commitCustomersNow = () => saveCustomerMaster(customers);
+
+  // 検索フィルタ（会社名・代表者・住所・担当者名/支店/電話/メール を横断）
+  const custQuery = custSearch.trim().toLowerCase();
+  const filteredCustomers = custQuery
+    ? customers.filter(c => {
+        const hay = [
+          c.company, c.representative, c.phone, c.postalCode, c.address, c.websiteUrl,
+          c.branchAddress1, c.branchPhone1, c.branchAddress2, c.branchPhone2,
+          ...(c.contacts || []).flatMap(ct => [ct.name, ct.branchName, ct.phone, ct.email]),
+        ].filter(Boolean).join(' ').toLowerCase();
+        return hay.includes(custQuery);
+      })
+    : customers;
 
   // 従業員マスタ
   const addEmployee = () => { const next = [...employees, { id: newId('emp'), name: '', role: '' }]; setEmployees(next); saveEmployeeMaster(next); };
@@ -6850,19 +6882,48 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
     <div style={{ maxWidth: 880 }}>
       {/* お客様マスタ（会社ごとに担当者をぶら下げる） */}
       <section style={cardStyle}>
-        <h2 style={{ fontFamily: fontDisplay, fontSize: 18, margin: '0 0 4px 0', fontWeight: 500 }}>お客様マスタ</h2>
-        <p style={{ fontSize: 12, color: colors.textMute, margin: '0 0 16px 0' }}>
+        {/* セクションヘッダー（クリックで折りたたみ） */}
+        <div onClick={() => setCustSectionOpen(o => !o)}
+          style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none' }}>
+          {custSectionOpen ? <ChevronDown size={18} color={colors.textMute} /> : <ChevronRight size={18} color={colors.textMute} />}
+          <h2 style={{ fontFamily: fontDisplay, fontSize: 18, margin: 0, fontWeight: 500 }}>お客様マスタ</h2>
+          <span style={{ fontSize: 12, color: colors.textMute }}>（{customers.length}社）</span>
+        </div>
+
+        {custSectionOpen && (<>
+        <p style={{ fontSize: 12, color: colors.textMute, margin: '8px 0 16px 0' }}>
           会社ごとに、お客様担当者を複数登録できます。案件入力時の「会社名」「お客様担当者」の候補に表示されます（会社を選ぶとその会社の担当者が出ます）。
         </p>
+
+        {/* 検索 */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, border: `1px solid ${colors.border}`, borderRadius: 4, padding: '6px 10px', marginBottom: 16, background: '#fff' }}>
+          <Search size={15} color={colors.textMute} />
+          <input value={custSearch} onChange={(e) => setCustSearch(e.target.value)}
+            placeholder="会社名・担当者名・電話・メールなどで検索"
+            style={{ flex: 1, border: 'none', outline: 'none', fontFamily: fontJP, fontSize: 13, color: colors.text, background: 'transparent' }} />
+          {custSearch && (
+            <button type="button" onClick={() => setCustSearch('')}
+              style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: colors.textMute, display: 'flex', alignItems: 'center', padding: 2 }} title="クリア">
+              <X size={14} />
+            </button>
+          )}
+        </div>
 
         {customers.length === 0 && (
           <div style={{ fontSize: 12, color: colors.textMute, padding: '4px 2px 12px' }}>
             まだ登録がありません。「＋ 会社を追加」から登録してください。
           </div>
         )}
+        {customers.length > 0 && filteredCustomers.length === 0 && (
+          <div style={{ fontSize: 12, color: colors.textMute, padding: '4px 2px 12px' }}>
+            「{custSearch}」に一致する会社はありません。
+          </div>
+        )}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {customers.map(c => {
+          {filteredCustomers.map(c => {
+            // 検索中は一致した会社を自動展開。通常は expandedCompanies で制御（標準＝折りたたみ）
+            const isExpanded = custQuery ? true : expandedCompanies.has(c.id);
             // 会社情報の入力欄（ラベル＋テキスト）
             const companyField = (label, field, placeholder, span = 1, type = 'text') => (
               <div style={{ gridColumn: `span ${span}` }}>
@@ -6875,8 +6936,14 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
             );
             return (
             <div key={c.id} style={{ border: `1px solid ${colors.border}`, borderRadius: 6, overflow: 'hidden' }}>
-              {/* 会社名ヘッダー */}
+              {/* 会社名ヘッダー（チェブロンで折りたたみ） */}
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', background: '#f3efe4', padding: '10px 12px' }}>
+                <button type="button" onClick={() => toggleCompany(c.id)}
+                  disabled={!!custQuery}
+                  title={isExpanded ? '折りたたむ' : '展開する'}
+                  style={{ background: 'transparent', border: 'none', cursor: custQuery ? 'default' : 'pointer', padding: 0, display: 'flex', alignItems: 'center', color: colors.textMute, flexShrink: 0 }}>
+                  {isExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
+                </button>
                 <span style={{ fontSize: 11, fontWeight: 700, color: colors.textMute, flexShrink: 0 }}>会社</span>
                 <input type="text" value={c.company || ''}
                   onChange={(e) => setCompanyField(c.id, 'company', e.target.value)}
@@ -6897,6 +6964,14 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
                   <Trash2 size={13} /> 会社削除
                 </button>
               </div>
+              {/* 折りたたみ時のサマリー（担当者数） */}
+              {!isExpanded && (
+                <div onClick={() => toggleCompany(c.id)}
+                  style={{ fontSize: 11, color: colors.textMute, padding: '8px 12px', cursor: 'pointer' }}>
+                  担当者 {(c.contacts || []).length}名{c.representative ? ` ・代表 ${c.representative}` : ''}
+                </div>
+              )}
+              {isExpanded && (<>
               {/* 会社情報 */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, padding: 12, borderBottom: `1px solid ${colors.border}`, background: '#fbfaf6' }}>
                 {companyField('代表者名', 'representative', '例: 山田 太郎')}
@@ -6951,6 +7026,7 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
                   <Plus size={12} /> 担当者を追加
                 </button>
               </div>
+              </>)}
             </div>
             );
           })}
@@ -6958,6 +7034,7 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
         <button type="button" onClick={addCompany} style={{ ...addBtnStyle, marginTop: 16 }}>
           <Plus size={14} /> 会社を追加
         </button>
+        </>)}
       </section>
 
       {/* 従業員マスタ */}
