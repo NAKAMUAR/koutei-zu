@@ -1,17 +1,22 @@
 // お客様マスタ 一括登録スクリプト（ローカル実行専用）
 // =====================================================================
-// このスクリプトは「あなたのMac」でだけ実行します。サービスアカウント鍵を使い、
+// このスクリプトは「あなたのMac」でだけ実行します。
 // Firestore の customerMaster に会社データを直接追記します（GitHub には何も載りません）。
 //
-// 使い方は scripts/README.md を参照してください。要点だけ：
-//   1) Firebase コンソールでサービスアカウント鍵(JSON)を発行 → scripts/service-account.json に保存
+// 認証は2通り（どちらでもOK）:
+//   (A) gcloud ログイン（鍵ファイル不要・推奨／ターミナルのみで完結）
+//       gcloud auth application-default login
+//   (B) サービスアカウント鍵を scripts/service-account.json に保存
+//
+// 手順（詳細は scripts/README.md）:
+//   1) 上記 (A) か (B) で認証を用意
 //   2) お客様データ（タブ区切り）を scripts/customers.local.tsv に保存
 //   3) npm i -D firebase-admin
 //   4) node scripts/import-customers.mjs            ← まず内容確認（書き込みなし）
 //      node scripts/import-customers.mjs --write    ← 実際に書き込み
 //
 // 列順: 会社名 / 担当者名 / 郵便番号 / 住所 / 電話番号 / メール / URL
-// 鍵・データファイルは .gitignore 済み。実行後、鍵は削除して構いません。
+// 鍵・データファイルは .gitignore 済み。
 // =====================================================================
 
 import { readFileSync, existsSync } from 'node:fs';
@@ -19,6 +24,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 
+const PROJECT_ID = 'koutei-zu';         // Firebase / GCP のプロジェクトID
 const WORKSPACE_ID = 'liebe-asia-team'; // firebase.js の WORKSPACE_ID と一致させること
 const DATABASE_ID = 'default';          // firebase.js の DATABASE_ID と一致させること
 const KEY_PATH = process.env.SA_KEY || 'scripts/service-account.json';
@@ -69,10 +75,6 @@ function customerRowToRecord(cols) {
 
 async function main() {
   // 入力チェック
-  if (!existsSync(KEY_PATH)) {
-    console.error(`✖ サービスアカウント鍵が見つかりません: ${KEY_PATH}\n  Firebase コンソール > プロジェクトの設定 > サービスアカウント > 新しい秘密鍵を生成 で取得してください。`);
-    process.exit(1);
-  }
   if (!existsSync(DATA_PATH)) {
     console.error(`✖ データファイルが見つかりません: ${DATA_PATH}\n  いただいた表（タブ区切り）をこのパスに保存してください。`);
     process.exit(1);
@@ -87,8 +89,26 @@ async function main() {
   }
   const { getFirestore } = require('firebase-admin/firestore');
 
-  const serviceAccount = JSON.parse(readFileSync(KEY_PATH, 'utf8'));
-  const app = admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+  // 認証方法を自動選択：
+  //  (A) scripts/service-account.json があればそれを使う（鍵ファイル方式）
+  //  (B) 無ければ gcloud のログイン認証（ADC）を使う（鍵ファイル不要・推奨）
+  //      事前に: gcloud auth application-default login
+  let app;
+  if (existsSync(KEY_PATH)) {
+    const serviceAccount = JSON.parse(readFileSync(KEY_PATH, 'utf8'));
+    app = admin.initializeApp({ credential: admin.credential.cert(serviceAccount), projectId: PROJECT_ID });
+    console.log(`認証: サービスアカウント鍵（${KEY_PATH}）`);
+  } else {
+    try {
+      app = admin.initializeApp({ credential: admin.credential.applicationDefault(), projectId: PROJECT_ID });
+      console.log('認証: gcloud ログイン（ADC）');
+    } catch (e) {
+      console.error('✖ 認証情報が見つかりません。次のどちらかを行ってください:\n'
+        + '  (A) gcloud で: gcloud auth application-default login\n'
+        + `  (B) サービスアカウント鍵を ${KEY_PATH} に保存\n  詳細: ` + (e?.message || e));
+      process.exit(1);
+    }
+  }
   const db = getFirestore(app, DATABASE_ID);
 
   // 既存の customerMaster を読み込む（消さずに追記マージ）
@@ -135,4 +155,15 @@ async function main() {
   await app.delete();
 }
 
-main().catch((e) => { console.error('✖ エラー:', e); process.exit(1); });
+main().catch((e) => {
+  console.error('✖ エラー:', e?.message || e);
+  const msg = String(e?.message || e);
+  if (/credential|auth|permission|UNAUTHENTICATED|PERMISSION_DENIED|default credentials/i.test(msg)) {
+    console.error('\nヒント: 認証で失敗している可能性があります。ターミナルだけで行う場合は:\n'
+      + '  gcloud auth login\n'
+      + '  gcloud auth application-default login\n'
+      + '  gcloud config set project koutei-zu\n'
+      + 'を実行してから、もう一度お試しください。');
+  }
+  process.exit(1);
+});

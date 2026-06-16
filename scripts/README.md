@@ -10,12 +10,24 @@
 
 ## 手順
 
-### 1. サービスアカウント鍵を発行
+### 1. 認証を用意（どちらか一方）
+
+#### 方法A（推奨・鍵ファイル不要／ターミナルのみ）— gcloud ログイン
+```bash
+# gcloud が無ければ: brew install --cask google-cloud-sdk
+gcloud auth login                           # ブラウザで kei.n412@gmail.com（オーナー）でログイン
+gcloud auth application-default login        # スクリプトが使う認証(ADC)を設定
+gcloud config set project koutei-zu
+```
+鍵ファイルを作らないので最も安全です。スクリプトは `scripts/service-account.json` が無ければ
+自動的にこのログイン認証（ADC）を使います。
+
+#### 方法B — サービスアカウント鍵
 1. Firebase コンソール → プロジェクト `koutei-zu` を開く
 2. ⚙️ プロジェクトの設定 → **サービス アカウント** タブ
 3. **新しい秘密鍵を生成** → ダウンロードしたJSONを `scripts/service-account.json` に保存
 
-> この鍵はDB全権を持つ秘密情報です。リポジトリには入りません（`.gitignore`済み）。
+> 鍵はDB全権を持つ秘密情報です。リポジトリには入りません（`.gitignore`済み）。
 > 取り込みが終わったら、コンソールの同じ画面で鍵を**削除（無効化）**して構いません。
 
 ### 2. お客様データを保存
