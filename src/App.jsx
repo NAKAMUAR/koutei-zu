@@ -154,6 +154,59 @@ function normalizeCustomerMaster(arr) {
   }));
 }
 
+// タブ区切りテキスト（Excel/スプレッドシートからの貼り付け）を行×列に分解する。
+// ダブルクォートで囲まれたセル内の改行・タブ・"" エスケープに対応する。
+function parseTabularText(text) {
+  const rows = [];
+  let row = [], field = '', inQ = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQ) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else inQ = false;
+      } else field += ch;
+    } else if (ch === '"') {
+      inQ = true;
+    } else if (ch === '\t') {
+      row.push(field); field = '';
+    } else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && text[i + 1] === '\n') i++;
+      row.push(field); rows.push(row); row = []; field = '';
+    } else field += ch;
+  }
+  if (field !== '' || row.length > 0) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+// 貼り付け1行（列配列）を、お客様マスタの会社レコードへ変換する。
+// 列順: 会社名 / 担当者名 / 郵便番号 / 住所 / 電話番号 / メール / URL
+function customerRowToRecord(cols, idFor) {
+  const clean = (v) => {
+    const s = (v == null ? '' : String(v)).trim();
+    return s === '-' || s === '−' ? '' : s;
+  };
+  // 会社名: 先頭行のみ採用し、末尾の「様」を除去
+  const company = clean(cols[0]).split(/\n/)[0].replace(/\s*様\s*$/, '').trim();
+  if (!company) return null;
+  const rep = clean(cols[1]).replace(/\s+/g, ' ');
+  const postalCode = clean(cols[2]).replace(/^〒/, '').trim();
+  const address = clean(cols[3]).replace(/\s*\n\s*/g, ' ').trim();
+  const phone = clean(cols[4]).replace(/\s*\n\s*/g, ' ').trim();
+  const email = clean(cols[5]).replace(/＠/g, '@');
+  let url = clean(cols[6]);
+  // マークダウン形式 [表示テキスト](URL) からURLを抽出
+  const md = url.match(/\((https?:[^)]+)\)/);
+  if (md) url = md[1];
+  if (!/^https?:/.test(url)) url = url.replace(/^\[|\]$/g, '');
+  const contacts = [];
+  if (rep || email) contacts.push({ id: idFor('cc'), name: rep, email });
+  return {
+    id: idFor('cust'), company, contractType: 'labo',
+    representative: rep, phone, postalCode, address, websiteUrl: url, contacts,
+  };
+}
+
 // ===== ベトナムの祝日（候補データ） =====
 // 旧暦ベースの祝日（推定・要確認）。政府が毎年、振替日を含めて公式日程を発表するため目安。
 // tet=テト元日, tetDays=テト休みの目安日数, hung=フンヴオン王の命日（旧暦3月10日）
@@ -6815,6 +6868,31 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
   const setContactField = (cid, ctid, field, val) => setCustomers(cs => cs.map(c => c.id === cid ? { ...c, contacts: (c.contacts || []).map(ct => ct.id === ctid ? { ...ct, [field]: val } : ct) } : c));
   const commitCustomersNow = () => saveCustomerMaster(customers);
 
+  // 一括インポート（スプレッドシート／Excelからのタブ区切り貼り付け）
+  const [importOpen, setImportOpen] = useState(false);
+  const [importText, setImportText] = useState('');
+  const runImport = () => {
+    const rows = parseTabularText(importText);
+    const existing = new Set(customers.map(c => (c.company || '').trim()));
+    const added = [];
+    let skipped = 0;
+    for (const cols of rows) {
+      const rec = customerRowToRecord(cols, newId);
+      if (!rec) continue;
+      if (existing.has(rec.company)) { skipped++; continue; }
+      existing.add(rec.company);
+      added.push(rec);
+    }
+    if (added.length === 0) {
+      alert(skipped > 0 ? `追加できる会社がありませんでした（既に登録済み: ${skipped}件）` : '会社名が読み取れませんでした。1列目に会社名が入ったタブ区切りで貼り付けてください。');
+      return;
+    }
+    commitCustomers([...customers, ...added]);
+    setImportText('');
+    setImportOpen(false);
+    alert(`${added.length}件の会社を追加しました${skipped > 0 ? `（既登録のためスキップ: ${skipped}件）` : ''}`);
+  };
+
   // 従業員マスタ
   const addEmployee = () => { const next = [...employees, { id: newId('emp'), name: '', role: '' }]; setEmployees(next); saveEmployeeMaster(next); };
   const setEmployeeField = (id, field, val) => setEmployees(es => es.map(e => e.id === id ? { ...e, [field]: val } : e));
@@ -6874,6 +6952,36 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
         <p style={{ fontSize: 12, color: colors.textMute, margin: '0 0 16px 0' }}>
           会社ごとに、お客様担当者を複数登録できます。案件入力時の「会社名」「お客様担当者」の候補に表示されます（会社を選ぶとその会社の担当者が出ます）。
         </p>
+
+        {/* 一括インポート（タブ区切り貼り付け） */}
+        <div style={{ marginBottom: 16 }}>
+          <button type="button" onClick={() => setImportOpen(o => !o)}
+            style={{ background: '#fff', border: `1px solid ${colors.border}`, padding: '7px 12px', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, color: colors.text, display: 'flex', alignItems: 'center', gap: 6 }}>
+            {importOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />} 一括インポート（貼り付け）
+          </button>
+          {importOpen && (
+            <div style={{ marginTop: 10, border: `1px solid ${colors.border}`, borderRadius: 6, padding: 14, background: '#fbfaf6' }}>
+              <div style={{ fontSize: 11, color: colors.textMute, lineHeight: 1.7, marginBottom: 8 }}>
+                Excel／スプレッドシートからコピーして貼り付けてください。1行＝1社、列はタブ区切りで次の順番です：<br />
+                <strong>会社名 ／ 担当者名 ／ 郵便番号 ／ 住所 ／ 電話番号 ／ メール ／ URL</strong><br />
+                担当者名・メールは「お客様担当者」として登録されます。会社名が既に登録済みの行はスキップします（既存データは消えません）。
+              </div>
+              <textarea value={importText} onChange={(e) => setImportText(e.target.value)}
+                placeholder={'例）\n株式会社サンプル\t山田 太郎\t460-0008\t愛知県名古屋市中区栄1-2-3\t052-123-4567\tinfo@example.co.jp\thttps://example.co.jp'}
+                style={{ width: '100%', minHeight: 140, boxSizing: 'border-box', resize: 'vertical', border: `1px solid ${colors.border}`, borderRadius: 4, padding: 10, fontFamily: 'monospace', fontSize: 12, lineHeight: 1.5, color: colors.text, background: '#fff' }} />
+              <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                <button type="button" onClick={runImport} disabled={!importText.trim()}
+                  style={{ ...addBtnStyle, opacity: importText.trim() ? 1 : 0.5, cursor: importText.trim() ? 'pointer' : 'not-allowed' }}>
+                  <Plus size={14} /> この内容でインポート
+                </button>
+                <button type="button" onClick={() => { setImportText(''); setImportOpen(false); }}
+                  style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '8px 14px', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, color: colors.textMute }}>
+                  キャンセル
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
 
         {customers.length === 0 && (
           <div style={{ fontSize: 12, color: colors.textMute, padding: '4px 2px 12px' }}>
