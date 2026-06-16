@@ -6245,6 +6245,9 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
   }, [scheduled.active]);
   const [msgCompany, setMsgCompany] = useState(null);
   const [msgMode, setMsgMode] = useState('morning'); // 'morning'=業務開始 / 'evening'=業務終了
+  // チェックを入れると、連絡文の案件並びを「会社の表示順」（companyOrder）に従って並べる
+  const [orderByCompany, setOrderByCompany] = useState(false);
+  const companyOrder = settings?.companyOrder || [];
   // 既定は「全社まとめ」。個別会社を選べば従来どおりその会社だけの連絡文になる。
   const curCompany = (msgCompany !== null && (msgCompany === ALL_COMPANIES || companies.includes(msgCompany))) ? msgCompany : ALL_COMPANIES;
 
@@ -6256,10 +6259,15 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
     // 案件（projectName）ごとに、スケジュール順（scheduled.active の並び）で1エントリ
     const projectsInOrder = [];
     const seen = new Set();
+    const companyOfProject = new Map(); // 案件名 → 会社名（並べ替え用・最初に出た会社）
     for (const t of scheduled.active) {
       if (!matchCompany(t.companyName)) continue;
       const p = t.projectName || '(案件名未設定)';
-      if (!seen.has(p)) { seen.add(p); projectsInOrder.push(p); }
+      if (!seen.has(p)) { seen.add(p); projectsInOrder.push(p); companyOfProject.set(p, t.companyName || ''); }
+    }
+    // 「会社の表示順」チェック時は、会社の表示順（companyOrder）で並べ替え（同一会社内はスケジュール順を維持）
+    if (orderByCompany) {
+      projectsInOrder.sort((a, b) => compareCompanyDisplay(companyOfProject.get(a), companyOfProject.get(b), companyOrder));
     }
     // ===== 本日納品分（納品済み）を案件ごとに集計 =====
     const todayYmd = fmtYMD(new Date());
@@ -6270,13 +6278,18 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
     };
     const deliveredMap = new Map(); // 案件名 → 完了タスク配列（本日納品・中止除く）
     const deliveredOrder = [];
+    const companyOfDelivered = new Map(); // 案件名 → 会社名（並べ替え用）
     for (const t of scheduled.done) {
       if (!matchCompany(t.companyName) || t.cancelled) continue;
       const dd = deliveryDateOf(t);
       if (!dd || fmtYMD(dd) !== todayYmd) continue;
       const p = t.projectName || '(案件名未設定)';
-      if (!deliveredMap.has(p)) { deliveredMap.set(p, []); deliveredOrder.push(p); }
+      if (!deliveredMap.has(p)) { deliveredMap.set(p, []); deliveredOrder.push(p); companyOfDelivered.set(p, t.companyName || ''); }
       deliveredMap.get(p).push(t);
+    }
+    // 「会社の表示順」チェック時は納品済みも会社の表示順で並べ替え
+    if (orderByCompany) {
+      deliveredOrder.sort((a, b) => compareCompanyDisplay(companyOfDelivered.get(a), companyOfDelivered.get(b), companyOrder));
     }
 
     // 案件も本日納品も無い会社（例：TAMAZEN / SUMUS で当日タスクなし）は、挨拶文をランダムで返す
@@ -6343,7 +6356,7 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
     lines.push(evening ? '本日もありがとうございました(bow)' : '以上になります、本日もよろしくお願いいたします');
     return lines.join('\n');
   };
-  const companyText = useMemo(() => curCompany !== undefined ? buildCompanyMessage(curCompany, msgMode) : '', [curCompany, msgMode, allGroups, scheduled.active, scheduled.done, doneStartByTask]);
+  const companyText = useMemo(() => curCompany !== undefined ? buildCompanyMessage(curCompany, msgMode) : '', [curCompany, msgMode, orderByCompany, companyOrder, allGroups, scheduled.active, scheduled.done, doneStartByTask]);
   const [companyCopied, setCompanyCopied] = useState(false);
   const copyCompanyText = async () => {
     try {
@@ -6393,6 +6406,13 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
             <MessageSquare size={16} /> 業務連絡文（全社まとめ／会社別）
           </h3>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            {/* 「会社の表示順」で並べるかのチェックボックス */}
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, color: colors.text, userSelect: 'none' }}
+              title="チェックすると連絡文の案件を「会社の表示順」で並べます（未チェックはスケジュール順）">
+              <input type="checkbox" checked={orderByCompany} onChange={(e) => setOrderByCompany(e.target.checked)}
+                style={{ cursor: 'pointer', width: 14, height: 14 }} />
+              会社の表示順で並べる
+            </label>
             {/* 業務開始（朝）／業務終了（夕）の切替 */}
             <div style={{ display: 'flex', border: `1px solid ${colors.border}`, borderRadius: 4, overflow: 'hidden' }}>
               {[{ id: 'morning', label: '業務開始（朝）' }, { id: 'evening', label: '業務終了（夕）' }].map(m => (
@@ -6434,7 +6454,7 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
             fontFamily: fontJP, fontSize: 13, lineHeight: 1.7, color: colors.text, background: '#fbf9f4', whiteSpace: 'pre-wrap',
           }} />
         <div style={{ fontSize: 10, color: colors.textMute, marginTop: 8 }}>
-          ※ 「全社まとめ」は全会社の案件を1通にまとめて案件ごとに表示します（会社を選ぶとその会社だけ） ・ 「業務開始（朝）／業務終了（夕）」で挨拶文を切り替えます ・ 制作枚数は視点(依頼項目)を外観(EX)／内観(IN)で分類した件数です ・ 「■納品済み」は本日納品分（実終了日が本日の完了案件）を表示します
+          ※ 「全社まとめ」は全会社の案件を1通にまとめて案件ごとに表示します（会社を選ぶとその会社だけ） ・ 「会社の表示順で並べる」にチェックすると案件を会社の表示順（設定ページの並び）で並べます（未チェックはスケジュール順） ・ 「業務開始（朝）／業務終了（夕）」で挨拶文を切り替えます ・ 制作枚数は視点(依頼項目)を外観(EX)／内観(IN)で分類した件数です ・ 「■納品済み」は本日納品分（実終了日が本日の完了案件）を表示します
         </div>
       </div>
 
