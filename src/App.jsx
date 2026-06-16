@@ -6827,6 +6827,13 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
       })
     : customers;
 
+  // 表示順：ラボ→オフショアの順。各グループ内は依頼（登録）順を保つ（安定ソート）。
+  const contractRank = (c) => (c.contractType === 'offshore' ? 1 : 0);
+  const displayCustomers = filteredCustomers
+    .map((c, i) => [c, i])
+    .sort((a, b) => (contractRank(a[0]) - contractRank(b[0])) || (a[1] - b[1]))
+    .map(([c]) => c);
+
   // 従業員マスタ
   const addEmployee = () => { const next = [...employees, { id: newId('emp'), name: '', role: '' }]; setEmployees(next); saveEmployeeMaster(next); };
   const setEmployeeField = (id, field, val) => setEmployees(es => es.map(e => e.id === id ? { ...e, [field]: val } : e));
@@ -6921,7 +6928,7 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
         )}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {filteredCustomers.map(c => {
+          {displayCustomers.map(c => {
             // 検索中は一致した会社を自動展開。通常は expandedCompanies で制御（標準＝折りたたみ）
             const isExpanded = custQuery ? true : expandedCompanies.has(c.id);
             // 会社情報の入力欄（ラベル＋テキスト）
