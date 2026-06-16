@@ -15,6 +15,8 @@
 
 > デプロイ（gh-pages）と main への push は**必ずセット**。デプロイだけしてソース（main）への push を忘れると、GitHub のソースが古いまま乖離する（過去に発生済み）。
 
+> **即時反映は毎回必須（ユーザー指示・2026-06）**: どのセッション（ローカル / Claude Code on the web の作業ブランチ含む）でも、修正のたびに必ず `npm run deploy` を実行して本番（https://nakamuar.github.io/koutei-zu/）へ即時反映する。作業ブランチ運用の場合でも、ソースは指定ブランチへ push しつつ、デプロイ（gh-pages 公開）は毎回行う。デプロイ可否を都度確認しない。
+
 ## ソースの場所（重要）
 
 - **作業対象の最新ソースはこのリポジトリ**: `/Users/nakamurakeisuke/Documents/koutei-zu`（`src/App.jsx` ほぼ単一ファイル）
