@@ -3261,7 +3261,7 @@ function InputView({ embedded, form, setForm, handleSubmit, editingId, editMode,
   };
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 32 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 32 }}>
       {quoteOpen && (
         <QuoteModal projects={pastProjects} onSelect={selectQuote} onClose={() => setQuoteOpen(false)}
           colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
