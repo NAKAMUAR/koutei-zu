@@ -501,6 +501,10 @@ function scheduleTasks(tasks, settings, projectOrder, now) {
     if (!t.actualEnd) continue;
     const ae = new Date(t.actualEnd);
     if (isNaN(ae.getTime())) continue;
+    // 当日以降に終えた完了タスクは、カレンダー上で当日に表示しない方針に合わせ、
+    // 当日の着手下限（遅れ反映）にも使わない。これにより完了ブロックを隠した跡に
+    // 空白が残らず、当日の予定が前詰め（朝から）で配置される。
+    if (startOfDay(ae).getTime() >= today.getTime()) continue;
     const ts = startOfDay(ae).getTime() + (ae.getHours() * 60 + ae.getMinutes()) * 60000;
     if (!doneFloor[t.assignee] || ts > doneFloor[t.assignee]) doneFloor[t.assignee] = ts;
   }
