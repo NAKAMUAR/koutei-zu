@@ -655,6 +655,17 @@ function scheduleTasks(tasks, settings, projectOrder, now) {
   return { active: scheduled, done, review, doneFinal };
 }
 
+// 視点（ステップ群）の完了実績（actualEnd）のうち最も遅い時刻を返す。
+// 編集フォームの「終了時間」を、終了時間指定が無くても完了済みの実終了時刻で埋めるために使う。
+function latestActualEnd(steps) {
+  let latest = '';
+  for (const t of (steps || [])) {
+    if (!t.actualEnd) continue;
+    if (!latest || new Date(t.actualEnd).getTime() > new Date(latest).getTime()) latest = t.actualEnd;
+  }
+  return latest;
+}
+
 // 完了タスクのカレンダー表示用スロット：実終了時刻（actualEnd、無ければ completedAt）から
 // 制作時間ぶん営業時間を遡って配置する。同担当者の完了タスク同士は重ならないよう後ろから詰める
 function buildDoneSlots(doneTasks, settings) {
@@ -1675,7 +1686,8 @@ export default function App() {
         viewpointName: task.viewpointName || '',
         assignee: task.assignee || '',
         manualStart: task.manualStart || '',
-        manualEnd: task.manualEnd || '',
+        // 終了時間指定が無くても、完了済みなら実終了時刻（actualEnd）を終了時間に反映する
+        manualEnd: task.manualEnd || task.actualEnd || '',
         deadline: task.deadline || '',
         steps: [{
           taskId: task.id,
@@ -1711,8 +1723,11 @@ export default function App() {
         assignee: v.assignee,
         // 視点ごとの開始時間：最初の未完了ステップの指定を表示（無ければ先頭ステップ）
         manualStart: (firstActive || sortedSteps[0])?.manualStart || '',
-        // 視点ごとの終了時間：最後の未完了ステップの指定を表示（無ければ末尾ステップ）
-        manualEnd: (lastActive || sortedSteps[sortedSteps.length - 1])?.manualEnd || '',
+        // 視点ごとの終了時間：終了時間指定を優先。指定が無く、かつ全ステップ完了済みなら
+        // 実終了時刻（actualEnd）の最遅を反映する（未完了ステップが残る視点は実績で埋めない）
+        manualEnd: lastActive
+          ? (lastActive.manualEnd || '')
+          : ((sortedSteps[sortedSteps.length - 1])?.manualEnd || latestActualEnd(sortedSteps) || ''),
         // 視点ごとの納期：この視点のタスクから（最初に見つかったもの）
         deadline: (sortedSteps.find(t => t.deadline) || {}).deadline || '',
         steps: sortedSteps.map(t => ({
