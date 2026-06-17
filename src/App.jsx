@@ -2197,7 +2197,27 @@ export default function App() {
         : t
     )));
   };
-  // ④ 確認中（30分後に通知）＝30分スヌーズ。key は視点キー
+  // ④ 終了予定時間の修正（遅延とは別：作業時間を加算せず・遅延履歴も残さず、
+  //    終了予定の指定（manualEnd）だけを新しい時刻に直す。前倒し＝早め／遅め どちらも可）
+  const endPromptAdjustEnd = (vp, newEndTs) => {
+    if (!newEndTs) { alert('新しい終了予定時間を入力してください'); return; }
+    const scheduledById = new Map(scheduled.active.map(t => [t.id, t]));
+    const active = tasksRef.current
+      .map(t => scheduledById.get(t.id) || t)
+      .filter(t => t.projectName === vp.projectName && t.viewpointName === vp.viewpointName && t.assignee === vp.assignee && t.status !== 'done' && t.scheduledEnd);
+    if (active.length === 0) { alert('対象の進行中タスクがありません'); return; }
+    // 終了予定を決めている最後のステップ
+    const last = active.reduce((a, b) => {
+      const ta = startOfDay(a.scheduledEnd).getTime() + (a.scheduledEndMin || 0) * 60000;
+      const tb = startOfDay(b.scheduledEnd).getTime() + (b.scheduledEndMin || 0) * 60000;
+      return tb > ta ? b : a;
+    });
+    const newEndStr = dateToDtLocal(new Date(newEndTs));
+    saveTasks(prev => normalizePriorities(prev.map(t =>
+      t.id === last.id ? { ...t, manualEnd: newEndStr } : t
+    )));
+  };
+  // ⑤ 確認中（30分後に通知）＝30分スヌーズ。key は視点キー
   const endPromptSnooze = (key, endTs) => {
     setEndPromptFor(key, { snoozedUntil: Date.now() + 30 * 60000, lastPromptedEnd: endTs });
   };
@@ -2585,7 +2605,7 @@ export default function App() {
         <EndPromptModal
           viewpoints={overdueViewpoints} now={now} settings={settings}
           onComplete={endPromptComplete} onAddRevision={endPromptAddRevision}
-          onDelay={endPromptDelay} onSnooze={endPromptSnooze}
+          onDelay={endPromptDelay} onAdjustEnd={endPromptAdjustEnd} onSnooze={endPromptSnooze}
           colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
       )}
 
@@ -7512,11 +7532,12 @@ function fmtOverdue(ms) {
   const h = Math.floor(min / 60), m = min % 60;
   return m === 0 ? `${h}時間超過` : `${h}時間${m}分超過`;
 }
-function EndPromptModal({ viewpoints, now, settings, onComplete, onAddRevision, onDelay, onSnooze, colors, fontJP, fontDisplay }) {
+function EndPromptModal({ viewpoints, now, settings, onComplete, onAddRevision, onDelay, onAdjustEnd, onSnooze, colors, fontJP, fontDisplay }) {
   // 展開中のアクション { key, action } と各フォーム値
   const [active, setActive] = useState(null);
   const [completeEnd, setCompleteEnd] = useState('');
   const [delayEnd, setDelayEnd] = useState('');
+  const [adjustEnd, setAdjustEnd] = useState('');
   const [revName, setRevName] = useState('追加修正');
   const [revHours, setRevHours] = useState('');
 
@@ -7524,6 +7545,7 @@ function EndPromptModal({ viewpoints, now, settings, onComplete, onAddRevision, 
     setActive({ key: vp.key, action });
     if (action === 'complete') setCompleteEnd(dateToDtLocal(now));
     if (action === 'delay') setDelayEnd(dateToDtLocal(new Date(vp.endTs)));
+    if (action === 'adjust') setAdjustEnd(dateToDtLocal(new Date(vp.endTs)));
     if (action === 'revision') { setRevName('追加修正'); setRevHours(''); }
   };
   const close = () => setActive(null);
@@ -7561,8 +7583,9 @@ function EndPromptModal({ viewpoints, now, settings, onComplete, onAddRevision, 
                 <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
                   <button type="button" onClick={() => open(vp, 'complete')} style={btn(colors.progress, colors.progress, '#fff')}>① 視点完了</button>
                   <button type="button" onClick={() => open(vp, 'revision')} style={btn('#fff', colors.border, colors.text)}>② 追加修正</button>
-                  <button type="button" onClick={() => open(vp, 'delay')} style={btn('#fff', colors.border, colors.text)}>③ 遅延</button>
-                  <button type="button" onClick={() => onSnooze(vp.key, vp.endTs)} style={btn('#fff', colors.border, colors.textMute)} title="今は確認中。30分後にもう一度通知します。">④ 確認中（30分後に通知）</button>
+                  <button type="button" onClick={() => open(vp, 'delay')} style={btn('#fff', colors.border, colors.text)} title="遅れて終了予定を後ろへ。差分の作業時間を加算します。">③ 遅延</button>
+                  <button type="button" onClick={() => open(vp, 'adjust')} style={btn('#fff', colors.border, colors.text)} title="終了予定時間だけを直します（作業時間は加算しません・早め/遅め可）。">④ 終了予定の修正</button>
+                  <button type="button" onClick={() => onSnooze(vp.key, vp.endTs)} style={btn('#fff', colors.border, colors.textMute)} title="今は確認中。30分後にもう一度通知します。">⑤ 確認中（30分後に通知）</button>
                 </div>
 
                 {isOpen && active.action === 'complete' && (
@@ -7603,6 +7626,20 @@ function EndPromptModal({ viewpoints, now, settings, onComplete, onAddRevision, 
                         if (!nt) { alert('日時を入力してください'); return; }
                         onDelay(vp, vp.endTs, nt); close();
                       }} style={btn(colors.text, colors.text, '#fff')}>更新する</button>
+                      <button type="button" onClick={close} style={btn('#fff', colors.border, colors.textMute)}>やめる</button>
+                    </div>
+                  </div>
+                )}
+                {isOpen && active.action === 'adjust' && (
+                  <div style={{ marginTop: 12, background: '#fbf9f4', borderRadius: 5, padding: 12 }}>
+                    <div style={fieldLabel}>新しい終了予定時間（作業時間は変えません・早め/遅め可）</div>
+                    <EndTimeFields value={adjustEnd} onChange={setAdjustEnd} colors={colors} fontJP={fontJP} />
+                    <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                      <button type="button" onClick={() => {
+                        const nt = adjustEnd ? new Date(adjustEnd).getTime() : 0;
+                        if (!nt) { alert('日時を入力してください'); return; }
+                        onAdjustEnd(vp, nt); close();
+                      }} style={btn(colors.text, colors.text, '#fff')}>修正する</button>
                       <button type="button" onClick={close} style={btn('#fff', colors.border, colors.textMute)}>やめる</button>
                     </div>
                   </div>
