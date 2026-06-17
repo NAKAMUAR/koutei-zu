@@ -5348,8 +5348,12 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
       matrix[task.assignee][key].push({ task, slot });
     }
   }
-  // 完了タスクもグレーで表示（実終了時刻から遡って配置）
+  // 完了タスクもグレーで表示（実終了時刻から遡って配置）。
+  // ただし「当日（今日）以降」のスロットは表示しない。完了操作を当日に行うと、
+  // 実終了時刻が未入力のとき完了時刻＝今日になり、当日にスライバーが残るため。
+  const doneTodayStart = now ? startOfDay(now).getTime() : Infinity;
   for (const item of buildDoneSlots(scheduled.done, settings)) {
+    if (item.slot.date.getTime() >= doneTodayStart) continue;
     const key = fmtYMD(item.slot.date);
     if (!matrix[item.task.assignee]) matrix[item.task.assignee] = {};
     if (!matrix[item.task.assignee][key]) matrix[item.task.assignee][key] = [];
