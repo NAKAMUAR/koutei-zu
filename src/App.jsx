@@ -2178,7 +2178,7 @@ export default function App() {
         : t
     )));
   };
-  // ④ 後で（30分スヌーズ）。key は視点キー
+  // ④ 確認中（30分後に通知）＝30分スヌーズ。key は視点キー
   const endPromptSnooze = (key, endTs) => {
     setEndPromptFor(key, { snoozedUntil: Date.now() + 30 * 60000, lastPromptedEnd: endTs });
   };
@@ -3261,7 +3261,7 @@ function InputView({ embedded, form, setForm, handleSubmit, editingId, editMode,
   };
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 32 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 32 }}>
       {quoteOpen && (
         <QuoteModal projects={pastProjects} onSelect={selectQuote} onClose={() => setQuoteOpen(false)}
           colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
@@ -7516,7 +7516,7 @@ function EndPromptModal({ viewpoints, now, settings, onComplete, onAddRevision, 
       <div style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 8, width: '100%', maxWidth: 600, maxHeight: '85vh', display: 'flex', flexDirection: 'column', fontFamily: fontJP, boxShadow: '0 12px 48px rgba(0,0,0,0.25)' }}>
         <div style={{ padding: '18px 22px', borderBottom: `1px solid ${colors.border}` }}>
           <h3 style={{ fontFamily: fontDisplay, fontSize: 17, margin: 0, fontWeight: 600, color: colors.accent }}>終了予定を過ぎた視点があります</h3>
-          <p style={{ fontSize: 11, color: colors.textMute, margin: '6px 0 0 0' }}>視点ごとに対応を選んでください（「後で」で30分後に再表示）。</p>
+          <p style={{ fontSize: 11, color: colors.textMute, margin: '6px 0 0 0' }}>視点ごとに対応を選んでください（「確認中」で30分後に再通知）。</p>
         </div>
         <div style={{ overflowY: 'auto', padding: '8px 16px 16px', flex: 1 }}>
           {viewpoints.map(vp => {
@@ -7539,7 +7539,7 @@ function EndPromptModal({ viewpoints, now, settings, onComplete, onAddRevision, 
                   <button type="button" onClick={() => open(vp, 'complete')} style={btn(colors.progress, colors.progress, '#fff')}>① 視点完了</button>
                   <button type="button" onClick={() => open(vp, 'revision')} style={btn('#fff', colors.border, colors.text)}>② 追加修正</button>
                   <button type="button" onClick={() => open(vp, 'delay')} style={btn('#fff', colors.border, colors.text)}>③ 遅延</button>
-                  <button type="button" onClick={() => onSnooze(vp.key, vp.endTs)} style={btn('#fff', colors.border, colors.textMute)}>④ 後で</button>
+                  <button type="button" onClick={() => onSnooze(vp.key, vp.endTs)} style={btn('#fff', colors.border, colors.textMute)} title="今は確認中。30分後にもう一度通知します。">④ 確認中（30分後に通知）</button>
                 </div>
 
                 {isOpen && active.action === 'complete' && (
