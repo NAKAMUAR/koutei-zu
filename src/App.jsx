@@ -6914,7 +6914,7 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
     <div style={{ maxWidth: 880 }}>
       {/* 表示切替：お客様設定 / 従業員設定 / 会社の表示順 */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 20 }}>
-        {[{ id: 'customer', label: 'お客様設定' }, { id: 'employee', label: '従業員設定' }, { id: 'companyOrder', label: '会社の表示順' }].map(t => (
+        {[{ id: 'customer', label: 'お客様設定' }, { id: 'employee', label: '従業員設定' }, { id: 'companyOrder', label: '会社の表示順' }, { id: 'holiday', label: 'ベトナムの祝日' }].map(t => (
           <button key={t.id} type="button" onClick={() => setMasterTab(t.id)}
             style={{
               padding: '8px 16px', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13, fontWeight: 600,
@@ -7178,7 +7178,10 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
           colors={colors} fontJP={fontJP} />
       </section>
 
-      {/* ベトナムの祝日（全体共通の休み） */}
+      </>)}
+
+      {masterTab === 'holiday' && (<>
+      {/* ベトナムの祝日（全体共通の休み・独立タブ） */}
       <section style={cardStyle}>
         <HolidayManager
           holidays={settings?.holidays || []}
