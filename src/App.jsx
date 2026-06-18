@@ -6890,6 +6890,19 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
         (c.company || '').toLowerCase().includes(customerQ) ||
         (c.contacts || []).some(ct => (ct.name || '').toLowerCase().includes(customerQ)))
     : customers;
+  // 会社名をあいうえお順（日本語ロケール）で表示
+  const sortedCustomers = [...filteredCustomers].sort((a, b) => (a.company || '').localeCompare(b.company || '', 'ja'));
+
+  // お客様マスタの折り畳み状態（会社ごと）。初回は全て閉じた状態にする
+  const [collapsedCustomers, setCollapsedCustomers] = useState(() => new Set());
+  const didInitCustCollapse = useRef(false);
+  useEffect(() => {
+    if (!didInitCustCollapse.current && customers.length > 0) {
+      setCollapsedCustomers(new Set(customers.map(c => c.id)));
+      didInitCustCollapse.current = true;
+    }
+  }, [customers.length]);
+  const toggleCustomer = (id) => setCollapsedCustomers(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   const newId = (p) => `${p}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
@@ -7005,6 +7018,20 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
           </div>
         )}
 
+        {/* 全て開く / 全て閉じる */}
+        {customers.length > 0 && (
+          <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+            <button type="button" onClick={() => setCollapsedCustomers(new Set(sortedCustomers.map(c => c.id)))}
+              style={{ display: 'flex', alignItems: 'center', gap: 3, padding: '4px 10px', background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, color: colors.textMute }}>
+              <ChevronDown size={13} />全て閉じる
+            </button>
+            <button type="button" onClick={() => setCollapsedCustomers(new Set())}
+              style={{ display: 'flex', alignItems: 'center', gap: 3, padding: '4px 10px', background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, color: colors.textMute }}>
+              <ChevronUp size={13} />全て開く
+            </button>
+          </div>
+        )}
+
         {customers.length === 0 && (
           <div style={{ fontSize: 12, color: colors.textMute, padding: '4px 2px 12px' }}>
             まだ登録がありません。「＋ 会社を追加」から登録してください。
@@ -7017,7 +7044,8 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
         )}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {filteredCustomers.map(c => {
+          {sortedCustomers.map(c => {
+            const isCollapsed = collapsedCustomers.has(c.id);
             // 会社情報の入力欄（ラベル＋テキスト）
             const companyField = (label, field, placeholder, span = 1, type = 'text') => (
               <div style={{ gridColumn: `span ${span}` }}>
@@ -7032,6 +7060,11 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
             <div key={c.id} style={{ border: `1px solid ${colors.border}`, borderRadius: 6, overflow: 'hidden' }}>
               {/* 会社名ヘッダー */}
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', background: '#f3efe4', padding: '10px 12px' }}>
+                <button type="button" onClick={() => toggleCustomer(c.id)}
+                  style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, color: colors.textMute, display: 'flex', alignItems: 'center', flexShrink: 0 }}
+                  title={isCollapsed ? '展開' : '折りたたみ'}>
+                  {isCollapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
+                </button>
                 <span style={{ fontSize: 11, fontWeight: 700, color: colors.textMute, flexShrink: 0 }}>会社</span>
                 <input type="text" value={c.company || ''}
                   onChange={(e) => setCompanyField(c.id, 'company', e.target.value)}
@@ -7046,12 +7079,16 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
                   <option value="labo">ラボ</option>
                   <option value="offshore">オフショア</option>
                 </select>
+                {isCollapsed && (
+                  <span style={{ fontSize: 11, color: colors.textMute, flexShrink: 0 }}>担当者{(c.contacts || []).length}名</span>
+                )}
                 <button type="button" onClick={() => removeCompany(c.id)}
                   style={{ ...delBtnStyle, display: 'flex', alignItems: 'center', gap: 4, padding: '6px 10px', fontSize: 11, fontFamily: fontJP }}
                   title="この会社を削除">
                   <Trash2 size={13} /> 会社削除
                 </button>
               </div>
+              {!isCollapsed && (<>
               {/* 会社情報 */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, padding: 12, borderBottom: `1px solid ${colors.border}`, background: '#fbfaf6' }}>
                 {companyField('代表者名', 'representative', '例: 山田 太郎')}
@@ -7106,6 +7143,7 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
                   <Plus size={12} /> 担当者を追加
                 </button>
               </div>
+              </>)}
             </div>
             );
           })}
