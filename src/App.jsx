@@ -1408,6 +1408,50 @@ export default function App() {
     catch (e) { console.error('従業員マスタ保存エラー:', e); }
   };
 
+  // 会社名の統合（冪等・該当が無ければ何もしない）：
+  // 「株式会社オフィスコム」を「オフィスコム」に統一する。Firestore 上の既存データに対して
+  // ブラウザ側で一度きり移行する（タスクの会社名・お客様マスタ・会社の表示順を書き換える）。
+  useEffect(() => {
+    if (loading) return;
+    const OLD = '株式会社オフィスコム';
+    const NEW = 'オフィスコム';
+
+    // 1) タスクの会社名
+    if (tasksRef.current.some(t => (t.companyName || '') === OLD)) {
+      saveTasks(prev => prev.map(t => (t.companyName || '') === OLD ? { ...t, companyName: NEW } : t));
+    }
+
+    // 2) お客様マスタ（NEW が既にあれば担当者を統合して OLD を削除、無ければ会社名を改名）
+    if (customerMaster.some(c => c.company === OLD)) {
+      const oldEntry = customerMaster.find(c => c.company === OLD);
+      const target = customerMaster.find(c => c.company === NEW);
+      let next;
+      if (target) {
+        const seen = new Set();
+        const mergedContacts = [...(target.contacts || []), ...((oldEntry && oldEntry.contacts) || [])]
+          .filter(ct => {
+            const k = (ct.name || '').trim();
+            if (!k) return true;            // 名前が空の行はそのまま残す
+            if (seen.has(k)) return false;  // 同名は重複として除去
+            seen.add(k); return true;
+          });
+        next = customerMaster
+          .filter(c => c.company !== OLD)
+          .map(c => c.company === NEW ? { ...c, contacts: mergedContacts } : c);
+      } else {
+        next = customerMaster.map(c => c.company === OLD ? { ...c, company: NEW } : c);
+      }
+      saveCustomerMaster(next);
+    }
+
+    // 3) 会社の表示順（OLD を NEW に置換して重複を除去）
+    const order = settings.companyOrder || [];
+    if (order.includes(OLD)) {
+      const replaced = order.map(n => n === OLD ? NEW : n);
+      saveCompanyOrder(replaced.filter((n, i) => replaced.indexOf(n) === i));
+    }
+  }, [loading, tasks, customerMaster, settings.companyOrder]);
+
   // タスクメモの追加・更新（id が一致すれば更新、無ければ追加）
   const upsertMemo = (memo) => {
     setMemos(prev => {
