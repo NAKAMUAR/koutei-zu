@@ -3911,6 +3911,8 @@ function ReviewSection({ review, now, finalizeReview, reopenReview, setReviewNot
   // 案件ごとの折りたたみ状態（進行中タスク一覧と同じ形式）
   const [collapsed, setCollapsed] = useState(() => new Set());
   const toggle = (p) => setCollapsed(prev => { const n = new Set(prev); n.has(p) ? n.delete(p) : n.add(p); return n; });
+  // 標準では全案件を閉じた状態にする（データ初回到着時に1回だけ。以後は手動操作を尊重）
+  const didInitCollapse = useRef(false);
   if (!review || review.length === 0) return null;
   // 視点単位にまとめ、確認待ちのメタ情報（開始・最終更新・メモ・完了日・完了時刻）を付与
   const groups = groupByViewpoint(review).map(g => {
@@ -3939,6 +3941,14 @@ function ReviewSection({ review, now, finalizeReview, reopenReview, setReviewNot
     pmap.get(p).items.push(g);
   }
 
+  // 標準で全案件を閉じる（初回のみ）
+  useEffect(() => {
+    if (!didInitCollapse.current && byProject.length > 0) {
+      setCollapsed(new Set(byProject.map(p => p.projectName)));
+      didInitCollapse.current = true;
+    }
+  }, [byProject.length]);
+
   return (
     <section>
       <h2 style={{ fontFamily: fontDisplay, fontSize: 18, margin: '0 0 4px 0', fontWeight: 500, display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
@@ -3946,17 +3956,17 @@ function ReviewSection({ review, now, finalizeReview, reopenReview, setReviewNot
         <span style={{ fontSize: 12, color: colors.textMute, fontFamily: fontJP }}>
           {groups.length}件 ・ 視点完了後の確認フェーズ（{REVIEW_AUTO_DONE_DAYS}日更新がなければ自動で完了へ）
         </span>
-        <span style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignSelf: 'center' }}>
-          <button type="button" onClick={() => setCollapsed(new Set(byProject.map(p => p.projectName)))}
-            style={{ display: 'flex', alignItems: 'center', gap: 3, padding: '4px 10px', background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, color: colors.textMute }}>
-            <ChevronDown size={13} />全て閉じる
-          </button>
-          <button type="button" onClick={() => setCollapsed(new Set())}
-            style={{ display: 'flex', alignItems: 'center', gap: 3, padding: '4px 10px', background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, color: colors.textMute }}>
-            <ChevronUp size={13} />全て開く
-          </button>
-        </span>
       </h2>
+      <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+        <button type="button" onClick={() => setCollapsed(new Set(byProject.map(p => p.projectName)))}
+          style={{ display: 'flex', alignItems: 'center', gap: 3, padding: '4px 10px', background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, color: colors.textMute }}>
+          <ChevronDown size={13} />全て閉じる
+        </button>
+        <button type="button" onClick={() => setCollapsed(new Set())}
+          style={{ display: 'flex', alignItems: 'center', gap: 3, padding: '4px 10px', background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, color: colors.textMute }}>
+          <ChevronUp size={13} />全て開く
+        </button>
+      </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginTop: 12 }}>
         {byProject.map(pg => {
           const isCollapsed = collapsed.has(pg.projectName);
