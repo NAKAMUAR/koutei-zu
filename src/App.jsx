@@ -6836,8 +6836,16 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
   useEffect(() => { setCustomers(customerMaster); }, [customerMaster]);
   useEffect(() => { setEmployees(employeeMaster); }, [employeeMaster]);
 
-  // 表示切替：お客様設定 / 従業員設定（進行中タスクのタブと同じ要領）
+  // 表示切替：お客様設定 / 従業員設定 / 会社の表示順（進行中タスクのタブと同じ要領）
   const [masterTab, setMasterTab] = useState('customer');
+  // お客様マスタの検索（会社名・お客様担当者名で絞り込み）
+  const [customerSearch, setCustomerSearch] = useState('');
+  const customerQ = customerSearch.trim().toLowerCase();
+  const filteredCustomers = customerQ
+    ? customers.filter(c =>
+        (c.company || '').toLowerCase().includes(customerQ) ||
+        (c.contacts || []).some(ct => (ct.name || '').toLowerCase().includes(customerQ)))
+    : customers;
 
   const newId = (p) => `${p}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
@@ -6904,9 +6912,9 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
 
   return (
     <div style={{ maxWidth: 880 }}>
-      {/* 表示切替：お客様設定 / 従業員設定 */}
+      {/* 表示切替：お客様設定 / 従業員設定 / 会社の表示順 */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 20 }}>
-        {[{ id: 'customer', label: 'お客様設定' }, { id: 'employee', label: '従業員設定' }].map(t => (
+        {[{ id: 'customer', label: 'お客様設定' }, { id: 'employee', label: '従業員設定' }, { id: 'companyOrder', label: '会社の表示順' }].map(t => (
           <button key={t.id} type="button" onClick={() => setMasterTab(t.id)}
             style={{
               padding: '8px 16px', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13, fontWeight: 600,
@@ -6925,14 +6933,47 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
           会社ごとに、お客様担当者を複数登録できます。案件入力時の「会社名」「お客様担当者」の候補に表示されます（会社を選ぶとその会社の担当者が出ます）。
         </p>
 
+        {/* 検索欄（会社名・お客様担当者名で絞り込み） */}
+        {customers.length > 0 && (
+          <div style={{ position: 'relative', marginBottom: 16, maxWidth: 480 }}>
+            <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: colors.textMute, display: 'flex', alignItems: 'center', pointerEvents: 'none' }}>
+              <Search size={15} />
+            </span>
+            <input type="text" value={customerSearch}
+              onChange={(e) => setCustomerSearch(e.target.value)}
+              placeholder="会社名・お客様担当者で検索"
+              style={{
+                width: '100%', padding: '9px 32px 9px 32px', boxSizing: 'border-box',
+                border: `1px solid ${colors.border}`, borderRadius: 4,
+                fontFamily: fontJP, fontSize: 13, background: '#fff', color: colors.text, outline: 'none',
+              }} />
+            {customerSearch && (
+              <button type="button" onClick={() => setCustomerSearch('')}
+                title="検索をクリア"
+                style={{
+                  position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)',
+                  background: 'transparent', border: 'none', cursor: 'pointer', color: colors.textMute,
+                  display: 'flex', alignItems: 'center', padding: 2,
+                }}>
+                <X size={15} />
+              </button>
+            )}
+          </div>
+        )}
+
         {customers.length === 0 && (
           <div style={{ fontSize: 12, color: colors.textMute, padding: '4px 2px 12px' }}>
             まだ登録がありません。「＋ 会社を追加」から登録してください。
           </div>
         )}
+        {customers.length > 0 && filteredCustomers.length === 0 && (
+          <div style={{ fontSize: 12, color: colors.textMute, padding: '4px 2px 12px' }}>
+            「{customerSearch}」に一致する会社・お客様担当者は見つかりませんでした。
+          </div>
+        )}
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {customers.map(c => {
+          {filteredCustomers.map(c => {
             // 会社情報の入力欄（ラベル＋テキスト）
             const companyField = (label, field, placeholder, span = 1, type = 'text') => (
               <div style={{ gridColumn: `span ${span}` }}>
@@ -7030,7 +7071,10 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
         </button>
       </section>
 
-      {/* 会社の表示順設定（お客様設定に含める） */}
+      </>)}
+
+      {masterTab === 'companyOrder' && (<>
+      {/* 会社の表示順設定（独立タブ） */}
       <CompanyOrderView
         companyOrder={settings?.companyOrder || []} saveCompanyOrder={saveCompanyOrder}
         usedCompanies={usedCompanies || []}
