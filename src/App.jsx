@@ -6836,6 +6836,9 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
   useEffect(() => { setCustomers(customerMaster); }, [customerMaster]);
   useEffect(() => { setEmployees(employeeMaster); }, [employeeMaster]);
 
+  // 表示切替：お客様設定 / 従業員設定（進行中タスクのタブと同じ要領）
+  const [masterTab, setMasterTab] = useState('customer');
+
   const newId = (p) => `${p}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
   // お客様マスタ（会社ごとに担当者をまとめる）
@@ -6901,6 +6904,20 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
 
   return (
     <div style={{ maxWidth: 880 }}>
+      {/* 表示切替：お客様設定 / 従業員設定 */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 20 }}>
+        {[{ id: 'customer', label: 'お客様設定' }, { id: 'employee', label: '従業員設定' }].map(t => (
+          <button key={t.id} type="button" onClick={() => setMasterTab(t.id)}
+            style={{
+              padding: '8px 16px', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13, fontWeight: 600,
+              background: masterTab === t.id ? colors.text : 'transparent',
+              color: masterTab === t.id ? '#fff' : colors.textMute,
+              border: `1px solid ${masterTab === t.id ? colors.text : colors.border}`,
+            }}>{t.label}</button>
+        ))}
+      </div>
+
+      {masterTab === 'customer' && (<>
       {/* お客様マスタ（会社ごとに担当者をぶら下げる） */}
       <section style={cardStyle}>
         <h2 style={{ fontFamily: fontDisplay, fontSize: 18, margin: '0 0 4px 0', fontWeight: 500 }}>お客様マスタ</h2>
@@ -7013,6 +7030,14 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
         </button>
       </section>
 
+      {/* 会社の表示順設定（お客様設定に含める） */}
+      <CompanyOrderView
+        companyOrder={settings?.companyOrder || []} saveCompanyOrder={saveCompanyOrder}
+        usedCompanies={usedCompanies || []}
+        colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
+      </>)}
+
+      {masterTab === 'employee' && (<>
       {/* 従業員マスタ */}
       <section style={cardStyle}>
         <h2 style={{ fontFamily: fontDisplay, fontSize: 18, margin: '0 0 4px 0', fontWeight: 500 }}>従業員マスタ</h2>
@@ -7116,12 +7141,7 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
           onAdd={addHolidays} onRemove={removeHoliday}
           colors={colors} fontJP={fontJP} />
       </section>
-
-      {/* 会社の表示順設定 */}
-      <CompanyOrderView
-        companyOrder={settings?.companyOrder || []} saveCompanyOrder={saveCompanyOrder}
-        usedCompanies={usedCompanies || []}
-        colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
+      </>)}
     </div>
   );
 }
