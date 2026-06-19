@@ -2916,9 +2916,56 @@ function TimeSelect({ value, onChange, colors, fontJP, allowEmpty = false }) {
   );
 }
 
-// ============ ナビボタン ============
-function NavButton({ active, onClick, icon, label, badge }) {
+// 所要時間（制作時間・完了時間など）を「時間」「分（5分刻み）」のプルダウンで選ぶ。
+// 値は parseHM/fmtHM と同じ "HH:MM" 文字列。空（未選択）も許容する。
+function DurationSelect({ value, onChange, colors, fontJP, maxHours = 24 }) {
+  const v = (value == null ? '' : String(value)).trim();
+  let h = '', m = '';
+  if (v) {
+    if (v.includes(':')) {
+      const p = v.split(':');
+      h = p[0] !== '' && !isNaN(parseInt(p[0], 10)) ? String(parseInt(p[0], 10)) : '';
+      m = (p[1] || '').padStart(2, '0');
+    } else if (!isNaN(parseInt(v, 10))) {
+      h = String(parseInt(v, 10)); m = '00';
+    }
+  }
+  const hours = Array.from({ length: maxHours + 1 }, (_, i) => String(i));
+  // 範囲外の既存値（例: 30時間）も選べるよう補完
+  if (h && !hours.includes(h)) hours.push(h);
+  hours.sort((a, b) => Number(a) - Number(b));
+  const mins = ['00', '05', '10', '15', '20', '25', '30', '35', '40', '45', '50', '55'];
+  // 5分刻みに無い既存値（例: 08）も選べるよう補完
+  if (m && !mins.includes(m)) { mins.push(m); mins.sort(); }
+
+  const update = (nh, nm) => {
+    if (!nh && !nm) { onChange(''); return; }
+    const hh = (nh || '0').padStart(2, '0');
+    const mm = nm || '00';
+    onChange(`${hh}:${mm}`);
+  };
+  const selectStyle = {
+    padding: '6px 4px', border: `1px solid ${colors.border}`, borderRadius: 3,
+    fontFamily: fontJP, fontSize: 13, background: '#fff', color: colors.text, cursor: 'pointer',
+  };
   return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+      <select value={h} onChange={(e) => update(e.target.value, m)} style={selectStyle}>
+        <option value="">--</option>
+        {hours.map(hr => <option key={hr} value={hr}>{hr}</option>)}
+      </select>
+      <span style={{ color: colors.textMute, fontSize: 13 }}>時間</span>
+      <select value={m} onChange={(e) => update(h, e.target.value)} style={selectStyle}>
+        <option value="">--</option>
+        {mins.map(mn => <option key={mn} value={mn}>{mn}</option>)}
+      </select>
+      <span style={{ color: colors.textMute, fontSize: 13 }}>分</span>
+    </span>
+  );
+}
+
+// ============ ナビボタン ============
+function NavButton({ active, onClick, icon, label, badge }) {  return (
     <button onClick={onClick}
       style={{
         display: 'flex', alignItems: 'center', gap: 6,
@@ -3776,17 +3823,17 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                             onChange={(e) => updateStep(vi, si, 'name', e.target.value)}
                             placeholder="例: ホワイト" style={{ ...inputStyle, padding: '7px 10px', fontSize: 13 }} />
                         </div>
-                        <div style={{ flex: '1 1 80px' }}>
-                          <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>制作（HH:MM）</label>
-                          <input type="text" inputMode="numeric" value={step.hours}
-                            onChange={(e) => updateStep(vi, si, 'hours', e.target.value)}
-                            placeholder="例 08:00" style={{ ...inputStyle, padding: '7px 10px', fontSize: 13 }} />
+                        <div style={{ flex: '1 1 180px' }}>
+                          <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>制作時間</label>
+                          <DurationSelect value={step.hours}
+                            onChange={(val) => updateStep(vi, si, 'hours', val)}
+                            colors={colors} fontJP={fontJP} />
                         </div>
-                        <div style={{ flex: '1 1 80px' }}>
-                          <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>完了済（HH:MM）</label>
-                          <input type="text" inputMode="numeric" value={step.completedHours}
-                            onChange={(e) => updateStep(vi, si, 'completedHours', e.target.value)}
-                            placeholder="例 00:00" style={{ ...inputStyle, padding: '7px 10px', fontSize: 13 }} />
+                        <div style={{ flex: '1 1 180px' }}>
+                          <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>完了済</label>
+                          <DurationSelect value={step.completedHours}
+                            onChange={(val) => updateStep(vi, si, 'completedHours', val)}
+                            colors={colors} fontJP={fontJP} />
                         </div>
                         <button type="button" onClick={() => removeStep(vi, si)}
                           disabled={vp.steps.length <= 1}
