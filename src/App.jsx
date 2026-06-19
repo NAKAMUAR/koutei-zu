@@ -7485,12 +7485,25 @@ function CompleteDialog({ target, onConfirm, onCancel, colors, fontJP, fontDispl
 // ============ コンボボックス（プルダウン＋入力で候補を絞り込み・自由入力も可） ============
 function Combobox({ value, onChange, options, placeholder, inputStyle, colors, fontJP, title, wrapperStyle }) {
   const [open, setOpen] = useState(false);
+  // 候補リストを下に出すと画面下で見切れる場合があるため、空きが少なければ上向きに開く
+  const [place, setPlace] = useState({ up: false, maxH: 300 });
   const ref = useRef(null);
   useEffect(() => {
     const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
     document.addEventListener('mousedown', onDoc);
     return () => document.removeEventListener('mousedown', onDoc);
   }, []);
+  // 入力欄の上下の空きを測り、下が狭ければ上に開く。表示高さも空きに合わせる。
+  const computePlace = () => {
+    const el = ref.current;
+    if (!el || typeof window === 'undefined') return;
+    const rect = el.getBoundingClientRect();
+    const below = window.innerHeight - rect.bottom - 8;
+    const above = rect.top - 8;
+    const up = below < 220 && above > below;
+    setPlace({ up, maxH: Math.max(140, Math.min(300, Math.floor(up ? above : below))) });
+  };
+  const openMenu = () => { computePlace(); setOpen(true); };
   const opts = options || [];
   // 読み仮名ベースで絞り込む：ひらがな/カタカナ/全半角/大小文字の違いを無視する。
   // 例「りのべる」と打つと「リノベル」も候補に出る。
@@ -7503,18 +7516,18 @@ function Combobox({ value, onChange, options, placeholder, inputStyle, colors, f
   return (
     <div ref={ref} style={{ position: 'relative', ...(wrapperStyle || {}) }}>
       <input type="text" value={value || ''} title={title}
-        onChange={(e) => { onChange(e.target.value); setOpen(true); }}
-        onFocus={() => setOpen(true)}
+        onChange={(e) => { onChange(e.target.value); openMenu(); }}
+        onFocus={openMenu}
         placeholder={placeholder}
         style={{ ...inputStyle, paddingRight: 30 }} />
       <button type="button" tabIndex={-1}
-        onMouseDown={(e) => { e.preventDefault(); setOpen(o => !o); }}
+        onMouseDown={(e) => { e.preventDefault(); setOpen(o => { const n = !o; if (n) computePlace(); return n; }); }}
         title="一覧から選ぶ"
         style={{ position: 'absolute', right: 1, top: 1, bottom: 1, width: 28, background: 'transparent', border: 'none', cursor: 'pointer', color: colors.textMute, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <ChevronDown size={15} />
       </button>
       {open && filtered.length > 0 && (
-        <div style={{ position: 'absolute', top: '100%', left: 0, zIndex: 50, background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 4, marginTop: 2, minWidth: 'max(100%, 200px)', width: 'max-content', maxWidth: 340, maxHeight: 300, overflowY: 'auto', boxShadow: '0 8px 24px rgba(0,0,0,0.18)' }}>
+        <div style={{ position: 'absolute', left: 0, zIndex: 50, background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 4, minWidth: 'max(100%, 200px)', width: 'max-content', maxWidth: 340, maxHeight: place.maxH, overflowY: 'auto', boxShadow: '0 8px 24px rgba(0,0,0,0.18)', ...(place.up ? { bottom: '100%', marginBottom: 2 } : { top: '100%', marginTop: 2 }) }}>
           {filtered.map(o => (
             <div key={o} onMouseDown={(e) => { e.preventDefault(); select(o); }}
               style={{ padding: '10px 14px', fontSize: 15, fontFamily: fontJP, cursor: 'pointer', color: colors.text, background: o === value ? colors.accentSoft : '#fff', whiteSpace: 'nowrap', borderBottom: `1px solid ${colors.border}` }}
