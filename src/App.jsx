@@ -1442,6 +1442,21 @@ export default function App() {
     catch (e) { console.error('従業員マスタ保存エラー:', e); }
   };
 
+  // 案件登録/更新時、フォームで新しく入力された担当者を従業員マスタへ自動追加する。
+  // これにより次回以降の担当者候補や表示順（カレンダー等）に反映され、毎回マスタへ手入力する必要がなくなる。
+  const syncAssigneesToMaster = (records) => {
+    const existing = new Set(employeeMaster.map(e => (e.name || '').trim()).filter(Boolean));
+    const additions = [];
+    const seen = new Set();
+    for (const r of (records || [])) {
+      const name = (r.assignee || '').trim();
+      if (!name || existing.has(name) || seen.has(name)) continue;
+      seen.add(name);
+      additions.push({ id: genId('emp'), name, role: '' });
+    }
+    if (additions.length > 0) saveEmployeeMaster([...employeeMaster, ...additions]);
+  };
+
   // 会社名の統合（冪等・該当が無ければ何もしない）：
   // 「株式会社オフィスコム」を「オフィスコム」に統一する。Firestore 上の既存データに対して
   // ブラウザ側で一度きり移行する（タスクの会社名・お客様マスタ・会社の表示順を書き換える）。
@@ -1537,7 +1552,7 @@ export default function App() {
   const performSubmit = async (opts = {}) => {
     if (!form.projectName.trim()) {
       alert('案件名を入力してください');
-      return;
+      return false;
     }
     // 優先順位は廃止。編集時は既存の順位（form.priority）を保持し、
     // 新規登録時は「同じ会社の中で納期（実効）の早い順」の位置に挿入する（手動ドラッグ／↑↓で上書き可）。
@@ -1728,6 +1743,7 @@ export default function App() {
       const normalized = normalizePriorities(finalMerged);
       setTasks(normalized);
       tasksRef.current = normalized;
+      syncAssigneesToMaster(finalUpserts);
       try { await tasksStore.batch(finalUpserts, deletedIds); }
       catch (e) { console.error('編集保存エラー:', e); alert('保存に失敗しました：' + (e?.message || e)); }
 
@@ -1736,17 +1752,34 @@ export default function App() {
       setEditingId(null);
       setForm(emptyForm);
       setCalendarEdit(false);
-      return;
+      return true;
     }
 
     // 新規登録
     const result = buildRecords(null);
-    if (result.error) { alert(result.error); return; }
+    if (result.error) { alert(result.error); return false; }
     const records = result.upserts;
-    if (records.length === 0) { alert('少なくとも1つの視点とステップを入力してください'); return; }
+    if (records.length === 0) { alert('少なくとも1つの視点とステップを入力してください'); return false; }
     saveTasks(prev => normalizePriorities([...prev, ...records]));
+    syncAssigneesToMaster(records);
     if (opts.orderOverride) saveProjectOrder(opts.orderOverride);
     setForm(emptyForm);
+    return true;
+  };
+
+  // 「過去案件から引用」時に入力中の下書きを破棄しないための処理。
+  // 入力中の内容を進行中タスクとして登録（保存）し、その案件の編集画面を開く。
+  // 登録できた場合は true を返す（案件名未入力・視点未入力などで登録できない場合は false）。
+  const registerDraftAndEdit = async () => {
+    const projName = (form.projectName || '').trim();
+    if (!projName) {
+      alert('入力中の案件名がないため、進行中タスクとして登録できません。案件名を入力してください。');
+      return false;
+    }
+    // performSubmit を直接呼び、スケジュール調整モーダルを挟まずそのまま保存する
+    const ok = await performSubmit();
+    if (ok) handleEditProject(projName);
+    return ok;
   };
 
   // ステップを編集：新規登録フォームと同じ複数視点フォームに、そのステップを1視点・1ステップとして pre-populate
@@ -2580,7 +2613,7 @@ export default function App() {
 
       <main style={{ maxWidth: 1600, margin: '0 auto', padding: '28px' }}>
         {view === 'input' && (
-          <InputView form={form} setForm={setForm} handleSubmit={handleSubmit} editingId={editingId} editMode={editMode}
+          <InputView form={form} setForm={setForm} handleSubmit={handleSubmit} registerDraftAndEdit={registerDraftAndEdit} editingId={editingId} editMode={editMode}
             cancelEdit={() => { setEditingId(null); setEditMode(null); setForm(emptyForm); }}
             tasks={tasks} scheduled={scheduled}
             projectOrder={projectOrder} saveProjectOrder={saveProjectOrderPartial}
@@ -2606,7 +2639,7 @@ export default function App() {
           {/* カレンダーから案件編集を開いた場合、入力へ遷移せずスケジュールのすぐ下にフォームを表示 */}
           {calendarEdit && editMode && (
             <div style={{ marginTop: 24 }}>
-              <InputView embedded form={form} setForm={setForm} handleSubmit={handleSubmit} editingId={editingId} editMode={editMode}
+              <InputView embedded form={form} setForm={setForm} handleSubmit={handleSubmit} registerDraftAndEdit={registerDraftAndEdit} editingId={editingId} editMode={editMode}
                 cancelEdit={() => { setEditingId(null); setEditMode(null); setForm(emptyForm); setCalendarEdit(false); }}
                 tasks={tasks} scheduled={scheduled}
                 projectOrder={projectOrder} saveProjectOrder={saveProjectOrderPartial}
@@ -3176,7 +3209,7 @@ function MemoView({ memos, upsertMemo, deleteMemo, now, colors, fontJP, fontDisp
 }
 
 // ============ 入力ビュー ============
-function InputView({ embedded, form, setForm, handleSubmit, editingId, editMode, cancelEdit, tasks, scheduled, projectOrder, saveProjectOrder, companyList, customerMaster, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, saveProjectInfo, setProjectDeadline, finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, projectList, projectInternalList, viewpointList, assigneeList, assigneeOrder, settings, now, selectedAssignee, setSelectedAssignee, companyOrder, onReorderAssignee, onReorderProject, onReassignViewpoint, colors, fontJP, fontDisplay }) {
+function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit, editingId, editMode, cancelEdit, tasks, scheduled, projectOrder, saveProjectOrder, companyList, customerMaster, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, saveProjectInfo, setProjectDeadline, finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, projectList, projectInternalList, viewpointList, assigneeList, assigneeOrder, settings, now, selectedAssignee, setSelectedAssignee, companyOrder, onReorderAssignee, onReorderProject, onReassignViewpoint, colors, fontJP, fontDisplay }) {
   // お客様担当者の候補：会社名を選んでいればその会社に所属する担当者を表示
   // （会社名はひらがな/カタカナ/全半角の違いを無視して照合）
   const contactOptions = useMemo(() => {
@@ -3373,8 +3406,16 @@ function InputView({ embedded, form, setForm, handleSubmit, editingId, editMode,
     });
     setQuoteOpen(false);
   };
-  const selectQuote = (proj) => {
-    if (isFormDirty() && !window.confirm('入力中の内容を破棄して引用しますか？')) return;
+  const selectQuote = async (proj) => {
+    if (isFormDirty()) {
+      // 入力中の内容は破棄しない：進行中タスクとして登録し、その案件の編集画面へ移行する
+      if (registerDraftAndEdit) {
+        const ok = await registerDraftAndEdit();
+        if (ok) { setQuoteOpen(false); return; }
+      }
+      // 登録できなかった場合（案件名・視点未入力など）は従来どおり破棄確認
+      if (!window.confirm('入力中の内容を破棄して引用しますか？')) return;
+    }
     applyQuote(proj);
   };
 
