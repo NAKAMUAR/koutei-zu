@@ -1071,6 +1071,9 @@ export default function App() {
   // tasks と settings の両方が Firestore から最初の値を受け取ったか
   const [tasksLoaded, setTasksLoaded] = useState(false);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
+  // データベース手動更新（再取得）の状態
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastSync, setLastSync] = useState(null);
   const [view, setView] = useState('input');
   const [editingId, setEditingId] = useState(null);
   // 編集モード：{ type: 'step'|'viewpoint'|'project', ... }（フォーム上部の見出し・保存スコープを切替）
@@ -1275,6 +1278,54 @@ export default function App() {
   useEffect(() => {
     if (tasksLoaded && settingsLoaded) setLoading(false);
   }, [tasksLoaded, settingsLoaded]);
+
+  // データベース（Firestore）から最新データを手動で再取得して反映する。
+  // アプリ更新直後などにタスクが一時的に消えて見える場合の復旧用。購読は維持したまま、
+  // サーバの最新値を即座に読み直して画面へ反映する（ローカルの変更を消すことはしない）。
+  const refreshData = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      const [rawTasks, sVal, hVal, aVal, oVal, cVal, eVal, mVal] = await Promise.all([
+        tasksStore.listAll(),
+        storage.get('settings'), storage.get('holidays'), storage.get('absences'),
+        storage.get('projectOrder'), storage.get('customerMaster'),
+        storage.get('employeeMaster'), storage.get('memos'),
+      ]);
+      const parseArr = (v) => {
+        if (!v || !v.value) return [];
+        try { const p = JSON.parse(v.value); return Array.isArray(p) ? p : []; } catch (e) { return []; }
+      };
+      // タスク
+      const normalized = normalizePriorities((rawTasks || []).map(migrateTask));
+      setTasks(normalized);
+      tasksRef.current = normalized;
+      setTasksLoaded(true);
+      // 休日・休み（専用キー）
+      const holidays = parseArr(hVal);
+      const absences = parseArr(aVal);
+      syncHolidays({ holidays });
+      // 設定（holidays/absences は専用キーの値で上書き）
+      if (sVal && sVal.value) {
+        try { setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(sVal.value), holidays, absences }); }
+        catch (e) { setSettings(prev => ({ ...prev, holidays, absences })); }
+      } else {
+        setSettings(prev => ({ ...prev, holidays, absences }));
+      }
+      setSettingsLoaded(true);
+      // 並び順・マスタ・メモ
+      setProjectOrder(parseArr(oVal));
+      setCustomerMaster(cVal && cVal.value ? (() => { try { return normalizeCustomerMaster(JSON.parse(cVal.value)); } catch (e) { return []; } })() : []);
+      setEmployeeMaster(parseArr(eVal));
+      setMemos(parseArr(mVal));
+      setLastSync(new Date());
+    } catch (e) {
+      console.error('データ更新エラー:', e);
+      alert('データの更新に失敗しました。通信状況を確認して、もう一度お試しください。\n' + (e?.message || e));
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   // 差分書き込み：updater が返した newTasks と現在の tasksRef を比較し、
   // 変更・追加されたタスクだけを per-doc で Firestore に書き込む。
@@ -2576,6 +2627,15 @@ export default function App() {
               <NavButton key={item.id} active={view === item.id} onClick={() => setView(item.id)} icon={item.icon} label={item.label}
                 badge={item.id === 'done' ? scheduled.doneFinal.length : null} />
             ))}
+            <style>{`@keyframes kz-spin { to { transform: rotate(360deg); } }`}</style>
+            <button onClick={refreshData} disabled={refreshing}
+              title={lastSync
+                ? `データベースから最新データを再取得（最終更新 ${String(lastSync.getHours()).padStart(2, '0')}:${String(lastSync.getMinutes()).padStart(2, '0')}）`
+                : 'データベースから最新データを再取得します（更新後にデータが表示されないときに押してください）'}
+              style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '6px 10px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: refreshing ? 'default' : 'pointer', color: colors.textMute, fontFamily: fontJP, fontSize: 11, opacity: refreshing ? 0.6 : 1 }}>
+              <RotateCcw size={14} style={{ animation: refreshing ? 'kz-spin 0.8s linear infinite' : 'none' }} />
+              {refreshing ? '更新中…' : 'データ更新'}
+            </button>
             <button onClick={() => setShowSettings(!showSettings)}
               style={{ padding: '7px 9px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', color: colors.textMute }}
               title="設定"><SettingsIcon size={15} /></button>
