@@ -95,6 +95,17 @@ const fmtHM = (h) => {
   const mm = totalMin % 60;
   return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
 };
+// 読み仮名ベースの照合用に正規化する。
+// 全角/半角（NFKC）・大文字小文字を揃え、カタカナ→ひらがなに統一する。
+// これにより「りのべる」「リノベル」「ﾘﾉﾍﾞﾙ」などスクリプト違いを同一視できる。
+// （漢字→読みの変換は読み仮名データが無いため対象外）
+const kanaNormalize = (s) => {
+  if (s == null) return '';
+  let r = String(s).normalize('NFKC').toLowerCase();
+  // カタカナ（ァ-ヶ）→ ひらがな
+  r = r.replace(/[ァ-ヶ]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0x60));
+  return r;
+};
 // "HH:MM" / "H:MM" / 素の数値（時間）→ 小数時間。入力用。無効なら NaN。
 const parseHM = (str) => {
   if (str == null) return NaN;
@@ -3183,7 +3194,7 @@ function InputView({ embedded, form, setForm, handleSubmit, editingId, editMode,
   );
   // 入力ページ内の表示切替：進行中一覧 / カレンダー / 担当者別
   const [inputTab, setInputTab] = useState('list');
-  // 新規タスク登録フォームの折畳み（カレンダー・担当者別では既定で折畳み）
+  // 新規案件登録フォームの折畳み（カレンダー・担当者別では既定で折畳み）
   const [formCollapsed, setFormCollapsed] = useState(false);
   // カレンダー／担当者別では折畳む。進行中一覧では現在の折畳み状態を維持（勝手に開かない）
   const switchTab = (t) => { setInputTab(t); if (t !== 'list' && !editMode) setFormCollapsed(true); };
@@ -3432,7 +3443,7 @@ function InputView({ embedded, form, setForm, handleSubmit, editingId, editMode,
                 ? `視点「${editMode.projectName} ／ ${editMode.viewpointName}」を編集`
                 : editMode?.type === 'project'
                   ? `案件「${editMode.projectName}」を編集`
-                  : '新規タスク登録'}
+                  : '新規案件登録'}
           </h2>
             {/* 仮案件チェック（タイトルの右隣）。チェック時は対応想定期間も表示 */}
             <label style={{
@@ -7370,10 +7381,12 @@ function Combobox({ value, onChange, options, placeholder, inputStyle, colors, f
     return () => document.removeEventListener('mousedown', onDoc);
   }, []);
   const opts = options || [];
-  const v = (value || '').toLowerCase();
+  // 読み仮名ベースで絞り込む：ひらがな/カタカナ/全半角/大小文字の違いを無視する。
+  // 例「りのべる」と打つと「リノベル」も候補に出る。
+  const v = kanaNormalize(value);
   // 入力中（候補に完全一致しない）は部分一致で絞り込み、空 or 選択済みなら全件表示
   const filtered = (value && !opts.some(o => o === value))
-    ? opts.filter(o => (o || '').toLowerCase().includes(v))
+    ? opts.filter(o => kanaNormalize(o).includes(v))
     : opts;
   const select = (val) => { onChange(val); setOpen(false); };
   return (
