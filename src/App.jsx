@@ -87,6 +87,29 @@ const minToTime = (min) => {
   const m = min % 60;
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 };
+// 小数時間 → "HH:MM"（分単位に丸めて表示）。制作時間・経過・残時間の表示用。
+const fmtHM = (h) => {
+  const v = (h == null || isNaN(h)) ? 0 : h;
+  const totalMin = Math.round(Math.max(0, v) * 60);
+  const hh = Math.floor(totalMin / 60);
+  const mm = totalMin % 60;
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+};
+// "HH:MM" / "H:MM" / 素の数値（時間）→ 小数時間。入力用。無効なら NaN。
+const parseHM = (str) => {
+  if (str == null) return NaN;
+  const s = String(str).trim();
+  if (s === '') return NaN;
+  if (s.includes(':')) {
+    const parts = s.split(':');
+    const h = parseInt(parts[0], 10);
+    const m = parseInt(parts[1] === undefined || parts[1] === '' ? '0' : parts[1], 10);
+    if (isNaN(h) || isNaN(m) || m < 0 || m >= 60) return NaN;
+    return h + m / 60;
+  }
+  const v = parseFloat(s);
+  return isNaN(v) ? NaN : v;
+};
 
 // datetime-local 値（"YYYY-MM-DDTHH:mm"）← → Date
 const dtLocalToDate = (s) => s ? new Date(s) : null;
@@ -791,9 +814,9 @@ function formPreviewRecords(form, defaultPriority, taskById) {
     const vpFirstIdx = records.length;
     for (const step of (vp.steps || [])) {
       const hoursStr = (step.hours === undefined || step.hours === null) ? '' : String(step.hours);
-      const stepHours = hoursStr.trim() === '' ? 0 : parseFloat(hoursStr);
+      const stepHours = hoursStr.trim() === '' ? 0 : parseHM(hoursStr);
       if (isNaN(stepHours) || stepHours <= 0) continue; // 制作時間のあるステップのみスケジュール対象
-      const completedRaw = (step.completedHours === '' || step.completedHours == null) ? 0 : parseFloat(step.completedHours);
+      const completedRaw = (step.completedHours === '' || step.completedHours == null) ? 0 : parseHM(step.completedHours);
       // 完了済みステップ（完了時間≧制作時間）は登録時に done のままになるためスケジュール対象外
       if (!isNaN(completedRaw) && completedRaw >= stepHours) continue;
       records.push({
@@ -1524,7 +1547,7 @@ export default function App() {
       for (const vp of form.viewpoints) {
         const vpName = (vp.viewpointName || '').trim();
         const vpAssignee = (vp.assignee || '').trim() || form.assignee.trim();
-        const hasAnyInput = vpName || vp.steps.some(s => (s.name || '').trim() || (parseFloat(s.hours) > 0));
+        const hasAnyInput = vpName || vp.steps.some(s => (s.name || '').trim() || (parseHM(s.hours) > 0));
         if (!hasAnyInput) continue;
         if (!vpName) { return { error: '内容を入力した視点には視点名も入力してください' }; }
         if (!vpAssignee) { return { error: `視点「${vpName}」の担当者を入力してください` }; }
@@ -1536,11 +1559,11 @@ export default function App() {
           const name = (step.name || '').trim();
           const hoursStr = step.hours === undefined || step.hours === null ? '' : String(step.hours);
           const hoursEmpty = hoursStr.trim() === '';
-          const stepHours = hoursEmpty ? 0 : parseFloat(hoursStr);
+          const stepHours = hoursEmpty ? 0 : parseHM(hoursStr);
           if (!name && hoursEmpty) continue;
           if (!name) { return { error: `視点「${vpName}」で時間を入力したステップには名称も入力してください` }; }
-          if (isNaN(stepHours) || stepHours < 0) { return { error: `視点「${vpName}」の「${name}」の制作時間は0以上にしてください` }; }
-          const stepCompleted = step.completedHours === '' ? 0 : parseFloat(step.completedHours);
+          if (isNaN(stepHours) || stepHours < 0) { return { error: `視点「${vpName}」の「${name}」の制作時間は HH:MM（時:分）で入力してください（例 08:00）` }; }
+          const stepCompleted = step.completedHours === '' ? 0 : parseHM(step.completedHours);
           if (isNaN(stepCompleted) || stepCompleted < 0) { return { error: `「${name}」の完了時間が無効です` }; }
           if (stepCompleted > stepHours) { return { error: `「${name}」の完了時間が制作時間を超えています` }; }
           const autoDone = stepHours > 0 && stepCompleted >= stepHours;
@@ -1740,8 +1763,8 @@ export default function App() {
         steps: [{
           taskId: task.id,
           name: task.stepName || task.viewpointName || '',
-          hours: String(task.hours),
-          completedHours: String(task.completedHours || 0),
+          hours: fmtHM(task.hours),
+          completedHours: fmtHM(task.completedHours || 0),
         }],
       }],
     });
@@ -1781,8 +1804,8 @@ export default function App() {
         steps: sortedSteps.map(t => ({
           taskId: t.id,
           name: t.stepName || '',
-          hours: String(t.hours),
-          completedHours: String(t.completedHours || 0),
+          hours: fmtHM(t.hours),
+          completedHours: fmtHM(t.completedHours || 0),
         })),
       };
     });
@@ -1905,8 +1928,8 @@ export default function App() {
       steps: tasksOfVp.map(t => ({
         taskId: t.id,
         name: t.stepName || '',
-        hours: String(t.hours),
-        completedHours: String(t.completedHours || 0),
+        hours: fmtHM(t.hours),
+        completedHours: fmtHM(t.completedHours || 0),
       })),
     }];
     setForm({
@@ -2185,7 +2208,7 @@ export default function App() {
   // ② 追加修正（この視点の最後尾にステップを追加）
   const endPromptAddRevision = (vp, stepName, hours) => {
     const projectName = vp.projectName, viewpointName = vp.viewpointName;
-    const h = Math.max(0, parseFloat(hours) || 0);
+    const h = Math.max(0, parseHM(hours) || 0);
     if (h <= 0) { alert('追加時間を入力してください'); return; }
     const vpTasks = tasksRef.current.filter(t => t.projectName === projectName && t.viewpointName === viewpointName && t.assignee === vp.assignee);
     if (vpTasks.length === 0) { alert('対象の視点が見つかりません'); return; }
@@ -3688,16 +3711,16 @@ function InputView({ embedded, form, setForm, handleSubmit, editingId, editMode,
                             placeholder="例: ホワイト" style={{ ...inputStyle, padding: '7px 10px', fontSize: 13 }} />
                         </div>
                         <div style={{ flex: '1 1 80px' }}>
-                          <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>制作（h）</label>
-                          <input type="number" min="0" step="0.5" value={step.hours}
+                          <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>制作（HH:MM）</label>
+                          <input type="text" inputMode="numeric" value={step.hours}
                             onChange={(e) => updateStep(vi, si, 'hours', e.target.value)}
-                            placeholder="0" style={{ ...inputStyle, padding: '7px 10px', fontSize: 13 }} />
+                            placeholder="例 08:00" style={{ ...inputStyle, padding: '7px 10px', fontSize: 13 }} />
                         </div>
                         <div style={{ flex: '1 1 80px' }}>
-                          <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>完了済（h）</label>
-                          <input type="number" min="0" step="0.5" value={step.completedHours}
+                          <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>完了済（HH:MM）</label>
+                          <input type="text" inputMode="numeric" value={step.completedHours}
                             onChange={(e) => updateStep(vi, si, 'completedHours', e.target.value)}
-                            placeholder="0" style={{ ...inputStyle, padding: '7px 10px', fontSize: 13 }} />
+                            placeholder="例 00:00" style={{ ...inputStyle, padding: '7px 10px', fontSize: 13 }} />
                         </div>
                         <button type="button" onClick={() => removeStep(vi, si)}
                           disabled={vp.steps.length <= 1}
@@ -3748,7 +3771,7 @@ function InputView({ embedded, form, setForm, handleSubmit, editingId, editMode,
               </button>
             </div>
             <div style={{ fontSize: 10, color: colors.textMute, marginTop: 8 }}>
-              ※ 空欄の項目・ステップは登録されません ・ 制作時間は0でも登録できます ・ 上から順に作業する想定でスケジュールされます
+              ※ 空欄の項目・ステップは登録されません ・ 制作時間は HH:MM（時:分）で入力（例 08:00・00:30）・ 0でも登録できます ・ 上から順に作業する想定でスケジュールされます
             </div>
           </div>
 
@@ -3881,8 +3904,8 @@ function InputView({ embedded, form, setForm, handleSubmit, editingId, editMode,
                   }}>{(a || '?').slice(0, 1)}</div>
                   <div style={{ fontWeight: 600, fontSize: 14 }}>{a || '（担当者未設定）'}</div>
                   <div style={{ fontSize: 11, color: colors.textMute }}>
-                    {aGroups.length}視点 ・ {aTasks.length}タスク ・ 完了 {aDone}h / 全 {aTotal}h ・
-                    <span style={{ color: colors.accent, fontWeight: 600 }}> 残 {aTotal - aDone}h</span>
+                    {aGroups.length}視点 ・ {aTasks.length}タスク ・ 完了 {fmtHM(aDone)} / 全 {fmtHM(aTotal)} ・
+                    <span style={{ color: colors.accent, fontWeight: 600 }}> 残 {fmtHM(Math.max(0, aTotal - aDone))}</span>
                   </div>
                 </div>
                 <ViewpointGroupList
@@ -4683,8 +4706,8 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
                 <span style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end' }}>
                   <span>{pg.viewpointGroups.length}視点</span>
                   <span>{pg.taskCount}タスク</span>
-                  <span>完了 {pg.completedHours}h / 全 {pg.totalHours}h</span>
-                  <span style={{ color: colors.accent, fontWeight: 600 }}>残 {remaining}h</span>
+                  <span>完了 {fmtHM(pg.completedHours)} / 全 {fmtHM(pg.totalHours)}</span>
+                  <span style={{ color: colors.accent, fontWeight: 600 }}>残 {fmtHM(remaining)}</span>
                 </span>
               </span>
               {draggable && (
@@ -4787,7 +4810,10 @@ function ViewpointCard({ group, now, allSortedIds, companyFirstIds, companyLastI
   const progressPct = group.totalHours > 0 ? (group.completedHours / group.totalHours) * 100 : 0;
   // 経過進捗（時間経過ベース・表示用）
   const elapsedHours = now ? group.tasks.reduce((s, t) => s + elapsedHoursForSlots(t.slots, now), 0) : 0;
-  const elapsedPct = group.totalHours > 0 ? Math.min(100, (elapsedHours / group.totalHours) * 100) : 0;
+  // 実働（制作時間）＝完了済み＋時間経過。残時間はこれを差し引く。
+  const workedHours = Math.min(group.totalHours, group.completedHours + elapsedHours);
+  const remainingHours = Math.max(0, group.totalHours - group.completedHours - elapsedHours);
+  const elapsedPct = group.totalHours > 0 ? Math.min(100, (workedHours / group.totalHours) * 100) : 0;
   const isMulti = group.tasks.some(t => t.stepName);
 
   const handleAssigneeChange = (val) => {
@@ -4833,9 +4859,9 @@ function ViewpointCard({ group, now, allSortedIds, companyFirstIds, companyLastI
               }}>{group.companyName}</span>
             )}
             {group.customerContact && <span>担当: {group.customerContact}</span>}
-            <span style={{ color: '#9c8e5e' }}>経過 {elapsedHours.toFixed(1)}h / 全 {group.totalHours}h</span>
-            <span>完了 {group.completedHours}h</span>
-            <span style={{ color: colors.accent, fontWeight: 600 }}>残 {group.remainingHours}h</span>
+            <span style={{ color: '#9c8e5e' }}>制作時間 {fmtHM(workedHours)} / 制作予定時間 {fmtHM(group.totalHours)}</span>
+            <span>完了 {fmtHM(group.completedHours)}</span>
+            <span style={{ color: colors.accent, fontWeight: 600 }}>残 {fmtHM(remainingHours)}</span>
             {group.scheduledStart && (
               <span style={{ color: colors.accent, fontWeight: 500 }}>
                 {fmtMD(group.scheduledStart)} {minToTime(group.scheduledStartMin)} 〜 {fmtMD(group.scheduledEnd)} {minToTime(group.scheduledEndMin)}
@@ -4893,7 +4919,7 @@ function ViewpointCard({ group, now, allSortedIds, companyFirstIds, companyLastI
           </div>
           {/* 進捗バー：経過進捗（薄色）の上に実績（濃色）を重ねる */}
           <div style={{ position: 'relative', height: 5, background: '#f0ebde', borderRadius: 2, overflow: 'hidden', marginTop: 6, maxWidth: 360 }}>
-            <div style={{ position: 'absolute', inset: 0, width: `${elapsedPct}%`, background: '#d8cfa6', transition: 'width 0.3s' }} title={`経過 ${elapsedHours.toFixed(1)}h`} />
+            <div style={{ position: 'absolute', inset: 0, width: `${elapsedPct}%`, background: '#d8cfa6', transition: 'width 0.3s' }} title={`制作時間 ${fmtHM(workedHours)}`} />
             <div style={{ position: 'absolute', inset: 0, width: `${progressPct}%`, background: colors.progress, transition: 'width 0.3s' }} title={`完了 ${group.completedHours}h`} />
           </div>
         </div>
@@ -4999,14 +5025,14 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
   const [customHours, setCustomHours] = useState('');
   const [editingTotalHours, setEditingTotalHours] = useState(false);
   const [editingCompletedHours, setEditingCompletedHours] = useState(false);
-  const [totalHoursInput, setTotalHoursInput] = useState(String(task.hours));
-  const [completedHoursInput, setCompletedHoursInput] = useState(String(task.completedHours || 0));
+  const [totalHoursInput, setTotalHoursInput] = useState(fmtHM(task.hours));
+  const [completedHoursInput, setCompletedHoursInput] = useState(fmtHM(task.completedHours || 0));
   useEffect(() => { setPriorityInput(String(task.priority)); }, [task.priority]);
-  useEffect(() => { setTotalHoursInput(String(task.hours)); }, [task.hours]);
-  useEffect(() => { setCompletedHoursInput(String(task.completedHours || 0)); }, [task.completedHours]);
+  useEffect(() => { setTotalHoursInput(fmtHM(task.hours)); }, [task.hours]);
+  useEffect(() => { setCompletedHoursInput(fmtHM(task.completedHours || 0)); }, [task.completedHours]);
 
   const commitCustomHours = () => {
-    const v = parseFloat(customHours);
+    const v = parseHM(customHours);
     if (!isNaN(v) && v !== 0) onAddProgress(v);
     setCustomHours('');
   };
@@ -5018,16 +5044,16 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
 
   const commitTotalHours = () => {
     setEditingTotalHours(false);
-    const v = parseFloat(totalHoursInput);
+    const v = parseHM(totalHoursInput);
     if (!isNaN(v) && v >= 0 && v !== task.hours && onSetHours) onSetHours(v);
-    else setTotalHoursInput(String(task.hours));
+    else setTotalHoursInput(fmtHM(task.hours));
   };
 
   const commitCompletedHours = () => {
     setEditingCompletedHours(false);
-    const v = parseFloat(completedHoursInput);
+    const v = parseHM(completedHoursInput);
     if (!isNaN(v) && v >= 0 && v !== (task.completedHours || 0) && onSetCompletedHours) onSetCompletedHours(v);
-    else setCompletedHoursInput(String(task.completedHours || 0));
+    else setCompletedHoursInput(fmtHM(task.completedHours || 0));
   };
 
   // 開始時間指定の編集を開始（既定値：現在の指定 → 無ければ現在のスケジュール開始）
@@ -5061,10 +5087,12 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
   };
 
   const completed = task.completedHours || 0;
-  const remaining = Math.max(0, task.hours - completed);
-  const progressPct = task.hours > 0 ? Math.min(100, (completed / task.hours) * 100) : 0;
   const elapsed = now ? elapsedHoursForSlots(task.slots, now) : 0;
-  const elapsedPct = task.hours > 0 ? Math.min(100, (elapsed / task.hours) * 100) : 0;
+  // 実働（制作時間）＝完了済み入力＋時間経過ぶんの自動進捗。残時間・納期はこれを差し引く。
+  const worked = Math.min(task.hours, completed + elapsed);
+  const remaining = Math.max(0, task.hours - completed - elapsed);
+  const progressPct = task.hours > 0 ? Math.min(100, (completed / task.hours) * 100) : 0;
+  const elapsedPct = task.hours > 0 ? Math.min(100, (worked / task.hours) * 100) : 0;
   const numStyle = {
     background: 'transparent', border: `1px dashed ${colors.border}`, color: 'inherit',
     padding: '0 6px', borderRadius: 3, cursor: 'pointer',
@@ -5072,7 +5100,7 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
     minWidth: 24,
   };
   const numInputStyle = {
-    width: 44, padding: '1px 3px', textAlign: 'right',
+    width: 52, padding: '1px 3px', textAlign: 'right',
     border: `1px solid ${colors.border}`, borderRadius: 3,
     fontFamily: fontJP, fontSize: 11,
   };
@@ -5157,32 +5185,31 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
           <span style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
             <Clock size={11} style={{ marginRight: 2 }} />
             {editingCompletedHours ? (
-              <input type="number" min="0" step="0.5" value={completedHoursInput}
+              <input type="text" inputMode="numeric" value={completedHoursInput}
                 onChange={(e) => setCompletedHoursInput(e.target.value)}
                 onBlur={commitCompletedHours}
-                onKeyDown={(e) => { if (e.key === 'Enter') commitCompletedHours(); if (e.key === 'Escape') { setEditingCompletedHours(false); setCompletedHoursInput(String(task.completedHours || 0)); } }}
+                onKeyDown={(e) => { if (e.key === 'Enter') commitCompletedHours(); if (e.key === 'Escape') { setEditingCompletedHours(false); setCompletedHoursInput(fmtHM(task.completedHours || 0)); } }}
                 autoFocus style={numInputStyle} />
             ) : (
-              <button type="button" onClick={() => setEditingCompletedHours(true)} style={numStyle} title="クリックで完了済み時間を編集">
-                {completed}
+              <button type="button" onClick={() => setEditingCompletedHours(true)} style={numStyle} title="クリックで完了済み時間を編集（HH:MM）">
+                {fmtHM(completed)}
               </button>
             )}
             /
             {editingTotalHours ? (
-              <input type="number" min="0" step="0.5" value={totalHoursInput}
+              <input type="text" inputMode="numeric" value={totalHoursInput}
                 onChange={(e) => setTotalHoursInput(e.target.value)}
                 onBlur={commitTotalHours}
-                onKeyDown={(e) => { if (e.key === 'Enter') commitTotalHours(); if (e.key === 'Escape') { setEditingTotalHours(false); setTotalHoursInput(String(task.hours)); } }}
+                onKeyDown={(e) => { if (e.key === 'Enter') commitTotalHours(); if (e.key === 'Escape') { setEditingTotalHours(false); setTotalHoursInput(fmtHM(task.hours)); } }}
                 autoFocus style={numInputStyle} />
             ) : (
-              <button type="button" onClick={() => setEditingTotalHours(true)} style={numStyle} title="クリックで制作時間を編集">
-                {task.hours}
+              <button type="button" onClick={() => setEditingTotalHours(true)} style={numStyle} title="クリックで制作予定時間を編集（HH:MM）">
+                {fmtHM(task.hours)}
               </button>
             )}
-            h
-            {remaining > 0 && <span style={{ color: colors.accent, fontWeight: 600, marginLeft: 4 }}>残 {remaining}h</span>}
+            {remaining > 0 && <span style={{ color: colors.accent, fontWeight: 600, marginLeft: 4 }}>残 {fmtHM(remaining)}</span>}
           </span>
-          <span style={{ color: '#9c8e5e' }} title="時間経過ベースの自動進捗">経過 {elapsed.toFixed(1)}h / 全 {task.hours}h</span>
+          <span style={{ color: '#9c8e5e' }} title="完了済み＋時間経過ベースの自動進捗">制作時間 {fmtHM(worked)} / 制作予定時間 {fmtHM(task.hours)}</span>
           {task.scheduledStart && (
             <span style={{ color: colors.accent, fontWeight: 500 }}>
               {fmtMD(task.scheduledStart)} {minToTime(task.scheduledStartMin)}
@@ -5266,8 +5293,8 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
           )}
         </div>
         <div style={{ position: 'relative', height: 5, background: '#f0ebde', borderRadius: 2, overflow: 'hidden', maxWidth: 280 }}>
-          <div style={{ position: 'absolute', inset: 0, width: `${elapsedPct}%`, background: '#d8cfa6', transition: 'width 0.3s' }} title={`経過 ${elapsed.toFixed(1)}h`} />
-          <div style={{ position: 'absolute', inset: 0, width: `${progressPct}%`, background: colors.progress, transition: 'width 0.3s' }} title={`完了 ${completed}h`} />
+          <div style={{ position: 'absolute', inset: 0, width: `${elapsedPct}%`, background: '#d8cfa6', transition: 'width 0.3s' }} title={`制作時間 ${fmtHM(worked)}`} />
+          <div style={{ position: 'absolute', inset: 0, width: `${progressPct}%`, background: colors.progress, transition: 'width 0.3s' }} title={`完了 ${fmtHM(completed)}`} />
         </div>
       </div>
 
@@ -5276,13 +5303,13 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
         <button onClick={() => onAddProgress(1)} style={progressBtnStyle(colors, fontJP)} title="完了済みに1h追加">+1h</button>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-        <input type="number" step="0.5" value={customHours}
+        <input type="text" inputMode="numeric" value={customHours}
           onChange={(e) => setCustomHours(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') commitCustomHours(); }}
-          placeholder="h"
-          title="進めた時間（h）を入力してEnter / 追加"
+          placeholder="HH:MM"
+          title="進めた時間（HH:MM 例 00:30）を入力してEnter / 追加"
           style={{
-            width: 44, padding: '4px 5px', textAlign: 'right',
+            width: 52, padding: '4px 5px', textAlign: 'right',
             border: `1px solid ${colors.border}`, borderRadius: 3,
             fontFamily: fontJP, fontSize: 11,
           }} />
@@ -6146,8 +6173,8 @@ function AssigneeView({ scheduled, selectedAssignee, setSelectedAssignee, now, a
                 <div style={{ minWidth: 0, flex: 1 }}>
                   <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>{a}</div>
                   <div style={{ fontSize: 11, color: colors.textMute, marginBottom: 4 }}>
-                    {groups.length}視点 ・ {tasks.length}タスク ・ 完了 {completedHours}h / 全 {totalHours}h ・
-                    <span style={{ color: colors.accent, fontWeight: 600 }}> 残 {remainingHours}h</span>
+                    {groups.length}視点 ・ {tasks.length}タスク ・ 完了 {fmtHM(completedHours)} / 全 {fmtHM(totalHours)} ・
+                    <span style={{ color: colors.accent, fontWeight: 600 }}> 残 {fmtHM(remainingHours)}</span>
                   </div>
                   <div style={{ height: 4, background: '#f0ebde', borderRadius: 2, overflow: 'hidden', maxWidth: 320 }}>
                     <div style={{ height: '100%', width: `${progressPct}%`, background: colors.progress, transition: 'width 0.3s' }} />
@@ -7765,8 +7792,8 @@ function EndPromptModal({ viewpoints, now, settings, onComplete, onAddRevision, 
                         <input type="text" value={revName} onChange={(e) => setRevName(e.target.value)} style={{ padding: '7px 8px', border: `1px solid ${colors.border}`, borderRadius: 4, fontFamily: fontJP, fontSize: 13 }} />
                       </div>
                       <div>
-                        <div style={fieldLabel}>追加時間(h)</div>
-                        <input type="number" min="0" step="0.5" value={revHours} onChange={(e) => setRevHours(e.target.value)} placeholder="例: 2" style={{ width: 70, padding: '7px 8px', border: `1px solid ${colors.border}`, borderRadius: 4, fontFamily: fontJP, fontSize: 13 }} />
+                        <div style={fieldLabel}>追加時間(HH:MM)</div>
+                        <input type="text" inputMode="numeric" value={revHours} onChange={(e) => setRevHours(e.target.value)} placeholder="例 02:00" style={{ width: 70, padding: '7px 8px', border: `1px solid ${colors.border}`, borderRadius: 4, fontFamily: fontJP, fontSize: 13 }} />
                       </div>
                     </div>
                     <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
