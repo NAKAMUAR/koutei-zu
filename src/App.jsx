@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useLayoutEffect } from 'react';
-import { Plus, Trash2, Edit2, Calendar as CalIcon, MessageSquare, Settings as SettingsIcon, Check, X, Clock, Folder, User, ChevronUp, ChevronDown, Users, CheckCircle2, RotateCcw, TrendingUp, ArrowRight, GripVertical, Search, AlertTriangle, StickyNote, Bell, BellOff } from 'lucide-react';
+import { Plus, Trash2, Edit2, Calendar as CalIcon, MessageSquare, Settings as SettingsIcon, Check, X, Clock, Folder, User, ChevronUp, ChevronDown, Users, CheckCircle2, RotateCcw, TrendingUp, ArrowRight, GripVertical, Search, AlertTriangle, StickyNote, Bell, BellOff, Zap } from 'lucide-react';
 import { storage, tasksStore, signIn, signOutUser, subscribeAuth } from './firebase.js';
 
 // ============ 定数・ユーティリティ ============
@@ -5278,6 +5278,18 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
               ＋開始指定
             </button>
           ) : null}
+          {onSetManualStart && (
+            <button type="button"
+              onClick={() => {
+                if (window.confirm('この工程を「今」から開始（割り込み）します。\n同じ担当者で作業中の案件は、現在時刻の前後に自動で分割されます。よろしいですか？')) {
+                  onSetManualStart(dateToDtLocal(new Date()));
+                }
+              }}
+              title="現在時刻を開始時間に設定して割り込み開始（作業中の案件は前半・後半に自動分割される）"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: colors.accentSoft, border: `1px solid ${colors.accent}`, borderRadius: 2, padding: '1px 6px', fontSize: 10, color: colors.accent, cursor: 'pointer', fontFamily: fontJP, fontWeight: 600 }}>
+              <Zap size={10} /> 今から割り込み
+            </button>
+          )}
           {editingEnd ? (
             <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
               <input type="datetime-local" value={endInput} autoFocus
