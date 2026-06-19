@@ -331,7 +331,7 @@ function effectiveDeadlineKey(t) {
   return deadlineKey(t.deadline || t.projectDeadline);
 }
 // 優先順位は廃止。新規案件の既定の並び順は「同じ会社の中で納期（実効）の早い順」。
-// 同じ会社の進行中タスクのうち、実効納期がこの案件以前のものの件数＋0.5 を仮の priority として返す。
+// 同じ会社の進行中案件のうち、実効納期がこの案件以前のものの件数＋0.5 を仮の priority として返す。
 // （normalizePriorities が整数へ振り直す。手動ドラッグ／↑↓で上書き可能）
 function deadlineInsertPriority(activeSameCompanyTasks, formDeadlineKey) {
   let before = 0;
@@ -352,7 +352,7 @@ function companyRank(name) {
   return 7000;                                    // プリセット外の会社
 }
 
-// 進行中タスク一覧の「会社グループの表示順」用ランク。
+// 進行中案件一覧の「会社グループの表示順」用ランク。
 // companyOrder（settings 保存の会社名配列）に従い、未登録は名前順でオフショアの手前、未分類は最後。
 function companyDisplayRank(name, companyOrder) {
   const c = (name || '').trim();
@@ -795,7 +795,7 @@ function workingHoursBetweenTs(fromTs, toTs, assignee, settings) {
   return total;
 }
 
-// タスク群（案件・視点など）の進行中タスクの最終 scheduledEnd を timestamp で返す（無ければ null）
+// タスク群（案件・視点など）の進行中案件の最終 scheduledEnd を timestamp で返す（無ければ null）
 function projectEndTs(tasks) {
   let best = null;
   for (const t of tasks) {
@@ -1420,7 +1420,7 @@ export default function App() {
   };
 
   // カレンダーから視点（案件×視点）の担当者を付け替える：
-  // ブロックを別の担当者の行へドロップしたときに、その視点の進行中タスクの担当者を変更する。
+  // ブロックを別の担当者の行へドロップしたときに、その視点の進行中案件の担当者を変更する。
   const reassignViewpointFromCalendar = (projectName, viewpointName, fromAssignee, toAssignee) => {
     const na = (toAssignee || '').trim();
     if (!na || na === fromAssignee) return;
@@ -1821,7 +1821,7 @@ export default function App() {
       };
     });
     const first = projectTasks[0];
-    // 優先順位は進行中タスクから採用（完了済みの古い順位は使わない）
+    // 優先順位は進行中案件から採用（完了済みの古い順位は使わない）
     const priorityPool = projectTasks.filter(t => t.status !== 'done');
     setForm({
       ...emptyForm,
@@ -2002,7 +2002,7 @@ export default function App() {
     saveTasks(prev => prev.map(t => t.projectName === projectName ? { ...t, projectDeadline: dl || null } : t));
   };
 
-  // 進行中タスクの案件ヘッダーからインラインで案件情報を編集する。
+  // 進行中案件の案件ヘッダーからインラインで案件情報を編集する。
   // 対象案件の全タスク（完了済み含む）に反映し、案件が分割されないようにする。
   // 戻り値：保存したら true、バリデーションエラーなら false（呼び出し側でパネルを閉じる判定に使う）
   const saveProjectInfo = (oldProjectName, info) => {
@@ -2250,7 +2250,7 @@ export default function App() {
     const active = tasksRef.current
       .map(t => scheduledById.get(t.id) || t)
       .filter(t => t.projectName === vp.projectName && t.viewpointName === vp.viewpointName && t.assignee === vp.assignee && t.status !== 'done' && t.scheduledEnd);
-    if (active.length === 0) { alert('対象の進行中タスクがありません'); return; }
+    if (active.length === 0) { alert('対象の進行中案件がありません'); return; }
     // 終了予定を決めている最後のステップ
     const last = active.reduce((a, b) => {
       const ta = startOfDay(a.scheduledEnd).getTime() + (a.scheduledEndMin || 0) * 60000;
@@ -2283,7 +2283,7 @@ export default function App() {
     const active = tasksRef.current
       .map(t => scheduledById.get(t.id) || t)
       .filter(t => t.projectName === vp.projectName && t.viewpointName === vp.viewpointName && t.assignee === vp.assignee && t.status !== 'done' && t.scheduledEnd);
-    if (active.length === 0) { alert('対象の進行中タスクがありません'); return; }
+    if (active.length === 0) { alert('対象の進行中案件がありません'); return; }
     // 終了予定を決めている最後のステップ
     const last = active.reduce((a, b) => {
       const ta = startOfDay(a.scheduledEnd).getTime() + (a.scheduledEndMin || 0) * 60000;
@@ -3177,17 +3177,18 @@ function MemoView({ memos, upsertMemo, deleteMemo, now, colors, fontJP, fontDisp
 
 // ============ 入力ビュー ============
 function InputView({ embedded, form, setForm, handleSubmit, editingId, editMode, cancelEdit, tasks, scheduled, projectOrder, saveProjectOrder, companyList, customerMaster, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, completeProject, cancelProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, saveProjectInfo, setProjectDeadline, finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, projectList, projectInternalList, viewpointList, assigneeList, assigneeOrder, settings, now, selectedAssignee, setSelectedAssignee, companyOrder, onReorderAssignee, onReorderProject, onReassignViewpoint, colors, fontJP, fontDisplay }) {
-  // お客様担当者の候補：会社名を選んでいればその会社の担当者を優先表示
+  // お客様担当者の候補：会社名を選んでいればその会社に所属する担当者を表示
+  // （会社名はひらがな/カタカナ/全半角の違いを無視して照合）
   const contactOptions = useMemo(() => {
     const rows = customerMaster || [];
-    const c = (form.companyName || '').trim();
-    const matched = c ? rows.filter(r => (r.company || '') === c) : [];
-    const base = matched.length ? matched : rows;
+    const c = kanaNormalize(form.companyName);
+    // 会社名を選んでいればその会社の担当者だけ（無ければ空＝自由入力）。未選択なら全件。
+    const base = c ? rows.filter(r => kanaNormalize(r.company) === c) : rows;
     const names = [];
     for (const r of base) for (const ct of (r.contacts || [])) if (ct.name) names.push(ct.name);
     return [...new Set(names)];
   }, [customerMaster, form.companyName]);
-  // 契約形態が「オフショア」の会社名の集合（進行中タスク一覧で「オフショア（その他）」へ集約する）
+  // 契約形態が「オフショア」の会社名の集合（進行中案件一覧で「オフショア（その他）」へ集約する）
   const offshoreCompanies = useMemo(
     () => new Set((customerMaster || []).filter(c => c.contractType === 'offshore').map(c => (c.company || '').trim()).filter(Boolean)),
     [customerMaster]
@@ -3286,7 +3287,7 @@ function InputView({ embedded, form, setForm, handleSubmit, editingId, editMode,
         .some(v => (v || '').toLowerCase().includes(q))
     );
   }, [scheduled.active, q]);
-  // 進行中タスクのグループ表示：納期順（既定）／会社別（制作順）／担当者別（制作順）
+  // 進行中案件のグループ表示：納期順（既定）／会社別（制作順）／担当者別（制作順）
   const [listGroupMode, setListGroupMode] = useState('deadline');
   // 担当者別表示のときの担当者の絞り込み（null = 全選択）
   const [selectedListAssignee, setSelectedListAssignee] = useState(null);
@@ -3493,7 +3494,20 @@ function InputView({ embedded, form, setForm, handleSubmit, editingId, editMode,
           <div>
             <label style={labelStyle}>社外案件名</label>
             <input type="text" list="project-list" value={form.projectName}
-              onChange={(e) => setForm({ ...form, projectName: e.target.value })}
+              onChange={(e) => {
+                const val = e.target.value;
+                // 既存案件名を選んだら、その案件の会社名・社内案件名を補完する
+                // （空欄のときだけ。会社が入ると「お客様担当者」候補がその会社の人に絞られる）
+                const match = !editMode ? (tasks || []).find(t => (t.projectName || '') === val.trim() && val.trim()) : null;
+                setForm(prev => ({
+                  ...prev,
+                  projectName: val,
+                  ...(match ? {
+                    companyName: prev.companyName || match.companyName || '',
+                    projectNameInternal: prev.projectNameInternal || match.projectNameInternal || '',
+                  } : {}),
+                }));
+              }}
               placeholder="例: 〇〇マンション" style={inputStyle} />
             <datalist id="project-list">{projectList.map(p => <option key={p} value={p} />)}</datalist>
           </div>
@@ -3816,7 +3830,7 @@ function InputView({ embedded, form, setForm, handleSubmit, editingId, editMode,
       {inputTab === 'list' && (<>
       <section>
         <h2 style={{ fontFamily: fontDisplay, fontSize: 18, margin: '0 0 16px 0', fontWeight: 500, display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
-          進行中タスク
+          進行中案件
           <span style={{ fontSize: 12, color: colors.textMute, fontFamily: fontJP }}>
             {q ? `${filteredActive.length} / ${scheduled.active.length}件` : `${scheduled.active.length}件 ・ 視点ごとにまとめて表示`}
           </span>
@@ -3981,12 +3995,12 @@ function InputView({ embedded, form, setForm, handleSubmit, editingId, editMode,
 }
 
 // ============ 確認待ちセクション（視点完了後の確認フェーズ） ============
-// 進行中タスクの下に表示。視点を完了すると、完了タブへ行く前にここへ入る。
+// 進行中案件の下に表示。視点を完了すると、完了タブへ行く前にここへ入る。
 // 追加修正があればメモを記入でき、3日更新がないとグレー、7日でアプリが自動的に完了タブへ移す。
 const REVIEW_GRAY_DAYS = 3;
 const REVIEW_AUTO_DONE_DAYS = 7;
 function ReviewSection({ review, now, finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, colors, fontJP, fontDisplay }) {
-  // 案件ごとの折りたたみ状態（進行中タスク一覧と同じ形式）
+  // 案件ごとの折りたたみ状態（進行中案件一覧と同じ形式）
   const [collapsed, setCollapsed] = useState(() => new Set());
   const toggle = (p) => setCollapsed(prev => { const n = new Set(prev); n.has(p) ? n.delete(p) : n.add(p); return n; });
   // 標準では全案件を閉じた状態にする（データ初回到着時に1回だけ。以後は手動操作を尊重）
@@ -4176,7 +4190,7 @@ function ReviewCard({ g, now, finalizeReview, reopenReview, setReviewNote, setRe
             <Check size={14} /> 完了
           </button>
           <button type="button" onClick={() => reopenReview(g)}
-            title="確認待ちをやめて進行中タスクへ戻します"
+            title="確認待ちをやめて進行中案件へ戻します"
             style={{
               background: 'transparent', color: colors.textMute, border: `1px solid ${colors.border}`, borderRadius: 4,
               padding: '6px 12px', cursor: 'pointer', fontFamily: fontJP, fontSize: 12, whiteSpace: 'nowrap',
@@ -4190,7 +4204,7 @@ function ReviewCard({ g, now, finalizeReview, reopenReview, setReviewNote, setRe
 }
 
 // ============ 案件情報インライン編集パネル ============
-// 進行中タスクの案件ヘッダーから、案件情報（案件名・会社名・お客様担当者・メモ・仮案件）を
+// 進行中案件の案件ヘッダーから、案件情報（案件名・会社名・お客様担当者・メモ・仮案件）を
 // その場で編集する。保存すると案件の全タスクへ反映される。
 function ProjectInfoEditor({ pg, companyList, onSave, onCancel, colors, fontJP }) {
   const [v, setV] = useState({
@@ -6612,7 +6626,7 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
               background: '#fbf9f4', color: colors.text, resize: 'vertical', boxSizing: 'border-box',
             }} />
           <div style={{ fontSize: 10, color: colors.textMute, marginTop: 6 }}>
-            ※ 進行中タスクから自動生成。案件識別子は「社内案件名」を優先（無ければ社外案件名）。表示順は登録順。
+            ※ 進行中案件から自動生成。案件識別子は「社内案件名」を優先（無ければ社外案件名）。表示順は登録順。
           </div>
         </Section>
 
@@ -6918,7 +6932,7 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
   useEffect(() => { setCustomers(customerMaster); }, [customerMaster]);
   useEffect(() => { setEmployees(employeeMaster); }, [employeeMaster]);
 
-  // 表示切替：お客様設定 / 従業員設定 / 会社の表示順（進行中タスクのタブと同じ要領）
+  // 表示切替：お客様設定 / 従業員設定 / 会社の表示順（進行中案件のタブと同じ要領）
   const [masterTab, setMasterTab] = useState('customer');
   // お客様マスタの検索（会社名・お客様担当者名で絞り込み）
   const [customerSearch, setCustomerSearch] = useState('');
@@ -7112,7 +7126,7 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
                 <span style={{ fontSize: 11, fontWeight: 700, color: colors.textMute, flexShrink: 0 }}>契約形態</span>
                 <select value={c.contractType || 'labo'}
                   onChange={(e) => commitCustomers(customers.map(x => x.id === c.id ? { ...x, contractType: e.target.value } : x))}
-                  title="ラボ＝会社名でグループ表示／オフショア＝進行中タスク一覧で「オフショア（その他）」に集約（会社名は各案件に表示）"
+                  title="ラボ＝会社名でグループ表示／オフショア＝進行中案件一覧で「オフショア（その他）」に集約（会社名は各案件に表示）"
                   style={{ ...inputStyle, width: 'auto', flex: '0 0 120px', fontWeight: 600 }}>
                   <option value="labo">ラボ</option>
                   <option value="offshore">オフショア</option>
@@ -7899,7 +7913,7 @@ function CompanyOrderView({ companyOrder, saveCompanyOrder, usedCompanies, color
     <div style={{ maxWidth: 620 }}>
       <h2 style={{ fontFamily: fontDisplay, fontSize: 20, margin: '0 0 6px 0', fontWeight: 500 }}>会社の表示順</h2>
       <p style={{ fontSize: 12, color: colors.textMute, margin: '0 0 18px 0' }}>
-        進行中タスク・担当者別の「会社グループ」の上からの並び順を設定します。ドラッグまたは↑↓で並び替え。
+        進行中案件・担当者別の「会社グループ」の上からの並び順を設定します。ドラッグまたは↑↓で並び替え。
         スケジュール計算（カレンダー等）には影響しません。
       </p>
 
