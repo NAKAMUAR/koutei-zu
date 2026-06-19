@@ -5605,6 +5605,28 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
   const rowHeight = viewMode === 'day' ? 150 : 100;
   // 列が狭い月間はブロックを案件名1行のコンパクト表示にする
   const compact = viewMode === 'month';
+  // 簡易表示：全期間グリッドで同一案件のスロットを1ブロックに統合する（ステップ/視点の垣根なし）
+  const simpleMode = viewMode === 'simple';
+  // 同一案件のスロット群を「開始～終了予定（最早～最遅）」「制作時間の合計」に統合する
+  const mergeByProject = (items) => {
+    if (!items || items.length === 0) return items || [];
+    const groups = new Map();
+    for (const it of items) {
+      const key = `${it.task.projectName}|${it.done ? 'd' : 'a'}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(it);
+    }
+    const out = [];
+    for (const arr of groups.values()) {
+      const startMin = Math.min(...arr.map(x => x.slot.startMin));
+      const endMin = Math.max(...arr.map(x => x.slot.endMin));
+      const hours = arr.reduce((s, x) => s + (x.slot.hours || 0), 0);
+      const rep = arr.reduce((a, b) => ((b.task.priority ?? 999) < (a.task.priority ?? 999) ? b : a), arr[0]);
+      out.push({ task: rep.task, slot: { startMin, endMin, hours }, done: rep.done });
+    }
+    out.sort((a, b) => a.slot.startMin - b.slot.startMin);
+    return out;
+  };
 
   // 初期スクロール位置を「今日が左端」に設定（全期間・月間のみ。モード/期間の切替時に再設定）
   // 同じモード／期間の間は一度だけ実行し、以後はユーザーのスクロール位置を尊重する。
@@ -5676,14 +5698,14 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
 
       {/* 表示モード切替＋期間ナビゲーション */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
-        {[['day', '1日'], ['scroll', '全期間']].map(([m, label]) => (
+        {[['day', '1日'], ['scroll', '全期間'], ['simple', '簡易表示']].map(([m, label]) => (
           <button key={m} type="button"
             onClick={() => { setViewMode(m); setAnchor(today); }}
             style={tabStyle(viewMode === m, colors, fontJP)}>
             {label}
           </button>
         ))}
-        {viewMode !== 'scroll' && (
+        {viewMode === 'day' && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 10, flexWrap: 'wrap' }}>
             <button type="button" onClick={() => goStep(-1)}
               style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 3, padding: '6px 12px', cursor: 'pointer', fontFamily: fontJP, fontSize: 12, color: colors.text }}>
@@ -5899,8 +5921,11 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
               {allDates.map((d, di) => {
                 const key = fmtYMD(d);
                 const slots = (matrix[assignee] && matrix[assignee][key]) || [];
-                const morningItems = slots.filter(({ slot }) => slot.startMin < morningSlot.end);
-                const afternoonItems = slots.filter(({ slot }) => slot.startMin >= afternoonSlot.start);
+                const morningRaw = slots.filter(({ slot }) => slot.startMin < morningSlot.end);
+                const afternoonRaw = slots.filter(({ slot }) => slot.startMin >= afternoonSlot.start);
+                // 簡易表示は同一案件のスロットを1ブロックに統合
+                const morningItems = simpleMode ? mergeByProject(morningRaw) : morningRaw;
+                const afternoonItems = simpleMode ? mergeByProject(afternoonRaw) : afternoonRaw;
                 // 午後の枠時間（残業を含む）。残業ぶんブロックが溢れないよう高さの分母にする
                 const pmCapMin = dayWorkSlots(assignee, d, settings).reduce((s, [a, b]) => s + Math.max(0, b - Math.max(a, afternoonSlot.start)), 0);
                 const pmHours = Math.max(afternoonHours, pmCapMin / 60);
@@ -5929,11 +5954,11 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                   }}>
                     <div style={{ width: '50%', display: 'flex', flexDirection: 'column', borderRight: `1px dashed ${colors.border}`, boxSizing: 'border-box' }}>
                       {morningItems.map(({ task, slot, done }, si) => (
-                        <TaskBlock key={si} task={task} slot={slot} done={done} compact={compact}
+                        <TaskBlock key={si} task={task} slot={slot} done={done} compact={compact} simple={simpleMode}
                           heightPct={(slot.hours / morningHours) * 100}
                           projectColor={getProjectColor(task.projectName)}
                           separator={si === 0 ? null : (morningItems[si - 1].task.projectName !== task.projectName ? 'strong' : 'weak')}
-                          projDrag={projDrag} onProjDragStart={onReorderProject ? setProjDrag : null} onDropProject={onReorderProject} onVpDragStart={onReassignViewpoint ? setVpDrag : null} vpDrag={vpDrag} onReassign={onReassignViewpoint}
+                          projDrag={projDrag} onProjDragStart={onReorderProject ? setProjDrag : null} onDropProject={onReorderProject} onVpDragStart={(!simpleMode && onReassignViewpoint) ? setVpDrag : null} vpDrag={vpDrag} onReassign={simpleMode ? null : onReassignViewpoint}
                           onClick={onEditProject && (() => onEditProject(task.projectName))} />
                       ))}
                     </div>
@@ -5941,11 +5966,11 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                       background: isWorkSat ? 'repeating-linear-gradient(45deg, #f5f0e3, #f5f0e3 4px, #fbf9f4 4px, #fbf9f4 8px)' : 'transparent',
                     }}>
                       {!isWorkSat && afternoonItems.map(({ task, slot, done }, si) => (
-                        <TaskBlock key={si} task={task} slot={slot} done={done} compact={compact}
+                        <TaskBlock key={si} task={task} slot={slot} done={done} compact={compact} simple={simpleMode}
                           heightPct={(slot.hours / pmHours) * 100}
                           projectColor={getProjectColor(task.projectName)}
                           separator={si === 0 ? null : (afternoonItems[si - 1].task.projectName !== task.projectName ? 'strong' : 'weak')}
-                          projDrag={projDrag} onProjDragStart={onReorderProject ? setProjDrag : null} onDropProject={onReorderProject} onVpDragStart={onReassignViewpoint ? setVpDrag : null} vpDrag={vpDrag} onReassign={onReassignViewpoint}
+                          projDrag={projDrag} onProjDragStart={onReorderProject ? setProjDrag : null} onDropProject={onReorderProject} onVpDragStart={(!simpleMode && onReassignViewpoint) ? setVpDrag : null} vpDrag={vpDrag} onReassign={simpleMode ? null : onReassignViewpoint}
                           onClick={onEditProject && (() => onEditProject(task.projectName))} />
                       ))}
                     </div>
@@ -5980,13 +6005,13 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
       )}
 
       <div style={{ marginTop: 20, fontSize: 11, color: colors.textMute }}>
-        セル内の色は案件ごと（パステル・「ホワイト」工程は1段階薄い色） ・ 右上の #番号 が優先順位 ・ 斜線ストライプ＋「仮」は仮案件 ・ グレーの実線ブロックは完了済（「済」）／中止（「止」、実終了時刻から遡って表示） ・ グレーの斜線は休日・不在 ・ マウスオーバーで詳細表示 ・ クリックで案件編集フォームを開く（完了済みの案件も編集可） ・ ブロックを同じ担当者の行内でドラッグ＆ドロップすると案件の順番（優先順位）を変更 ・ ブロックを別の担当者の行（ブロックや担当者名の上）へドロップするとその視点の担当者を変更 ・ 左端の担当者名をドラッグ＆ドロップで担当者の表示順を変更
+        セル内の色は案件ごと（パステル・「ホワイト」工程は1段階薄い色） ・ 右上の #番号 が優先順位 ・ 斜線ストライプ＋「仮」は仮案件 ・ グレーの実線ブロックは完了済（「済」）／中止（「止」、実終了時刻から遡って表示） ・ グレーの斜線は休日・不在 ・ マウスオーバーで詳細表示 ・ クリックで案件編集フォームを開く（完了済みの案件も編集可） ・ ブロックを同じ担当者の行内でドラッグ＆ドロップすると案件の順番（優先順位）を変更 ・ ブロックを別の担当者の行（ブロックや担当者名の上）へドロップするとその視点の担当者を変更 ・ 左端の担当者名をドラッグ＆ドロップで担当者の表示順を変更 ・「簡易表示」タブは同一案件のステップ/視点をまとめ、案件ごとに開始〜終了予定だけを表示
       </div>
     </div>
   );
 }
 
-function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact, separator, projDrag, onProjDragStart, onDropProject, onVpDragStart, vpDrag, onReassign, timeline }) {
+function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact, simple, separator, projDrag, onProjDragStart, onDropProject, onVpDragStart, vpDrag, onReassign, timeline }) {
   const [projHover, setProjHover] = useState(false);
   // 案件の並び替えドラッグは進行中ブロックのみ（完了・中止のグレーは対象外）
   const canDragProject = !!onDropProject && !done;
@@ -6019,7 +6044,9 @@ function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact
   // さらに社外案件名・進捗（制作済み/予定/残り）を続ける。
   const internalLine = `${internal || external} / ${task.viewpointName}${stepLabel}`;
   const startEndLine = `${minToTime(slot.startMin)}〜${minToTime(slot.endMin)}`;
-  const title = done
+  const title = simple
+    ? `${internal || external}${internal && external ? `\n${external}` : ''}\n${startEndLine}\n計 ${slot.hours}h${onClick ? '\nクリックで案件を編集' : ''}`
+    : done
     ? `【${cancelled ? '中止' : '完了'}】${nameLine}\n${startEndLine} (${slot.hours}h)${aeStr ? `\n実終了 ${aeStr}` : ''}${memoLine}${onClick ? '\nクリックで案件を編集（終了時間の実績は完了タブで）' : '\n※終了時間（実績）は完了タブで編集できます'}`
     : `${internalLine}`
       + (internal && external ? `\n${external}` : '')
@@ -6092,13 +6119,28 @@ function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact
             {task.viewpointName}
           </div>
         </>
+      ) : simple ? (
+        // 簡易表示（全期間）：社内案件名＋開始〜終了予定（ステップ/視点の垣根なし）
+        <>
+          <div style={{ fontSize: 10, fontWeight: 700, whiteSpace: 'normal', overflow: 'hidden', wordBreak: 'break-word', paddingRight: 18 }}>
+            {internal || external}
+          </div>
+          <div style={{ fontSize: 9, fontWeight: 500, opacity: 0.9, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {minToTime(slot.startMin)}〜{minToTime(slot.endMin)}
+          </div>
+        </>
       ) : (
-        // 全期間表示：1行目＝社内案件名＋視点名、2行目＝開始〜終了予定
+        // 全期間表示：1行目＝社内案件名＋視点名、2行目＝社外案件名、3行目＝開始〜終了予定
         <>
           <div style={{ fontSize: 10, fontWeight: 700, whiteSpace: 'normal', overflow: 'hidden', wordBreak: 'break-word', paddingRight: 18 }}>
             {internal || external}
             <span style={{ fontWeight: 500 }}> / {task.viewpointName}</span>
           </div>
+          {internal && external && (
+            <div style={{ fontSize: 9, opacity: 0.8, whiteSpace: 'normal', wordBreak: 'break-word' }}>
+              {external}
+            </div>
+          )}
           <div style={{ fontSize: 9, fontWeight: 500, opacity: 0.9, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {minToTime(slot.startMin)}〜{minToTime(slot.endMin)}
           </div>
