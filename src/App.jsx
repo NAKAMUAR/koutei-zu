@@ -3904,7 +3904,7 @@ function InputView({ embedded, form, setForm, handleSubmit, editingId, editMode,
                           marginLeft: 6, fontSize: 10, opacity: 0.7,
                           padding: '1px 5px', borderRadius: 8,
                           background: currentA === a ? 'rgba(255,255,255,0.2)' : '#f0ebde',
-                        }}>{ts.length}件 / 残{remaining}h</span>
+                        }}>{ts.length}件 / 残{fmtHM(remaining)}</span>
                       </button>
                     );
                   })}
@@ -3937,6 +3937,7 @@ function InputView({ embedded, form, setForm, handleSubmit, editingId, editMode,
                   groups={aGroups}
                   allActive={filteredActive} now={now}
                   companyOrder={settings.companyOrder || []}
+                  sortMode="deadline"
                   projectOrder={projectOrder} saveProjectOrder={saveProjectOrder}
                   handleEdit={handleEdit} handleEditProject={handleEditProject} handleEditViewpoint={handleEditViewpoint}
                   handleAddViewpointToProject={handleAddViewpointToProject}
@@ -4534,7 +4535,7 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
                 );
               })()}
               <span style={{ fontSize: 11, color: colors.textMute }}>
-                {section.projects.length}案件 ・ 残 {section.remaining}h
+                {section.projects.length}案件 ・ 残 {fmtHM(Math.max(0, section.remaining))}
               </span>
             </div>
           ) : section.companyName && (
@@ -4545,7 +4546,7 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
                 padding: '4px 14px', whiteSpace: 'nowrap',
               }}>{section.companyName}</span>
               <span style={{ fontSize: 11, color: colors.textMute }}>
-                {section.projects.length}案件 ・ 残 {section.remaining}h
+                {section.projects.length}案件 ・ 残 {fmtHM(Math.max(0, section.remaining))}
               </span>
             </div>
           )}
