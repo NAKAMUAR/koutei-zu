@@ -7514,10 +7514,10 @@ function Combobox({ value, onChange, options, placeholder, inputStyle, colors, f
         <ChevronDown size={15} />
       </button>
       {open && filtered.length > 0 && (
-        <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 50, background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 4, marginTop: 2, maxHeight: 220, overflowY: 'auto', boxShadow: '0 6px 20px rgba(0,0,0,0.14)' }}>
+        <div style={{ position: 'absolute', top: '100%', left: 0, zIndex: 50, background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 4, marginTop: 2, minWidth: 'max(100%, 200px)', width: 'max-content', maxWidth: 340, maxHeight: 300, overflowY: 'auto', boxShadow: '0 8px 24px rgba(0,0,0,0.18)' }}>
           {filtered.map(o => (
             <div key={o} onMouseDown={(e) => { e.preventDefault(); select(o); }}
-              style={{ padding: '8px 12px', fontSize: 13, fontFamily: fontJP, cursor: 'pointer', color: colors.text, background: o === value ? colors.accentSoft : '#fff' }}
+              style={{ padding: '10px 14px', fontSize: 15, fontFamily: fontJP, cursor: 'pointer', color: colors.text, background: o === value ? colors.accentSoft : '#fff', whiteSpace: 'nowrap', borderBottom: `1px solid ${colors.border}` }}
               onMouseEnter={(e) => { if (o !== value) e.currentTarget.style.background = '#f3efe4'; }}
               onMouseLeave={(e) => { e.currentTarget.style.background = o === value ? colors.accentSoft : '#fff'; }}>
               {o}
