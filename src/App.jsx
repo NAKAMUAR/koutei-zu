@@ -5454,7 +5454,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
       : (onReorderAssignee ? 'ドラッグして担当者の表示順を変更（従業員マスタの並びに反映）' : undefined),
   });
   const today = startOfDay(new Date());
-  // 表示モード：1日 / 全期間（スクロール表示）
+  // 表示モード：1日 / 週間 / 月間 / 全期間（従来のスクロール表示）
   const [viewMode, setViewMode] = useState('scroll');
   const [anchor, setAnchor] = useState(today);
 
@@ -5464,6 +5464,19 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
     let d = startOfDay(anchor);
     while (isNonWorkingDay(d)) d = addDays(d, 1);
     allDates.push(d);
+  } else if (viewMode === 'week') {
+    // 週間表示は今週から3週間分の営業日（横タイムライン形式）
+    const dow = (anchor.getDay() + 6) % 7; // 月曜=0
+    const mon = addDays(startOfDay(anchor), -dow);
+    for (let i = 0; i < 21; i++) {
+      const d = addDays(mon, i);
+      if (!isNonWorkingDay(d)) allDates.push(d);
+    }
+  } else if (viewMode === 'month') {
+    const y = anchor.getFullYear(), m = anchor.getMonth();
+    for (let d = startOfDay(new Date(y, m, 1)); d.getMonth() === m; d = addDays(d, 1)) {
+      if (!isNonWorkingDay(d)) allDates.push(new Date(d));
+    }
   } else {
     // 全期間：今日（休みなら翌営業日）を先頭に、未来の営業日を並べる。
     // 先頭＝今日 なので、初期表示で必ず左端が今日になる（過去日は表示しない）。
@@ -5481,17 +5494,25 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
     ? todayIndex
     : Math.max(0, allDates.findIndex(d => d.getTime() >= today.getTime()));
 
-  // ナビゲーション（1日モード）
+  // ナビゲーション（1日・週間・月間モード）
   const goStep = (dir) => {
     if (viewMode === 'day') {
       let d = addDays(startOfDay(anchor), dir);
       while (isNonWorkingDay(d)) d = addDays(d, dir);
       setAnchor(d);
+    } else if (viewMode === 'week') {
+      setAnchor(addDays(startOfDay(anchor), dir * 7));
+    } else if (viewMode === 'month') {
+      setAnchor(startOfDay(new Date(anchor.getFullYear(), anchor.getMonth() + dir, 1)));
     }
   };
   const rangeLabel = viewMode === 'day'
     ? `${fmtYMDJP(allDates[0])}（${dayName(allDates[0])}）`
-    : '';
+    : viewMode === 'week'
+      ? `${fmtMD(allDates[0])}（${dayName(allDates[0])}）〜 ${fmtMD(allDates[allDates.length - 1])}（${dayName(allDates[allDates.length - 1])}）`
+      : viewMode === 'month'
+        ? `${anchor.getFullYear()}年${anchor.getMonth() + 1}月`
+        : '';
 
   const dailySlots = getDailySlots(settings);
   const morningSlot = dailySlots[0];
@@ -5529,13 +5550,14 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
     }
   }
 
-  // 列幅：全期間=240px（横スクロール）、1日=画面幅に合わせる
+  // 列幅：全期間=240px・週間=200px・月間=110px（横スクロール）、1日=画面幅に合わせる
   const labelWidth = 110;
   const isFlexWidth = viewMode === 'day';
-  const dayCellWidth = 240;
+  const dayCellWidth = viewMode === 'month' ? 110 : viewMode === 'week' ? 200 : 240;
   const colWidth = isFlexWidth ? `calc((100% - ${labelWidth}px) / ${allDates.length})` : dayCellWidth;
   const rowHeight = viewMode === 'day' ? 150 : 100;
-  const compact = false;
+  // 列が狭い月間はブロックを案件名1行のコンパクト表示にする
+  const compact = viewMode === 'month';
 
   // 初期スクロール位置を「今日が左端」に設定（全期間・月間のみ。モード/期間の切替時に再設定）
   // 同じモード／期間の間は一度だけ実行し、以後はユーザーのスクロール位置を尊重する。
@@ -5618,7 +5640,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 10, flexWrap: 'wrap' }}>
             <button type="button" onClick={() => goStep(-1)}
               style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 3, padding: '6px 12px', cursor: 'pointer', fontFamily: fontJP, fontSize: 12, color: colors.text }}>
-              ‹ 前日
+              ‹ {viewMode === 'day' ? '前日' : viewMode === 'week' ? '前週' : '前月'}
             </button>
             <button type="button" onClick={() => setAnchor(today)}
               style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 3, padding: '6px 12px', cursor: 'pointer', fontFamily: fontJP, fontSize: 12, color: colors.text }}>
@@ -5626,7 +5648,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
             </button>
             <button type="button" onClick={() => goStep(1)}
               style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 3, padding: '6px 12px', cursor: 'pointer', fontFamily: fontJP, fontSize: 12, color: colors.text }}>
-              翌日 ›
+              {viewMode === 'day' ? '翌日' : viewMode === 'week' ? '翌週' : '翌月'} ›
             </button>
             <span style={{ fontSize: 13, fontWeight: 600, color: colors.text, marginLeft: 6 }}>{rangeLabel}</span>
           </div>
@@ -5753,7 +5775,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                         const s = Math.max(slot.startMin, dayStart), e = Math.min(slot.endMin, dayEnd);
                         if (e <= s) return null;
                         return (
-                          <TaskBlock key={si} task={task} slot={slot} done={done} now={now}
+                          <TaskBlock key={si} task={task} slot={slot} done={done}
                             projectColor={getProjectColor(task.projectName)}
                             timeline={{ left: `${((s - dayStart) / totalMin) * 100}%`, width: `${((e - s) / totalMin) * 100}%` }}
                             projDrag={projDrag} onProjDragStart={onReorderProject ? setProjDrag : null} onDropProject={onReorderProject} onVpDragStart={onReassignViewpoint ? setVpDrag : null} vpDrag={vpDrag} onReassign={onReassignViewpoint}
@@ -5860,7 +5882,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                   }}>
                     <div style={{ width: '50%', display: 'flex', flexDirection: 'column', borderRight: `1px dashed ${colors.border}`, boxSizing: 'border-box' }}>
                       {morningItems.map(({ task, slot, done }, si) => (
-                        <TaskBlock key={si} task={task} slot={slot} done={done} compact={compact} now={now}
+                        <TaskBlock key={si} task={task} slot={slot} done={done} compact={compact}
                           heightPct={(slot.hours / morningHours) * 100}
                           projectColor={getProjectColor(task.projectName)}
                           separator={si === 0 ? null : (morningItems[si - 1].task.projectName !== task.projectName ? 'strong' : 'weak')}
@@ -5872,7 +5894,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                       background: isWorkSat ? 'repeating-linear-gradient(45deg, #f5f0e3, #f5f0e3 4px, #fbf9f4 4px, #fbf9f4 8px)' : 'transparent',
                     }}>
                       {!isWorkSat && afternoonItems.map(({ task, slot, done }, si) => (
-                        <TaskBlock key={si} task={task} slot={slot} done={done} compact={compact} now={now}
+                        <TaskBlock key={si} task={task} slot={slot} done={done} compact={compact}
                           heightPct={(slot.hours / pmHours) * 100}
                           projectColor={getProjectColor(task.projectName)}
                           separator={si === 0 ? null : (afternoonItems[si - 1].task.projectName !== task.projectName ? 'strong' : 'weak')}
@@ -5917,7 +5939,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
   );
 }
 
-function TaskBlock({ task, slot, now, heightPct, projectColor, done, onClick, compact, separator, projDrag, onProjDragStart, onDropProject, onVpDragStart, vpDrag, onReassign, timeline }) {
+function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact, separator, projDrag, onProjDragStart, onDropProject, onVpDragStart, vpDrag, onReassign, timeline }) {
   const [projHover, setProjHover] = useState(false);
   // 案件の並び替えドラッグは進行中ブロックのみ（完了・中止のグレーは対象外）
   const canDragProject = !!onDropProject && !done;
@@ -5931,25 +5953,11 @@ function TaskBlock({ task, slot, now, heightPct, projectColor, done, onClick, co
   const isWhiteStep = !done && (task.stepName || '').includes('ホワイト');
   const blockBg = done ? '#d4d4cd' : pastelize(projectColor, isWhiteStep ? 0.82 : 0.6);
   const blockText = '#3f3b32';
+  const remaining = Math.max(0, task.hours - (task.completedHours || 0));
   const stepLabel = task.stepName ? ` - ${task.stepName}` : '';
   const internal = task.projectNameInternal || '';
   const external = task.projectName || '';
-  // 1行目（社内案件名＋視点名）。社内案件名が無ければ社外案件名で代替
-  const titleVpLine = `${internal || external} ／ ${task.viewpointName}${stepLabel}`;
-  // 開始予定〜終了予定（＝納品予定）。案件のスケジュール全体の開始・終了で表示（無ければスロット時刻）
-  let rangeLine = `${minToTime(slot.startMin)}〜${minToTime(slot.endMin)}`;
-  if (task.scheduledStart && task.scheduledEnd) {
-    const ss = task.scheduledStart, se = task.scheduledEnd;
-    const sameDay = isSameDay(ss, se);
-    const sp = sameDay ? minToTime(task.scheduledStartMin || 0) : `${ss.getMonth() + 1}/${ss.getDate()} ${minToTime(task.scheduledStartMin || 0)}`;
-    const ep = sameDay ? minToTime(task.scheduledEndMin || 0) : `${se.getMonth() + 1}/${se.getDate()} ${minToTime(task.scheduledEndMin || 0)}`;
-    rangeLine = `${sp}〜${ep}`;
-  }
-  // 進捗（制作済み＝完了入力＋時間経過 / 予定 / 残り）
-  const elapsedH = (now && !done) ? elapsedHoursForSlots(task.slots, now) : 0;
-  const workedH = Math.min(task.hours, (task.completedHours || 0) + elapsedH);
-  const remainH = Math.max(0, task.hours - (task.completedHours || 0) - elapsedH);
-  const progressLine = `制作済 ${fmtHM(workedH)} / 予定 ${fmtHM(task.hours)} / 残り ${fmtHM(remainH)}`;
+  const nameLine = `${internal || external}${internal && external ? ` (${external})` : ''} / ${task.viewpointName}${stepLabel}`;
   let aeStr = '';
   if (done && task.actualEnd) {
     const d = new Date(task.actualEnd);
@@ -5959,10 +5967,25 @@ function TaskBlock({ task, slot, now, heightPct, projectColor, done, onClick, co
   const tentative = !done && !!task.tentative;
   const effDeadline = task.deadline || task.projectDeadline || ''; // 実効納期＝個別＞全体
   const memoLine = (effDeadline ? `\n納期 ${(() => { const d = new Date(effDeadline + 'T00:00:00'); return isNaN(d.getTime()) ? effDeadline : `${d.getMonth() + 1}/${d.getDate()}`; })()}` : '') + (task.memo ? `\n📝 ${task.memo}` : '');
-  // ツールチップ（4行）：社内案件名＋視点名 / 社外案件名 / 開始〜終了予定 / 進捗
+  const completed = task.completedHours || 0;
+  // ブロック1〜2行目と同じ「社内案件名＋視点名」「開始〜終了予定」をツールチップ先頭に置き、
+  // さらに社外案件名・進捗（制作済み/予定/残り）を続ける。
+  const internalLine = `${internal || external} / ${task.viewpointName}${stepLabel}`;
+  const startEndLine = `${minToTime(slot.startMin)}〜${minToTime(slot.endMin)}`;
   const title = done
-    ? `【${cancelled ? '中止' : '完了'}】${titleVpLine}\n${external}\n${rangeLine}\n${progressLine}${aeStr ? `\n実終了 ${aeStr}` : ''}${memoLine}${onClick ? '\nクリックで案件を編集（終了時間の実績は完了タブで）' : '\n※終了時間（実績）は完了タブで編集できます'}`
-    : `${tentative ? '【仮】' : ''}#${task.priority} ${titleVpLine}\n${external}\n${rangeLine}\n${progressLine}${memoLine}${task.manualStart ? '\n※開始時間指定あり' : ''}${task.manualEnd ? '\n※終了予定指定あり' : ''}${task.delays && task.delays.length ? `\n※遅延履歴あり（${task.delays.length}回）` : ''}${onClick ? '\nクリックで案件を編集' : ''}`;
+    ? `【${cancelled ? '中止' : '完了'}】${nameLine}\n${startEndLine} (${slot.hours}h)${aeStr ? `\n実終了 ${aeStr}` : ''}${memoLine}${onClick ? '\nクリックで案件を編集（終了時間の実績は完了タブで）' : '\n※終了時間（実績）は完了タブで編集できます'}`
+    : `${internalLine}`
+      + (internal && external ? `\n${external}` : '')
+      + `\n${startEndLine}`
+      + `\n制作済み ${completed}h / 予定 ${task.hours}h / 残り ${remaining}h`
+      + memoLine
+      + (tentative ? '\n※仮案件' : '')
+      + (task.manualStart ? '\n※開始時間指定あり' : '')
+      + (task.manualEnd ? '\n※終了予定指定あり' : '')
+      + (task.delays && task.delays.length ? `\n※遅延履歴あり（${task.delays.length}回）` : '')
+      + (onClick ? '\nクリックで案件を編集' : '')
+      + (canDragProject ? '\nドラッグで案件の順番を変更' : '')
+      + (onVpDragStart ? '\n別の担当者名の上にドロップで担当者を変更' : '');
   return (
     <div title={title}
       onClick={onClick || undefined}
@@ -6000,14 +6023,40 @@ function TaskBlock({ task, slot, now, heightPct, projectColor, done, onClick, co
             : separator === 'weak' ? 'inset 0 1px 0 rgba(255,255,255,0.6)' : 'none',
         }),
       }}>
-      {/* 1行目：社内案件名（無ければ社外案件名）＋視点名／2行目：開始〜終了予定 */}
-      <div style={{ fontSize: 9.5, fontWeight: 700, whiteSpace: 'normal', wordBreak: 'break-word', overflow: 'hidden', paddingRight: 18, lineHeight: 1.2 }}>
-        {internal || external}
-        <span style={{ fontWeight: 500 }}>　{task.viewpointName}</span>
-      </div>
-      <div style={{ fontSize: 9, fontWeight: 600, opacity: 0.92, marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {rangeLine}
-      </div>
+      {compact ? (
+        // 月間表示などの狭い列：案件名1行のみ（詳細はツールチップ）
+        <div style={{ fontSize: 8, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', paddingRight: 14 }}>
+          {internal || external || task.viewpointName}
+        </div>
+      ) : timeline ? (
+        // 1日表示（横タイムライン）：社内案件名／社外案件名／視点名を縦に表示
+        <>
+          {internal && (
+            <div style={{ fontSize: 10, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', paddingRight: 18 }}>
+              {internal}
+            </div>
+          )}
+          {external && (
+            <div style={{ fontSize: 9, opacity: 0.85, whiteSpace: 'normal', wordBreak: 'break-word', paddingRight: internal ? 0 : 18 }}>
+              {external}
+            </div>
+          )}
+          <div style={{ fontSize: 9, fontWeight: 500, opacity: 0.95, whiteSpace: 'normal', overflow: 'hidden', wordBreak: 'break-word', paddingRight: (external || internal) ? 0 : 18 }}>
+            {task.viewpointName}
+          </div>
+        </>
+      ) : (
+        // 全期間表示：1行目＝社内案件名＋視点名、2行目＝開始〜終了予定
+        <>
+          <div style={{ fontSize: 10, fontWeight: 700, whiteSpace: 'normal', overflow: 'hidden', wordBreak: 'break-word', paddingRight: 18 }}>
+            {internal || external}
+            <span style={{ fontWeight: 500 }}> / {task.viewpointName}</span>
+          </div>
+          <div style={{ fontSize: 9, fontWeight: 500, opacity: 0.9, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {minToTime(slot.startMin)}〜{minToTime(slot.endMin)}
+          </div>
+        </>
+      )}
       <div style={{
         position: 'absolute', top: 2, right: 2,
         background: done ? (cancelled ? '#a05252' : '#7d7d76') : (tentative ? '#c46a16' : priorityColor(task.priority)), color: '#fff',
