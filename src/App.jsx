@@ -830,12 +830,13 @@ function formPreviewRecords(form, defaultPriority, taskById) {
       const completedRaw = (step.completedHours === '' || step.completedHours == null) ? 0 : parseHM(step.completedHours);
       // 完了済みステップ（完了時間≧制作時間）は登録時に done のままになるためスケジュール対象外
       if (!isNaN(completedRaw) && completedRaw >= stepHours) continue;
+      const stepAssignee = (step.assignee || '').trim() || vpAssignee;
       records.push({
         id: `__preview-${seq}`,
         projectName: (form.projectName || '').trim(),
         companyName: (form.companyName || '').trim(),
         viewpointName: vpName,
-        assignee: vpAssignee,
+        assignee: stepAssignee,
         priority,
         hours: stepHours,
         completedHours: isNaN(completedRaw) ? 0 : completedRaw,
@@ -1576,7 +1577,6 @@ export default function App() {
         const hasAnyInput = vpName || vp.steps.some(s => (s.name || '').trim() || (parseHM(s.hours) > 0));
         if (!hasAnyInput) continue;
         if (!vpName) { return { error: '内容を入力した視点には視点名も入力してください' }; }
-        if (!vpAssignee) { return { error: `視点「${vpName}」の担当者を入力してください` }; }
 
         let order = 0;
         let vpHasStep = false;
@@ -1593,6 +1593,9 @@ export default function App() {
           if (isNaN(stepCompleted) || stepCompleted < 0) { return { error: `「${name}」の完了時間が無効です` }; }
           if (stepCompleted > stepHours) { return { error: `「${name}」の完了時間が制作時間を超えています` }; }
           const autoDone = stepHours > 0 && stepCompleted >= stepHours;
+          // ステップごとの担当者（未指定なら視点の担当者→デフォルト担当者）
+          const stepAssignee = (step.assignee || '').trim() || vpAssignee;
+          if (!stepAssignee) { return { error: `視点「${vpName}」の「${name}」の担当者を入力してください` }; }
 
           const existing = step.taskId && originalById ? originalById.get(step.taskId) : null;
           const id = existing ? existing.id : `task-${baseTime}-${seq}-${Math.random().toString(36).slice(2, 7)}`;
@@ -1608,7 +1611,7 @@ export default function App() {
             customerContact: (form.customerContact || '').trim(),
             viewpointName: vpName,
             stepName: name, stepOrder: order,
-            assignee: vpAssignee,
+            assignee: stepAssignee,
             priority, hours: stepHours, completedHours: stepCompleted,
             memo: (form.memo || '').trim(),
             tentative: !!form.tentative,
@@ -1807,6 +1810,7 @@ export default function App() {
         steps: [{
           taskId: task.id,
           name: task.stepName || task.viewpointName || '',
+          assignee: task.assignee || '',
           hours: fmtHM(task.hours),
           completedHours: fmtHM(task.completedHours || 0),
         }],
@@ -1825,17 +1829,20 @@ export default function App() {
     // 視点ごとにグループ化（出現順）→ 各視点内は stepOrder 順
     const vpMap = new Map();
     for (const t of projectTasks) {
-      const k = `${t.viewpointName}::${t.assignee}`;
-      if (!vpMap.has(k)) vpMap.set(k, { viewpointName: t.viewpointName, assignee: t.assignee, steps: [] });
+      // 視点名のみでグループ化（ステップごとに担当者が異なってもまとめて編集できる）
+      const k = t.viewpointName;
+      if (!vpMap.has(k)) vpMap.set(k, { viewpointName: t.viewpointName, steps: [] });
       vpMap.get(k).steps.push(t);
     }
     const viewpoints = Array.from(vpMap.values()).map(v => {
       const sortedSteps = v.steps.slice().sort((a, b) => (a.stepOrder ?? 0) - (b.stepOrder ?? 0));
       const firstActive = sortedSteps.find(t => t.status !== 'done');
       const lastActive = [...sortedSteps].reverse().find(t => t.status !== 'done');
+      // 視点の既定担当者：全ステップが同じならその担当者、混在なら空（ステップごとの値を使う）
+      const vpAssignees = [...new Set(sortedSteps.map(t => t.assignee).filter(Boolean))];
       return {
         viewpointName: v.viewpointName,
-        assignee: v.assignee,
+        assignee: vpAssignees.length === 1 ? vpAssignees[0] : '',
         // 視点ごとの開始時間：最初の未完了ステップの指定を表示（無ければ先頭ステップ）
         manualStart: (firstActive || sortedSteps[0])?.manualStart || '',
         // 視点ごとの終了時間：終了時間指定を優先。指定が無く、かつ全ステップ完了済みなら
@@ -1848,6 +1855,7 @@ export default function App() {
         steps: sortedSteps.map(t => ({
           taskId: t.id,
           name: t.stepName || '',
+          assignee: t.assignee || '',
           hours: fmtHM(t.hours),
           completedHours: fmtHM(t.completedHours || 0),
         })),
@@ -1972,6 +1980,7 @@ export default function App() {
       steps: tasksOfVp.map(t => ({
         taskId: t.id,
         name: t.stepName || '',
+        assignee: t.assignee || '',
         hours: fmtHM(t.hours),
         completedHours: fmtHM(t.completedHours || 0),
       })),
@@ -3823,7 +3832,16 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                             onChange={(e) => updateStep(vi, si, 'name', e.target.value)}
                             placeholder="例: ホワイト" style={{ ...inputStyle, padding: '7px 10px', fontSize: 13 }} />
                         </div>
-                        <div style={{ flex: '1 1 180px' }}>
+                        <div style={{ flex: '1 1 150px' }}>
+                          <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>担当者</label>
+                          <Combobox value={step.assignee || ''} onChange={(v) => updateStep(vi, si, 'assignee', v)}
+                            options={assigneeList}
+                            placeholder={(vp.assignee || form.assignee) ? `既定: ${vp.assignee || form.assignee}` : '担当者'}
+                            title="このステップの担当者。空欄なら視点の担当者（または既定担当者）が使われます"
+                            inputStyle={{ ...inputStyle, padding: '7px 10px', fontSize: 13 }}
+                            colors={colors} fontJP={fontJP} />
+                        </div>
+                        <div style={{ flex: '1 1 150px' }}>
                           <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>制作時間</label>
                           <DurationSelect value={step.hours}
                             onChange={(val) => updateStep(vi, si, 'hours', val)}
@@ -5605,14 +5623,14 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
   const rowHeight = viewMode === 'day' ? 150 : 100;
   // 列が狭い月間はブロックを案件名1行のコンパクト表示にする
   const compact = viewMode === 'month';
-  // 簡易表示：全期間グリッドで同一案件のスロットを1ブロックに統合する（ステップ/視点の垣根なし）
+  // 簡易表示：全期間グリッドで同一視点のステップを1ブロックに統合する（ステップの垣根なし）
   const simpleMode = viewMode === 'simple';
-  // 同一案件のスロット群を「開始～終了予定（最早～最遅）」「制作時間の合計」に統合する
-  const mergeByProject = (items) => {
+  // 同一案件・同一視点のスロット群を「開始～終了予定（最早～最遅）」「制作時間の合計」に統合する
+  const mergeByViewpoint = (items) => {
     if (!items || items.length === 0) return items || [];
     const groups = new Map();
     for (const it of items) {
-      const key = `${it.task.projectName}|${it.done ? 'd' : 'a'}`;
+      const key = `${it.task.projectName}|${it.task.viewpointName}|${it.done ? 'd' : 'a'}`;
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(it);
     }
@@ -5923,9 +5941,9 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                 const slots = (matrix[assignee] && matrix[assignee][key]) || [];
                 const morningRaw = slots.filter(({ slot }) => slot.startMin < morningSlot.end);
                 const afternoonRaw = slots.filter(({ slot }) => slot.startMin >= afternoonSlot.start);
-                // 簡易表示は同一案件のスロットを1ブロックに統合
-                const morningItems = simpleMode ? mergeByProject(morningRaw) : morningRaw;
-                const afternoonItems = simpleMode ? mergeByProject(afternoonRaw) : afternoonRaw;
+                // 簡易表示は同一視点のステップを1ブロックに統合
+                const morningItems = simpleMode ? mergeByViewpoint(morningRaw) : morningRaw;
+                const afternoonItems = simpleMode ? mergeByViewpoint(afternoonRaw) : afternoonRaw;
                 // 午後の枠時間（残業を含む）。残業ぶんブロックが溢れないよう高さの分母にする
                 const pmCapMin = dayWorkSlots(assignee, d, settings).reduce((s, [a, b]) => s + Math.max(0, b - Math.max(a, afternoonSlot.start)), 0);
                 const pmHours = Math.max(afternoonHours, pmCapMin / 60);
@@ -6005,7 +6023,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
       )}
 
       <div style={{ marginTop: 20, fontSize: 11, color: colors.textMute }}>
-        セル内の色は案件ごと（パステル・「ホワイト」工程は1段階薄い色） ・ 右上の #番号 が優先順位 ・ 斜線ストライプ＋「仮」は仮案件 ・ グレーの実線ブロックは完了済（「済」）／中止（「止」、実終了時刻から遡って表示） ・ グレーの斜線は休日・不在 ・ マウスオーバーで詳細表示 ・ クリックで案件編集フォームを開く（完了済みの案件も編集可） ・ ブロックを同じ担当者の行内でドラッグ＆ドロップすると案件の順番（優先順位）を変更 ・ ブロックを別の担当者の行（ブロックや担当者名の上）へドロップするとその視点の担当者を変更 ・ 左端の担当者名をドラッグ＆ドロップで担当者の表示順を変更 ・「簡易表示」タブは同一案件のステップ/視点をまとめ、案件ごとに開始〜終了予定だけを表示
+        セル内の色は案件ごと（パステル・「ホワイト」工程は1段階薄い色） ・ 右上の #番号 が優先順位 ・ 斜線ストライプ＋「仮」は仮案件 ・ グレーの実線ブロックは完了済（「済」）／中止（「止」、実終了時刻から遡って表示） ・ グレーの斜線は休日・不在 ・ マウスオーバーで詳細表示 ・ クリックで案件編集フォームを開く（完了済みの案件も編集可） ・ ブロックを同じ担当者の行内でドラッグ＆ドロップすると案件の順番（優先順位）を変更 ・ ブロックを別の担当者の行（ブロックや担当者名の上）へドロップするとその視点の担当者を変更 ・ 左端の担当者名をドラッグ＆ドロップで担当者の表示順を変更 ・「簡易表示」タブは視点内のステップをまとめ、視点ごとに1ブロック（社内案件名＋視点名／社外案件名／開始〜終了予定）で表示
       </div>
     </div>
   );
@@ -6045,7 +6063,7 @@ function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact
   const internalLine = `${internal || external} / ${task.viewpointName}${stepLabel}`;
   const startEndLine = `${minToTime(slot.startMin)}〜${minToTime(slot.endMin)}`;
   const title = simple
-    ? `${internal || external}${internal && external ? `\n${external}` : ''}\n${startEndLine}\n計 ${slot.hours}h${onClick ? '\nクリックで案件を編集' : ''}`
+    ? `${internalLine}${internal && external ? `\n${external}` : ''}\n${startEndLine}\n計 ${slot.hours}h${onClick ? '\nクリックで案件を編集' : ''}`
     : done
     ? `【${cancelled ? '中止' : '完了'}】${nameLine}\n${startEndLine} (${slot.hours}h)${aeStr ? `\n実終了 ${aeStr}` : ''}${memoLine}${onClick ? '\nクリックで案件を編集（終了時間の実績は完了タブで）' : '\n※終了時間（実績）は完了タブで編集できます'}`
     : `${internalLine}`
@@ -6119,18 +6137,8 @@ function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact
             {task.viewpointName}
           </div>
         </>
-      ) : simple ? (
-        // 簡易表示（全期間）：社内案件名＋開始〜終了予定（ステップ/視点の垣根なし）
-        <>
-          <div style={{ fontSize: 10, fontWeight: 700, whiteSpace: 'normal', overflow: 'hidden', wordBreak: 'break-word', paddingRight: 18 }}>
-            {internal || external}
-          </div>
-          <div style={{ fontSize: 9, fontWeight: 500, opacity: 0.9, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {minToTime(slot.startMin)}〜{minToTime(slot.endMin)}
-          </div>
-        </>
       ) : (
-        // 全期間表示：1行目＝社内案件名＋視点名、2行目＝社外案件名、3行目＝開始〜終了予定
+        // 全期間・簡易表示：1行目＝社内案件名＋視点名、2行目＝社外案件名、3行目＝開始〜終了予定
         <>
           <div style={{ fontSize: 10, fontWeight: 700, whiteSpace: 'normal', overflow: 'hidden', wordBreak: 'break-word', paddingRight: 18 }}>
             {internal || external}
