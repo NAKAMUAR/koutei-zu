@@ -7408,16 +7408,17 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
                   <div style={{ fontSize: 11, color: colors.textMute }}>担当者が未登録です。</div>
                 )}
                 {(c.contacts || []).length > 0 && (
-                  <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1fr 1fr 1.4fr 34px', gap: 8, paddingLeft: 8 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1fr 1fr 1fr 1.4fr 34px', gap: 8, paddingLeft: 8 }}>
                     <div style={labelStyle}>担当者名</div>
                     <div style={labelStyle}>支店名</div>
-                    <div style={labelStyle}>電話番号</div>
+                    <div style={labelStyle}>電話番号1（社用）</div>
+                    <div style={labelStyle}>電話番号2（個人）</div>
                     <div style={labelStyle}>メールアドレス</div>
                     <div />
                   </div>
                 )}
                 {(c.contacts || []).map(ct => (
-                  <div key={ct.id} style={{ display: 'grid', gridTemplateColumns: '1.1fr 1fr 1fr 1.4fr 34px', gap: 8, alignItems: 'center', paddingLeft: 8 }}>
+                  <div key={ct.id} style={{ display: 'grid', gridTemplateColumns: '1.1fr 1fr 1fr 1fr 1.4fr 34px', gap: 8, alignItems: 'center', paddingLeft: 8 }}>
                     <input type="text" value={ct.name || ''}
                       onChange={(e) => setContactField(c.id, ct.id, 'name', e.target.value)}
                       onBlur={commitCustomersNow}
@@ -7428,6 +7429,10 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
                       placeholder="例: 名古屋支店" style={inputStyle} />
                     <input type="tel" value={ct.phone || ''}
                       onChange={(e) => setContactField(c.id, ct.id, 'phone', e.target.value)}
+                      onBlur={commitCustomersNow}
+                      placeholder="例: 052-123-4567" style={inputStyle} />
+                    <input type="tel" value={ct.phone2 || ''}
+                      onChange={(e) => setContactField(c.id, ct.id, 'phone2', e.target.value)}
                       onBlur={commitCustomersNow}
                       placeholder="例: 090-1234-5678" style={inputStyle} />
                     <input type="text" value={ct.email || ''}
