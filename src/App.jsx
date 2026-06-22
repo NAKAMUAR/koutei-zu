@@ -4163,14 +4163,14 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
         )}
       </section>
 
-      <ReviewSection
-        review={scheduled.review} now={now}
-        finalizeReview={finalizeReview} reopenReview={reopenReview} setReviewNote={setReviewNote} setReviewActualEnd={setReviewActualEnd}
-        colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
-
       <SuspendedSection
         suspended={scheduled.suspended} now={now}
         resumeProject={resumeProject}
+        colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
+
+      <ReviewSection
+        review={scheduled.review} now={now}
+        finalizeReview={finalizeReview} reopenReview={reopenReview} setReviewNote={setReviewNote} setReviewActualEnd={setReviewActualEnd}
         colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
       </>)}
       {inputTab === 'calendar' && (
@@ -4349,7 +4349,7 @@ function ReviewSection({ review, now, finalizeReview, reopenReview, setReviewNot
   }, [byProject.length]);
 
   return (
-    <section>
+    <section style={{ marginTop: 28 }}>
       <h2 style={{ fontFamily: fontDisplay, fontSize: 18, margin: '0 0 4px 0', fontWeight: 500, display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
         確認待ち
         <span style={{ fontSize: 12, color: colors.textMute, fontFamily: fontJP }}>
