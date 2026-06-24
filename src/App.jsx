@@ -6621,21 +6621,26 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
   // 担当者ごとの「案件1行表示」用テキスト生成
   const circledNumber = (n) => (n >= 1 && n <= 20) ? String.fromCharCode(0x2460 + n - 1) : `(${n})`;
   const assigneeMessage = useMemo(() => {
+    // 担当者 → 案件ごとの { id（表示名）, order（登場順）, hours（制作時間の合計） }
     const byAssignee = new Map();
     for (const task of scheduled.active) {
       const a = (task.assignee || '').trim();
       if (!a) continue;
-      if (!byAssignee.has(a)) byAssignee.set(a, []);
-      const list = byAssignee.get(a);
+      if (!byAssignee.has(a)) byAssignee.set(a, new Map());
+      const projMap = byAssignee.get(a);
       // 案件識別子: 社内案件名があればそちら、無ければ社外案件名
       const id = (task.projectNameInternal && task.projectNameInternal.trim()) || task.projectName || '';
-      if (id && !list.includes(id)) list.push(id);
+      if (!id) continue;
+      if (!projMap.has(id)) projMap.set(id, { id, order: projMap.size, hours: 0 });
+      // 制作時間（制作予定時間）を案件ごとに合計。同一案件の複数視点ぶんを足し込む
+      projMap.get(id).hours += (task.hours || 0);
     }
     const header = '@All \n本日の案件スケジュールを送りますので、各自担当案件のすべて確認とスケジュール報告をお願いします。';
     const sections = [];
-    for (const [assignee, projects] of byAssignee.entries()) {
+    for (const [assignee, projMap] of byAssignee.entries()) {
+      const projects = [...projMap.values()].sort((x, y) => x.order - y.order);
       if (projects.length === 0) continue;
-      const lines = [assignee, ...projects.map((p, i) => `${circledNumber(i + 1)}${p}`)];
+      const lines = [assignee, ...projects.map((p, i) => `${circledNumber(i + 1)}${p.id}（制作時間 ${fmtHM(p.hours)}）`)];
       sections.push(lines.join('\n'));
     }
     return [header, ...sections].join('\n\n');
