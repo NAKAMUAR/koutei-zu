@@ -6621,26 +6621,48 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
   // 担当者ごとの「案件1行表示」用テキスト生成
   const circledNumber = (n) => (n >= 1 && n <= 20) ? String.fromCharCode(0x2460 + n - 1) : `(${n})`;
   const assigneeMessage = useMemo(() => {
-    // 担当者 → 案件ごとの { id（表示名）, order（登場順）, hours（制作時間の合計） }
+    const pad2 = (n) => String(n).padStart(2, '0');
+    const fmtMD2 = (d) => `${pad2(d.getMonth() + 1)}/${pad2(d.getDate())}`;       // 06/24
+    const fmtClock = (min) => `${Math.floor(min / 60)}:${pad2(min % 60)}`;        // 8:15
+    const fmtDurH = (h) => `${Math.round((h || 0) * 100) / 100}H`;                // 1.5H / 5H / 0.5H
+    // 視点1行：「視点名: 06/23 15:45 - 8:15 06/24 (1.5H)」。同日なら終了側の日付は省略。
+    const fmtVpLine = (g) => {
+      const name = g.viewpointName || '視点';
+      if (!g.scheduledStart || !g.scheduledEnd) return name; // 未スケジュールは名前のみ
+      const startStr = `${fmtMD2(g.scheduledStart)} ${fmtClock(g.scheduledStartMin || 0)}`;
+      const sameDay = isSameDay(g.scheduledStart, g.scheduledEnd);
+      const endStr = sameDay
+        ? fmtClock(g.scheduledEndMin || 0)
+        : `${fmtClock(g.scheduledEndMin || 0)} ${fmtMD2(g.scheduledEnd)}`;
+      return `${name}: ${startStr} - ${endStr} (${fmtDurH(g.totalHours)})`;
+    };
+    const startTsOf = (g) => g.scheduledStart ? g.scheduledStart.getTime() + (g.scheduledStartMin || 0) * 60000 : Infinity;
+
+    // 担当者 → 案件(表示名) → 視点グループ配列
+    const groups = groupByViewpoint(scheduled.active);
     const byAssignee = new Map();
-    for (const task of scheduled.active) {
-      const a = (task.assignee || '').trim();
+    for (const g of groups) {
+      const a = (g.assignee || '').trim();
       if (!a) continue;
       if (!byAssignee.has(a)) byAssignee.set(a, new Map());
       const projMap = byAssignee.get(a);
       // 案件識別子: 社内案件名があればそちら、無ければ社外案件名
-      const id = (task.projectNameInternal && task.projectNameInternal.trim()) || task.projectName || '';
+      const id = (g.projectNameInternal && g.projectNameInternal.trim()) || g.projectName || '';
       if (!id) continue;
-      if (!projMap.has(id)) projMap.set(id, { id, order: projMap.size, hours: 0 });
-      // 制作時間（制作予定時間）を案件ごとに合計。同一案件の複数視点ぶんを足し込む
-      projMap.get(id).hours += (task.hours || 0);
+      if (!projMap.has(id)) projMap.set(id, { id, order: projMap.size, vps: [] });
+      projMap.get(id).vps.push(g);
     }
     const header = '@All \n本日の案件スケジュールを送りますので、各自担当案件のすべて確認とスケジュール報告をお願いします。';
     const sections = [];
     for (const [assignee, projMap] of byAssignee.entries()) {
       const projects = [...projMap.values()].sort((x, y) => x.order - y.order);
       if (projects.length === 0) continue;
-      const lines = [assignee, ...projects.map((p, i) => `${circledNumber(i + 1)}${p.id}（制作時間 ${fmtHM(p.hours)}）`)];
+      const lines = [assignee];
+      projects.forEach((p, i) => {
+        lines.push(`${circledNumber(i + 1)}${p.id}`);
+        const vps = [...p.vps].sort((x, y) => startTsOf(x) - startTsOf(y));
+        for (const g of vps) lines.push(fmtVpLine(g));
+      });
       sections.push(lines.join('\n'));
     }
     return [header, ...sections].join('\n\n');
