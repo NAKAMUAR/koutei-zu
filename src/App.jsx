@@ -1103,6 +1103,41 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
+  // 案件編集モード：ONの間は納期の警告表示（一覧の納期バッジ・上部の「間に合わない恐れ」バナー）を隠す。
+  // 入力など操作があってから30分経過で自動的にOFFになる（一時的なモード）。
+  const CASE_EDIT_TIMEOUT_MS = 30 * 60 * 1000;
+  const [caseEditMode, setCaseEditMode] = useState(false);
+  const caseEditExpireRef = useRef(0); // 自動解除する時刻（epoch ms）
+  const bumpCaseEdit = () => { if (caseEditExpireRef.current) caseEditExpireRef.current = Date.now() + CASE_EDIT_TIMEOUT_MS; };
+  const toggleCaseEditMode = () => {
+    setCaseEditMode(prev => {
+      const next = !prev;
+      caseEditExpireRef.current = next ? Date.now() + CASE_EDIT_TIMEOUT_MS : 0;
+      return next;
+    });
+  };
+  // 操作（入力・キー・クリック）があるたびに自動解除の期限を延長する
+  useEffect(() => {
+    if (!caseEditMode) return;
+    const onActivity = () => bumpCaseEdit();
+    window.addEventListener('input', onActivity, true);
+    window.addEventListener('keydown', onActivity, true);
+    window.addEventListener('pointerdown', onActivity, true);
+    return () => {
+      window.removeEventListener('input', onActivity, true);
+      window.removeEventListener('keydown', onActivity, true);
+      window.removeEventListener('pointerdown', onActivity, true);
+    };
+  }, [caseEditMode]);
+  // 期限超過の監視（30秒ごと）。最後の操作から30分でOFF。
+  useEffect(() => {
+    if (!caseEditMode) return;
+    const id = setInterval(() => {
+      if (caseEditExpireRef.current && Date.now() >= caseEditExpireRef.current) setCaseEditMode(false);
+    }, 30000);
+    return () => clearInterval(id);
+  }, [caseEditMode]);
+
   // タスクメモの通知：開始時刻（終日は朝の始業時刻）が来たらOS通知＋アプリ内バナーを出す。
   // アプリを開いている間のみ。プッシュ基盤が無いため、タブを閉じている間は通知できない。
   const [memoToasts, setMemoToasts] = useState([]); // [{ id, title, body }]
@@ -2654,6 +2689,20 @@ export default function App() {
 
   return (
     <div style={{ minHeight: '100vh', background: colors.bg, fontFamily: fontJP, color: colors.text }}>
+      {/* 一番上：案件編集モードのトグル（ON中は納期の警告を一時的に非表示） */}
+      <div style={{ background: caseEditMode ? '#fff4d6' : colors.surface, borderBottom: `1px solid ${caseEditMode ? '#e8d089' : colors.border}` }}>
+        <div style={{ maxWidth: 1600, margin: '0 auto', padding: '6px 28px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <button onClick={toggleCaseEditMode}
+            title="ON中は納期の警告（一覧の納期バッジ・上部バナー）を一時的に隠します。操作から30分で自動解除されます。"
+            style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '5px 12px', borderRadius: 999, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, fontWeight: 700, border: `1px solid ${caseEditMode ? '#d9a93a' : colors.border}`, background: caseEditMode ? '#f2b705' : 'transparent', color: caseEditMode ? '#3a2d00' : colors.textMute }}>
+            <span style={{ width: 9, height: 9, borderRadius: '50%', background: caseEditMode ? '#1f8a3b' : '#bbb', display: 'inline-block' }} />
+            案件編集モード：{caseEditMode ? 'ON' : 'OFF'}
+          </button>
+          {caseEditMode && (
+            <span style={{ fontSize: 11, color: '#9a7b1f' }}>納期の警告を一時的に非表示中（操作から30分で自動解除）</span>
+          )}
+        </div>
+      </div>
       <header style={{ borderBottom: `1px solid ${colors.border}`, background: colors.surface }}>
         <div style={{ maxWidth: 1600, margin: '0 auto', padding: '20px 28px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16 }}>
           <div>
@@ -2722,7 +2771,7 @@ export default function App() {
 
       <main style={{ maxWidth: 1600, margin: '0 auto', padding: '28px' }}>
         {view === 'input' && (
-          <InputView form={form} setForm={setForm} handleSubmit={handleSubmit} registerDraftAndEdit={registerDraftAndEdit} editingId={editingId} editMode={editMode}
+          <InputView form={form} setForm={setForm} handleSubmit={handleSubmit} registerDraftAndEdit={registerDraftAndEdit} editingId={editingId} editMode={editMode} caseEditMode={caseEditMode}
             cancelEdit={() => { setEditingId(null); setEditMode(null); setForm(emptyForm); }}
             tasks={tasks} scheduled={scheduled}
             projectOrder={projectOrder} saveProjectOrder={saveProjectOrderPartial}
@@ -2748,7 +2797,7 @@ export default function App() {
           {/* カレンダーから案件編集を開いた場合、入力へ遷移せずスケジュールのすぐ下にフォームを表示 */}
           {calendarEdit && editMode && (
             <div style={{ marginTop: 24 }}>
-              <InputView embedded form={form} setForm={setForm} handleSubmit={handleSubmit} registerDraftAndEdit={registerDraftAndEdit} editingId={editingId} editMode={editMode}
+              <InputView embedded form={form} setForm={setForm} handleSubmit={handleSubmit} registerDraftAndEdit={registerDraftAndEdit} editingId={editingId} editMode={editMode} caseEditMode={caseEditMode}
                 cancelEdit={() => { setEditingId(null); setEditMode(null); setForm(emptyForm); setCalendarEdit(false); }}
                 tasks={tasks} scheduled={scheduled}
                 projectOrder={projectOrder} saveProjectOrder={saveProjectOrderPartial}
@@ -2768,7 +2817,7 @@ export default function App() {
           </>
         )}
         {view === 'byAssignee' && (
-          <AssigneeView scheduled={scheduled} selectedAssignee={selectedAssignee} setSelectedAssignee={setSelectedAssignee} now={now} assigneeOrder={assigneeOrder}
+          <AssigneeView scheduled={scheduled} selectedAssignee={selectedAssignee} setSelectedAssignee={setSelectedAssignee} now={now} caseEditMode={caseEditMode} assigneeOrder={assigneeOrder}
             companyOrder={settings.companyOrder || []} companyList={companyList} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline}
             projectOrder={projectOrder} saveProjectOrder={saveProjectOrderPartial}
             handleEdit={handleEdit} handleEditProject={handleEditProject} handleEditViewpoint={handleEditViewpoint}
@@ -3373,7 +3422,7 @@ function MemoView({ memos, upsertMemo, deleteMemo, now, colors, fontJP, fontDisp
 }
 
 // ============ 入力ビュー ============
-function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit, editingId, editMode, cancelEdit, tasks, scheduled, projectOrder, saveProjectOrder, companyList, customerMaster, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, setTaskAssignee, completeProject, cancelProject, suspendProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, saveProjectInfo, setProjectDeadline, finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, resumeProject, projectList, projectInternalList, viewpointList, assigneeList, assigneeOrder, settings, now, selectedAssignee, setSelectedAssignee, companyOrder, onReorderAssignee, onReorderProject, onReassignViewpoint, colors, fontJP, fontDisplay }) {
+function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit, editingId, editMode, caseEditMode, cancelEdit, tasks, scheduled, projectOrder, saveProjectOrder, companyList, customerMaster, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, setTaskAssignee, completeProject, cancelProject, suspendProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, saveProjectInfo, setProjectDeadline, finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, resumeProject, projectList, projectInternalList, viewpointList, assigneeList, assigneeOrder, settings, now, selectedAssignee, setSelectedAssignee, companyOrder, onReorderAssignee, onReorderProject, onReassignViewpoint, colors, fontJP, fontDisplay }) {
   // お客様担当者の候補：会社名を選んでいればその会社に所属する担当者を表示
   // （会社名はひらがな/カタカナ/全半角の違いを無視して照合）
   const contactOptions = useMemo(() => {
@@ -3589,7 +3638,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
         <QuoteModal projects={pastProjects} onSelect={selectQuote} onClose={() => setQuoteOpen(false)}
           colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
       )}
-      {!embedded && atRiskProjects.length > 0 && !riskAck && (
+      {!embedded && !caseEditMode && atRiskProjects.length > 0 && !riskAck && (
         <div onClick={() => setRiskAck(true)}
           style={{
             position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000,
@@ -4148,6 +4197,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                   </div>
                 </div>
                 <ViewpointGroupList
+                  caseEditMode={caseEditMode}
                   groups={aGroups}
                   allActive={filteredActive} now={now}
                   companyOrder={settings.companyOrder || []}
@@ -4168,6 +4218,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
           })()
         ) : (
           <ViewpointGroupList
+            caseEditMode={caseEditMode}
             groups={groupByViewpoint(filteredActive)}
             allActive={filteredActive} now={now}
             companyOrder={settings.companyOrder || []}
@@ -4199,7 +4250,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
           onReorderAssignee={onReorderAssignee} onReorderProject={onReorderProject} onReassignViewpoint={onReassignViewpoint} />
       )}
       {inputTab === 'assignee' && (
-        <AssigneeView scheduled={scheduled} selectedAssignee={selectedAssignee} setSelectedAssignee={setSelectedAssignee} now={now} assigneeOrder={assigneeOrder}
+        <AssigneeView scheduled={scheduled} selectedAssignee={selectedAssignee} setSelectedAssignee={setSelectedAssignee} now={now} caseEditMode={caseEditMode} assigneeOrder={assigneeOrder}
           companyOrder={companyOrder} companyList={companyList} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline}
           projectOrder={projectOrder} saveProjectOrder={saveProjectOrder}
           handleEdit={handleEdit} handleEditProject={handleEditProject} handleEditViewpoint={handleEditViewpoint}
@@ -4615,7 +4666,7 @@ function ProjectInfoEditor({ pg, companyList, onSave, onCancel, colors, fontJP }
 }
 
 // ============ 視点グループリスト ============
-function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder, saveProjectOrder, sortMode, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, setTaskAssignee, completeProject, cancelProject, suspendProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, saveProjectInfo, setProjectDeadline, companyList, assigneeList, offshoreCompanies, defaultCollapsed, colors, fontJP }) {
+function ViewpointGroupList({ groups, allActive, now, caseEditMode, companyOrder, projectOrder, saveProjectOrder, sortMode, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, setTaskAssignee, completeProject, cancelProject, suspendProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, saveProjectInfo, setProjectDeadline, companyList, assigneeList, offshoreCompanies, defaultCollapsed, colors, fontJP }) {
   // 案件情報をインライン編集中の案件名（null = 非編集）
   const [editingInfo, setEditingInfo] = useState(null);
   // 契約形態「オフショア」の会社（お客様マスタ由来）。会社別表示で「オフショア（その他）」へ集約する。
@@ -4851,7 +4902,7 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
                   );
                 }
                 const dl = new Date(section.deadlineGroup + 'T00:00:00');
-                const overdue = section.deadlineGroup < fmtYMD(now);
+                const overdue = !caseEditMode && section.deadlineGroup < fmtYMD(now);
                 return (
                   <span style={{
                     fontSize: 13, fontWeight: 700, color: '#fff',
@@ -4894,7 +4945,7 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
         const startedTs = pg.scheduledStart ? pg.scheduledStart.getTime() + (pg.scheduledStartMin || 0) * 60000 : null;
         const started = startedTs != null && startedTs <= now.getTime();
         const dueToday = endYmd != null && endYmd === todayYmd;
-        const deadlinePassed = !!pg.deadline && pg.deadline <= todayYmd;
+        const deadlinePassed = !caseEditMode && !!pg.deadline && pg.deadline <= todayYmd;
         const atRisk = deadlinePassed && !dueToday;
         const headerBg = atRisk ? '#fbdcdc' : dueToday ? '#ffe6c9' : started ? '#fdf3a6' : '#fff';
         const nameColor = deadlinePassed ? '#c1272d' : colors.text;
@@ -4992,7 +5043,7 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
                 // 案件ヘッダーで「全体納期」を直接編集（案件の全タスクに反映）。個別納期があれば各視点側が優先
                 const todayYmd = fmtYMD(new Date());
                 const endYmd = pg.scheduledEnd ? fmtYMD(pg.scheduledEnd) : null;
-                const danger = pg.projectDeadline && (todayYmd > pg.projectDeadline || (endYmd && endYmd > pg.projectDeadline));
+                const danger = !caseEditMode && pg.projectDeadline && (todayYmd > pg.projectDeadline || (endYmd && endYmd > pg.projectDeadline));
                 const d = pg.projectDeadline ? new Date(pg.projectDeadline + 'T00:00:00') : null;
                 return (
                   <span style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}
@@ -5019,7 +5070,7 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
               })() : (pg.deadline && (() => {
                 const todayYmd = fmtYMD(new Date());
                 const endYmd = pg.scheduledEnd ? fmtYMD(pg.scheduledEnd) : null;
-                const danger = todayYmd > pg.deadline || (endYmd && endYmd > pg.deadline);
+                const danger = !caseEditMode && (todayYmd > pg.deadline || (endYmd && endYmd > pg.deadline));
                 const d = new Date(pg.deadline + 'T00:00:00');
                 return (
                   <span title={danger ? '納期を過ぎている、または終了予定が納期を超えています（視点ごとの納期のうち最早のもの）' : '納期（視点ごとの納期のうち最早のもの）'} style={{
@@ -5149,7 +5200,7 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
             {!isCollapsed && pg.viewpointGroups.map(group => (
               // 視点カードは案件ヘッダーから1段インデント（全視点同じ深さで揃える）
               <div key={group.key} style={{ marginLeft: 22 }}>
-              <ViewpointCard group={group} now={now}
+              <ViewpointCard group={group} now={now} caseEditMode={caseEditMode}
                 allSortedIds={allSortedIds}
                 companyFirstIds={companyFirstIds} companyLastIds={companyLastIds}
                 handleEdit={handleEdit} handleEditViewpoint={handleEditViewpoint}
@@ -5169,7 +5220,7 @@ function ViewpointGroupList({ groups, allActive, now, companyOrder, projectOrder
   );
 }
 
-function ViewpointCard({ group, now, allSortedIds, companyFirstIds, companyLastIds, handleEdit, handleEditViewpoint, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, setTaskAssignee, completeProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, assigneeList, colors, fontJP }) {
+function ViewpointCard({ group, now, caseEditMode, allSortedIds, companyFirstIds, companyLastIds, handleEdit, handleEditViewpoint, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, setTaskAssignee, completeProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, assigneeList, colors, fontJP }) {
   const projectColor = getProjectColor(group.projectName);
   const progressPct = group.totalHours > 0 ? (group.completedHours / group.totalHours) * 100 : 0;
   // 経過進捗（時間経過ベース・表示用）
@@ -5235,7 +5286,7 @@ function ViewpointCard({ group, now, allSortedIds, companyFirstIds, companyLastI
               const todayYmd = fmtYMD(new Date());
               const endYmd = group.scheduledEnd ? fmtYMD(group.scheduledEnd) : null;
               // 実効納期＝個別＞全体（group.deadline は集約済み）。危険判定は実効で行う
-              const danger = group.deadline && (todayYmd > group.deadline || (endYmd && endYmd > group.deadline));
+              const danger = !caseEditMode && group.deadline && (todayYmd > group.deadline || (endYmd && endYmd > group.deadline));
               const indiv = group.individualDeadline || '';
               const proj = group.projectDeadline || '';
               const inherited = !indiv && !!proj; // 個別なし＝全体納期を継承
@@ -6420,7 +6471,7 @@ function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact
 }
 
 // ============ 担当者別ビュー ============
-function AssigneeView({ scheduled, selectedAssignee, setSelectedAssignee, now, assigneeOrder, companyOrder, companyList, saveProjectInfo, setProjectDeadline, projectOrder, saveProjectOrder, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, setTaskAssignee, completeProject, cancelProject, suspendProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, assigneeList, colors, fontJP, fontDisplay }) {
+function AssigneeView({ scheduled, selectedAssignee, setSelectedAssignee, now, caseEditMode, assigneeOrder, companyOrder, companyList, saveProjectInfo, setProjectDeadline, projectOrder, saveProjectOrder, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, setTaskAssignee, completeProject, cancelProject, suspendProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, assigneeList, colors, fontJP, fontDisplay }) {
   const assignees = sortAssigneesByMaster([...new Set(scheduled.active.map(t => t.assignee))], assigneeOrder);
   if (assignees.length === 0) {
     return (
@@ -6499,7 +6550,7 @@ function AssigneeView({ scheduled, selectedAssignee, setSelectedAssignee, now, a
                 </div>
               </div>
             </div>
-            <ViewpointGroupList groups={groups} allActive={allActive} now={now}
+            <ViewpointGroupList groups={groups} allActive={allActive} now={now} caseEditMode={caseEditMode}
               companyOrder={companyOrder}
               projectOrder={projectOrder} saveProjectOrder={saveProjectOrder}
               handleEdit={handleEdit} handleEditProject={handleEditProject} handleEditViewpoint={handleEditViewpoint}
