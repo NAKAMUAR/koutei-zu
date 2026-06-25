@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useMemo, useRef, useLayoutEffect } from 'react';
-import { Plus, Trash2, Edit2, Calendar as CalIcon, MessageSquare, Settings as SettingsIcon, Check, X, Clock, Folder, User, ChevronUp, ChevronDown, Users, CheckCircle2, RotateCcw, TrendingUp, ArrowRight, GripVertical, Search, AlertTriangle, StickyNote, Bell, BellOff, Zap, PauseCircle, PlayCircle, FileText } from 'lucide-react';
+import { Plus, Trash2, Edit2, Calendar as CalIcon, MessageSquare, Settings as SettingsIcon, Check, X, Clock, Folder, User, ChevronUp, ChevronDown, Users, CheckCircle2, RotateCcw, TrendingUp, ArrowRight, GripVertical, Search, AlertTriangle, StickyNote, Bell, BellOff, Zap, PauseCircle, PlayCircle, FileText, Table } from 'lucide-react';
 import { storage, tasksStore, signIn, signOutUser, subscribeAuth } from './firebase.js';
 import BillingView from './billing/BillingView.jsx';
+import SalesView from './sales/SalesView.jsx';
 
 // ============ 定数・ユーティリティ ============
 const PRIORITY_COLORS = ['#c1272d', '#d4a017', '#7a8471', '#5d4037', '#37474f'];
@@ -2648,6 +2649,7 @@ export default function App() {
     { id: 'master', icon: <Folder size={15} />, label: 'マスタ' },
     { id: 'memo', icon: <StickyNote size={15} />, label: 'タスクメモ' },
     { id: 'billing', icon: <FileText size={15} />, label: '帳票' },
+    { id: 'sales', icon: <Table size={15} />, label: '売上登録' },
   ];
 
   return (
@@ -2803,6 +2805,10 @@ export default function App() {
         )}
         {view === 'billing' && (
           <BillingView customerMaster={customerMaster} tasks={tasks} now={now}
+            colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
+        )}
+        {view === 'sales' && (
+          <SalesView tasks={tasks} customerMaster={customerMaster} now={now}
             colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
         )}
       </main>
