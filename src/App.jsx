@@ -3766,6 +3766,8 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
               )}
             </div>
           </div>
+          {/* 案件編集モードでは納期入力を非表示（納期は一覧の案件ヘッダー／視点側でインライン編集する） */}
+          {!editMode && (
           <div>
             <label style={labelStyle}>全体納期（案件共通・任意）</label>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -3780,6 +3782,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
               )}
             </div>
           </div>
+          )}
           <div style={{ gridColumn: '1 / -1' }}>
             {previewSchedule && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600, flexWrap: 'wrap' }}>
@@ -3901,6 +3904,8 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                       )}
                       <span style={{ fontSize: 10, color: colors.textMute }}>任意・作業終了予定。この視点の最後の未完了ステップに適用・次のタスクはこの時刻以降に開始</span>
                     </div>
+                    {/* 案件編集モードでは個別納期入力も非表示 */}
+                    {!editMode && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                       <span style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', minWidth: 64, fontWeight: 600 }}>
                         納期（個別）
@@ -3918,6 +3923,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                         任意・この視点の個別納期。未設定なら全体納期{form.projectDeadline ? `（${form.projectDeadline}）` : ''}を使用
                       </span>
                     </div>
+                    )}
                   </div>
 
                   {/* ステップリスト */}
