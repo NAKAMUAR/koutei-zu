@@ -145,13 +145,15 @@ const VIEWPOINT_PRESETS = [
   { id: 'photo', name: '写真合成', steps: ['写真合成'] },
 ];
 function makeViewpointFromPreset(preset) {
-  if (!preset) return { viewpointName: '', assignee: '', manualStart: '', manualEnd: '', deadline: '', steps: [{ name: '', hours: '', completedHours: '' }] };
+  if (!preset) return { viewpointName: '', assignee: '', manualStart: '', manualEnd: '', deadline: '', requestDate: '', amount: '', steps: [{ name: '', hours: '', completedHours: '' }] };
   return {
     viewpointName: preset.name,
     assignee: '',
     manualStart: '', // 視点ごとの開始時間指定（最初の未完了ステップに適用）
     manualEnd: '',   // 視点ごとの終了時間指定（最後の未完了ステップに適用・作業終了予定）
     deadline: '',    // 視点ごとの納期（お客様への提出日）
+    requestDate: '', // 初回の依頼日（制作履歴の初回ラウンドになる）
+    amount: '',      // 金額（円・税抜。オフショアの新規制作金額。売上へ自動連携）
     steps: preset.steps.map(name => ({ name, hours: '', completedHours: '' })),
   };
 }
@@ -1781,6 +1783,30 @@ export default function App() {
         const vpLastActive = [...vpRecs].reverse().find(u => u.status !== 'done');
         if (vpLastActive) vpLastActive.manualEnd = vp.manualEnd || null;
         else if (vp.manualEnd && vpRecs.length > 0) vpRecs[vpRecs.length - 1].manualEnd = vp.manualEnd;
+
+        // 制作履歴（視点メタ）の引き継ぎと、フォームの「初回依頼日・金額」を初回ラウンドへ反映。
+        // 既存の追加・修正ラウンドや納品名上書き・集計フラグは保持する。
+        let existingMeta = null;
+        if (originalById) {
+          for (const s of vp.steps) {
+            if (s.taskId && originalById.has(s.taskId)) { existingMeta = originalById.get(s.taskId); break; }
+          }
+        }
+        let vpHistory = normalizeHistory(existingMeta?.prodHistory);
+        const amtStr = (vp.amount === undefined || vp.amount === null) ? '' : String(vp.amount).trim();
+        const reqDate = (vp.requestDate || '').trim();
+        const initIdx = vpHistory.findIndex(r => r.type === 'initial');
+        if (initIdx >= 0) {
+          vpHistory = vpHistory.map((r, i) => i === initIdx ? { ...r, amount: amtStr, date: reqDate } : r);
+        } else if (amtStr !== '' || reqDate !== '') {
+          const r0 = blankRound('initial', reqDate); r0.amount = amtStr;
+          vpHistory = [r0, ...vpHistory];
+        }
+        for (const rec of upserts.slice(vpFirstIdx)) {
+          if (vpHistory.length) rec.prodHistory = vpHistory;
+          if (existingMeta?.deliveryNameOverride) rec.deliveryNameOverride = existingMeta.deliveryNameOverride;
+          if (existingMeta && existingMeta.countAsDelivery === false) rec.countAsDelivery = false;
+        }
       }
       return { upserts };
     };
@@ -1989,6 +2015,12 @@ export default function App() {
           : ((sortedSteps[sortedSteps.length - 1])?.manualEnd || latestActualEnd(sortedSteps) || ''),
         // 視点ごとの納期：この視点のタスクから（最初に見つかったもの）
         deadline: (sortedSteps.find(t => t.deadline) || {}).deadline || '',
+        // 初回依頼日・金額：制作履歴の初回ラウンドから（無ければ空）
+        ...(() => {
+          const ht = sortedSteps.find(t => Array.isArray(t.prodHistory) && t.prodHistory.length);
+          const init = ht ? normalizeHistory(ht.prodHistory).find(r => r.type === 'initial') : null;
+          return { requestDate: init?.date || '', amount: init?.amount ?? '' };
+        })(),
         steps: sortedSteps.map(t => ({
           taskId: t.id,
           name: t.stepName || '',
@@ -2114,6 +2146,10 @@ export default function App() {
       manualStart: first.manualStart || '',
       manualEnd: last.manualEnd || '',
       deadline: (tasksOfVp.find(t => t.deadline) || {}).deadline || '',
+      ...(() => {
+        const init = normalizeHistory(group.prodHistory).find(r => r.type === 'initial');
+        return { requestDate: init?.date || '', amount: init?.amount ?? '' };
+      })(),
       steps: tasksOfVp.map(t => ({
         taskId: t.id,
         name: t.stepName || '',
@@ -3616,6 +3652,11 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
   // 視点ごとの納期（お客様への提出日）
   const setVpDeadline = (vi, val) =>
     setForm({ ...form, viewpoints: form.viewpoints.map((vp, i) => i === vi ? { ...vp, deadline: val || '' } : vp) });
+  // 視点ごとの初回依頼日・金額（制作履歴の初回ラウンドになる）
+  const setVpRequestDate = (vi, val) =>
+    setForm({ ...form, viewpoints: form.viewpoints.map((vp, i) => i === vi ? { ...vp, requestDate: val || '' } : vp) });
+  const setVpAmount = (vi, val) =>
+    setForm({ ...form, viewpoints: form.viewpoints.map((vp, i) => i === vi ? { ...vp, amount: val } : vp) });
 
   // 案件の検索：案件名・社内案件名・会社名・お客様担当者・制作担当者・視点名・ステップ名で絞り込み
   const [searchQuery, setSearchQuery] = useState('');
@@ -3718,6 +3759,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
     for (const vp of (f.viewpoints || [])) {
       if ((vp.viewpointName || '').trim() || (vp.assignee || '').trim()) return true;
       if ((vp.manualStart || '').trim() || (vp.manualEnd || '').trim() || (vp.deadline || '').trim()) return true;
+      if ((vp.requestDate || '').trim() || String(vp.amount ?? '').trim()) return true;
       for (const s of (vp.steps || [])) {
         if ((s.name || '').trim() || String(s.hours ?? '').trim() || String(s.completedHours ?? '').trim()) return true;
       }
@@ -4083,6 +4125,31 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                       <span style={{ fontSize: 10, color: colors.textMute }}>
                         任意・この視点の個別納期。未設定なら全体納期{form.projectDeadline ? `（${form.projectDeadline}）` : ''}を使用
                       </span>
+                    </div>
+                    {/* 初回依頼日・金額（制作履歴の初回ラウンド／売上へ自動連携） */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', minWidth: 64, fontWeight: 600 }}>
+                        初回依頼日
+                      </span>
+                      <input type="date" value={vp.requestDate || ''}
+                        onChange={(e) => setVpRequestDate(vi, e.target.value)}
+                        style={{ ...inputStyle, width: 'auto', flex: '0 0 150px', padding: '6px 8px', fontSize: 12 }} />
+                      {offshoreCompanies.has((form.companyName || '').trim()) ? (
+                        <>
+                          <span style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', fontWeight: 600, marginLeft: 8 }}>金額（円）</span>
+                          <input type="text" inputMode="numeric" value={vp.amount ?? ''}
+                            onChange={(e) => setVpAmount(vi, e.target.value)}
+                            placeholder="例: 50000"
+                            style={{ ...inputStyle, width: 'auto', flex: '0 0 120px', padding: '6px 8px', fontSize: 12, textAlign: 'right' }} />
+                          <span style={{ fontSize: 10, color: colors.textMute }}>
+                            任意・新規制作の金額（税抜）。売上登録表へ自動連携。追加・修正や外注は登録後カードの「制作・納品」で
+                          </span>
+                        </>
+                      ) : (
+                        <span style={{ fontSize: 10, color: colors.textMute }}>
+                          任意・初回の制作依頼日。{(form.companyName || '').trim() ? '金額欄はオフショア会社で表示されます' : '会社名を選ぶと金額欄が表示されます（オフショアのみ）'}
+                        </span>
+                      )}
                     </div>
                   </div>
 
