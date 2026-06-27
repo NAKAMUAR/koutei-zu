@@ -11,7 +11,7 @@
 import { blankRow } from '../sales/salesUtils.js';
 import {
   normalizeHistory, computeRoundNames, deliveryBaseName, classifyProdType,
-  viewpointKey, isOffshoreCompany, num, roundTypeOf,
+  viewpointKey, isOffshoreCompany, num, roundTypeOf, stepDeliveryName,
 } from './viewpointUtils.js';
 
 // source が所有し、同期のたびに上書きするフィールド。
@@ -52,6 +52,8 @@ export function collectSalesSyncRows(tasks, customerMaster) {
   }
 
   const out = [];
+
+  // (1) 視点の制作履歴（カードの「制作・納品」で入れた追加・修正・外注など）→ 1ラウンド1行
   for (const vp of vpMap.values()) {
     const base = deliveryBaseName(vp.projectName, vp.viewpointName, vp.deliveryNameOverride);
     const named = computeRoundNames(vp.history, base);
@@ -81,6 +83,36 @@ export function collectSalesSyncRows(tasks, customerMaster) {
         },
       });
     }
+  }
+
+  // (2) ステップごとの金額（登録/編集フォームで入れた金額）→ 1ステップ1行。
+  //     納品名は「納品名＋ステップ名」。金額の入ったステップのみ売上行にする。
+  for (const t of (tasks || [])) {
+    if (t.cancelled) continue;
+    if (num(t.stepAmount) <= 0) continue;
+    const vp = vpMap.get(viewpointKey(t.projectName, t.viewpointName));
+    const base = deliveryBaseName(t.projectName, t.viewpointName, vp ? vp.deliveryNameOverride : (t.deliveryNameOverride || ''));
+    const date = t.stepRequestDate || '';
+    const month = /^\d{4}-\d{2}/.test(date) ? date.slice(0, 7) : null;
+    out.push({
+      srcVp: viewpointKey(t.projectName, t.viewpointName),
+      srcRound: `step:${t.id}`,
+      month,
+      category: categoryForCompany(t.companyName, customerMaster),
+      roundType: 'step',
+      fields: {
+        company: t.companyName || '',
+        person: t.customerContact || '',
+        projectName: t.projectName || '',
+        prodType: classifyProdType(t.viewpointName),
+        prodName: stepDeliveryName(base, t.stepName),
+        prodAmount: String(t.stepAmount),
+        inHouseOutsourcer: '',
+        externalOutsourcer: '',
+        outsourceVND: '',
+        orderDate: date,
+      },
+    });
   }
   return out;
 }

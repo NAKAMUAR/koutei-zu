@@ -6,7 +6,7 @@ import SalesView from './sales/SalesView.jsx';
 import {
   ROUND_TYPES, roundTypeOf, blankRound, normalizeHistory, deliveryBaseName,
   deliveryCount, computeRoundNames, currentDeliveryName, classifyProdType,
-  isOffshoreCompany, metaFromGroup, num as vpNum,
+  isOffshoreCompany, metaFromGroup, num as vpNum, stepDeliveryName,
 } from './viewpoint/viewpointUtils.js';
 import { collectSalesSyncRows, reconcileLedger } from './viewpoint/salesSync.js';
 import { blankDoc, blankItem } from './billing/billingUtils.js';
@@ -145,17 +145,16 @@ const VIEWPOINT_PRESETS = [
   { id: 'photo', name: '写真合成', steps: ['写真合成'] },
 ];
 function makeViewpointFromPreset(preset) {
-  if (!preset) return { viewpointName: '', assignee: '', manualStart: '', manualEnd: '', deadline: '', requestDate: '', amount: '', deliveryName: '', steps: [{ name: '', hours: '', completedHours: '' }] };
+  if (!preset) return { viewpointName: '', assignee: '', manualStart: '', manualEnd: '', deadline: '', deliveryName: '', steps: [{ name: '', hours: '', completedHours: '', amount: '', requestDate: '' }] };
   return {
     viewpointName: preset.name,
     assignee: '',
     manualStart: '', // 視点ごとの開始時間指定（最初の未完了ステップに適用）
     manualEnd: '',   // 視点ごとの終了時間指定（最後の未完了ステップに適用・作業終了予定）
     deadline: '',    // 視点ごとの納期（お客様への提出日）
-    requestDate: '', // 初回の依頼日（制作履歴の初回ラウンドになる）
-    amount: '',      // 金額（円・税抜。新規制作金額。売上へ自動連携）
     deliveryName: '', // 納品名（納品用の視点名）の手動上書き。空なら自動（案件名_視点名）
-    steps: preset.steps.map(name => ({ name, hours: '', completedHours: '' })),
+    // ステップごとに金額・依頼日を持つ（ステップ＝納品単位。売上へ1ステップ1行で連携）
+    steps: preset.steps.map(name => ({ name, hours: '', completedHours: '', amount: '', requestDate: '' })),
   };
 }
 
@@ -1765,6 +1764,9 @@ export default function App() {
             status,
             completedAt: status === 'done' ? (existing?.completedAt || (baseTime + seq)) : null,
             createdAt: existing?.createdAt || (baseTime + seq),
+            // ステップごとの金額・依頼日（ステップ＝納品単位。売上へ1ステップ1行で連携）
+            stepAmount: (step.amount === undefined || step.amount === null) ? '' : String(step.amount).trim(),
+            stepRequestDate: (step.requestDate || '').trim(),
           };
           // 完了実績（actualEnd）・中止フラグは編集後も維持する
           if (status === 'done' && existing?.actualEnd) record.actualEnd = existing.actualEnd;
@@ -1785,24 +1787,15 @@ export default function App() {
         if (vpLastActive) vpLastActive.manualEnd = vp.manualEnd || null;
         else if (vp.manualEnd && vpRecs.length > 0) vpRecs[vpRecs.length - 1].manualEnd = vp.manualEnd;
 
-        // 制作履歴（視点メタ）の引き継ぎと、フォームの「初回依頼日・金額」を初回ラウンドへ反映。
-        // 既存の追加・修正ラウンドや納品名上書き・集計フラグは保持する。
+        // 視点メタ（制作履歴・納品名上書き・集計フラグ）の引き継ぎ。
+        // 制作履歴（カードの追加・修正・外注）はそのまま保持し、ステップ金額は上の各レコードに保存済み。
         let existingMeta = null;
         if (originalById) {
           for (const s of vp.steps) {
             if (s.taskId && originalById.has(s.taskId)) { existingMeta = originalById.get(s.taskId); break; }
           }
         }
-        let vpHistory = normalizeHistory(existingMeta?.prodHistory);
-        const amtStr = (vp.amount === undefined || vp.amount === null) ? '' : String(vp.amount).trim();
-        const reqDate = (vp.requestDate || '').trim();
-        const initIdx = vpHistory.findIndex(r => r.type === 'initial');
-        if (initIdx >= 0) {
-          vpHistory = vpHistory.map((r, i) => i === initIdx ? { ...r, amount: amtStr, date: reqDate } : r);
-        } else if (amtStr !== '' || reqDate !== '') {
-          const r0 = blankRound('initial', reqDate); r0.amount = amtStr;
-          vpHistory = [r0, ...vpHistory];
-        }
+        const vpHistory = normalizeHistory(existingMeta?.prodHistory);
         // 納品名（上書き）：フォーム値（編集時は既存値が初期表示される）。空なら自動（案件名_視点名）。
         // add-step フローでは vp.deliveryName 未定義＝既存ステップは別レコードで保持されるため空でよい。
         const deliveryOverride = (vp.deliveryName ?? '').toString().trim() || (vp.deliveryName === undefined ? (existingMeta?.deliveryNameOverride || '') : '');
@@ -2019,19 +2012,16 @@ export default function App() {
           : ((sortedSteps[sortedSteps.length - 1])?.manualEnd || latestActualEnd(sortedSteps) || ''),
         // 視点ごとの納期：この視点のタスクから（最初に見つかったもの）
         deadline: (sortedSteps.find(t => t.deadline) || {}).deadline || '',
-        // 初回依頼日・金額：制作履歴の初回ラウンドから／納品名：上書き値から（無ければ空）
-        ...(() => {
-          const ht = sortedSteps.find(t => Array.isArray(t.prodHistory) && t.prodHistory.length);
-          const init = ht ? normalizeHistory(ht.prodHistory).find(r => r.type === 'initial') : null;
-          const ov = (sortedSteps.find(t => t.deliveryNameOverride) || {}).deliveryNameOverride || '';
-          return { requestDate: init?.date || '', amount: init?.amount ?? '', deliveryName: ov };
-        })(),
+        // 納品名（上書き）を復元
+        deliveryName: (sortedSteps.find(t => t.deliveryNameOverride) || {}).deliveryNameOverride || '',
         steps: sortedSteps.map(t => ({
           taskId: t.id,
           name: t.stepName || '',
           assignee: t.assignee || '',
           hours: fmtHM(t.hours),
           completedHours: fmtHM(t.completedHours || 0),
+          amount: t.stepAmount ?? '',
+          requestDate: t.stepRequestDate || '',
         })),
       };
     });
@@ -2151,16 +2141,15 @@ export default function App() {
       manualStart: first.manualStart || '',
       manualEnd: last.manualEnd || '',
       deadline: (tasksOfVp.find(t => t.deadline) || {}).deadline || '',
-      ...(() => {
-        const init = normalizeHistory(group.prodHistory).find(r => r.type === 'initial');
-        return { requestDate: init?.date || '', amount: init?.amount ?? '', deliveryName: group.deliveryNameOverride || '' };
-      })(),
+      deliveryName: group.deliveryNameOverride || '',
       steps: tasksOfVp.map(t => ({
         taskId: t.id,
         name: t.stepName || '',
         assignee: t.assignee || '',
         hours: fmtHM(t.hours),
         completedHours: fmtHM(t.completedHours || 0),
+        amount: t.stepAmount ?? '',
+        requestDate: t.stepRequestDate || '',
       })),
     }];
     setForm({
@@ -2192,7 +2181,7 @@ export default function App() {
       priority: String(group.minPriority),
       projectDeadline: group.projectDeadline || '',
       // 追加ステップはこの視点の個別納期を引き継ぐ（開始・終了の指定は既存ステップ側を維持）
-      viewpoints: [{ viewpointName: group.viewpointName, assignee: group.assignee, manualStart: '', manualEnd: '', deadline: group.individualDeadline || '', steps: [{ name: '', hours: '', completedHours: '' }] }],
+      viewpoints: [{ viewpointName: group.viewpointName, assignee: group.assignee, manualStart: '', manualEnd: '', deadline: group.individualDeadline || '', deliveryName: group.deliveryNameOverride || '', steps: [{ name: '', hours: '', completedHours: '', amount: '', requestDate: '' }] }],
     });
     setEditingId(null);
     setEditMode(null);
@@ -3612,7 +3601,16 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
   };
   const addStep = (vi) => {
     const vps = [...form.viewpoints];
-    vps[vi] = { ...vps[vi], steps: [...vps[vi].steps, { name: '', hours: '', completedHours: '' }] };
+    vps[vi] = { ...vps[vi], steps: [...vps[vi].steps, { name: '', hours: '', completedHours: '', amount: '', requestDate: '' }] };
+    setForm({ ...form, viewpoints: vps });
+  };
+  // 各ステップ名称に納品名（納品名＋ステップ名）を一括反映する。二重付与はしない。
+  const fillStepNamesWithDelivery = (vi) => {
+    const vps = [...form.viewpoints];
+    const vp = vps[vi];
+    const base = deliveryBaseName(form.projectName, vp.viewpointName, vp.deliveryName);
+    if (!base) { alert('案件名と視点名を入力すると納品名を自動生成できます'); return; }
+    vps[vi] = { ...vp, steps: vp.steps.map(s => ({ ...s, name: stepDeliveryName(base, s.name) })) };
     setForm({ ...form, viewpoints: vps });
   };
   const removeStep = (vi, si) => {
@@ -3657,11 +3655,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
   // 視点ごとの納期（お客様への提出日）
   const setVpDeadline = (vi, val) =>
     setForm({ ...form, viewpoints: form.viewpoints.map((vp, i) => i === vi ? { ...vp, deadline: val || '' } : vp) });
-  // 視点ごとの初回依頼日・金額（制作履歴の初回ラウンドになる）
-  const setVpRequestDate = (vi, val) =>
-    setForm({ ...form, viewpoints: form.viewpoints.map((vp, i) => i === vi ? { ...vp, requestDate: val || '' } : vp) });
-  const setVpAmount = (vi, val) =>
-    setForm({ ...form, viewpoints: form.viewpoints.map((vp, i) => i === vi ? { ...vp, amount: val } : vp) });
+  // 視点ごとの納品名（納品用の視点名・上書き）
   const setVpDeliveryName = (vi, val) =>
     setForm({ ...form, viewpoints: form.viewpoints.map((vp, i) => i === vi ? { ...vp, deliveryName: val } : vp) });
 
@@ -3693,6 +3687,8 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
         const ppl = [r.outInHouse, r.outExternal].map(s => (s || '').trim()).filter(Boolean);
         if (v && ppl.length) for (const p of ppl) offPeople[p] = (offPeople[p] || 0) + v / ppl.length;
       }
+      // ステップごとの金額も合算
+      for (const t of (g.tasks || [])) prodAmount += vpNum(t.stepAmount);
     }
     return { parseLabel: sheetsLabel(parseNames), parseCount: parseNames.length, prodAmount, outVND, offPeople };
   }, [scheduled.active, offshoreCompanies]);
@@ -3765,9 +3761,10 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
     for (const vp of (f.viewpoints || [])) {
       if ((vp.viewpointName || '').trim() || (vp.assignee || '').trim()) return true;
       if ((vp.manualStart || '').trim() || (vp.manualEnd || '').trim() || (vp.deadline || '').trim()) return true;
-      if ((vp.requestDate || '').trim() || String(vp.amount ?? '').trim() || (vp.deliveryName || '').trim()) return true;
+      if ((vp.deliveryName || '').trim()) return true;
       for (const s of (vp.steps || [])) {
         if ((s.name || '').trim() || String(s.hours ?? '').trim() || String(s.completedHours ?? '').trim()) return true;
+        if (String(s.amount ?? '').trim() || (s.requestDate || '').trim()) return true;
       }
     }
     return false;
@@ -4142,24 +4139,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                         placeholder={deliveryBaseName(form.projectName, vp.viewpointName, '') || '（自動：案件名_視点名）'}
                         style={{ ...inputStyle, width: 'auto', flex: '1 1 300px', padding: '6px 8px', fontSize: 12 }} />
                       <span style={{ fontSize: 10, color: colors.textMute }}>
-                        任意・納品用の視点名。空欄なら自動（案件名_視点名／追加制作で連番）。売上の「制作名」へ連携
-                      </span>
-                    </div>
-                    {/* 初回依頼日・金額（制作履歴の初回ラウンド／売上へ自動連携） */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', minWidth: 64, fontWeight: 600 }}>
-                        初回依頼日
-                      </span>
-                      <input type="date" value={vp.requestDate || ''}
-                        onChange={(e) => setVpRequestDate(vi, e.target.value)}
-                        style={{ ...inputStyle, width: 'auto', flex: '0 0 150px', padding: '6px 8px', fontSize: 12 }} />
-                      <span style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', fontWeight: 600, marginLeft: 8 }}>金額（円）</span>
-                      <input type="text" inputMode="numeric" value={vp.amount ?? ''}
-                        onChange={(e) => setVpAmount(vi, e.target.value)}
-                        placeholder="例: 50000"
-                        style={{ ...inputStyle, width: 'auto', flex: '0 0 120px', padding: '6px 8px', fontSize: 12, textAlign: 'right' }} />
-                      <span style={{ fontSize: 10, color: colors.textMute }}>
-                        任意・新規制作の金額（税抜）。売上登録表へ自動連携。追加・修正や外注は登録後カードの「制作・納品」で
+                        任意・納品用の視点名。空欄なら自動（案件名_視点名）。各ステップの金額・依頼日・納品名は下のステップ欄で
                       </span>
                     </div>
                   </div>
@@ -4199,11 +4179,25 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                             onChange={(val) => updateStep(vi, si, 'hours', val)}
                             colors={colors} fontJP={fontJP} />
                         </div>
-                        <div style={{ flex: '1 1 180px' }}>
+                        <div style={{ flex: '1 1 130px' }}>
                           <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>完了済</label>
                           <DurationSelect value={step.completedHours}
                             onChange={(val) => updateStep(vi, si, 'completedHours', val)}
                             colors={colors} fontJP={fontJP} />
+                        </div>
+                        <div style={{ flex: '0 1 110px' }}>
+                          <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>金額（円）</label>
+                          <input type="text" inputMode="numeric" value={step.amount ?? ''}
+                            onChange={(e) => updateStep(vi, si, 'amount', e.target.value)}
+                            placeholder="例: 30000" style={{ ...inputStyle, padding: '7px 10px', fontSize: 13, textAlign: 'right' }}
+                            title="このステップ（納品）の金額（税抜）。入力すると売上登録表へ1行連携されます" />
+                        </div>
+                        <div style={{ flex: '0 1 140px' }}>
+                          <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>依頼日</label>
+                          <input type="date" value={step.requestDate || ''}
+                            onChange={(e) => updateStep(vi, si, 'requestDate', e.target.value)}
+                            style={{ ...inputStyle, padding: '6px 8px', fontSize: 12 }}
+                            title="このステップ（納品）の依頼日。売上の発注/着手日へ連携されます" />
                         </div>
                         <button type="button" onClick={() => removeStep(vi, si)}
                           disabled={vp.steps.length <= 1}
@@ -4217,15 +4211,30 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                           title="このステップを削除"><Trash2 size={13} /></button>
                       </div>
                     ))}
-                    <button type="button" onClick={() => addStep(vi)}
-                      style={{
-                        alignSelf: 'flex-start', background: '#fff', border: `1px dashed ${colors.border}`,
-                        padding: '6px 12px', borderRadius: 4, cursor: 'pointer',
-                        fontFamily: fontJP, fontSize: 11, color: colors.textMute,
-                        display: 'flex', alignItems: 'center', gap: 4,
-                      }}>
-                      <Plus size={12} /> ステップを追加
-                    </button>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <button type="button" onClick={() => addStep(vi)}
+                        style={{
+                          background: '#fff', border: `1px dashed ${colors.border}`,
+                          padding: '6px 12px', borderRadius: 4, cursor: 'pointer',
+                          fontFamily: fontJP, fontSize: 11, color: colors.textMute,
+                          display: 'flex', alignItems: 'center', gap: 4,
+                        }}>
+                        <Plus size={12} /> ステップを追加
+                      </button>
+                      <button type="button" onClick={() => fillStepNamesWithDelivery(vi)}
+                        title="各ステップ名称を「納品名＋ステップ名」（例：案件名_視点名_ホワイト）に一括変更します。あとから手で編集もできます"
+                        style={{
+                          background: '#fff', border: `1px solid ${colors.border}`,
+                          padding: '6px 12px', borderRadius: 4, cursor: 'pointer',
+                          fontFamily: fontJP, fontSize: 11, color: '#9c7b3c', fontWeight: 600,
+                          display: 'flex', alignItems: 'center', gap: 4,
+                        }}>
+                        <FileText size={12} /> ステップ名称に納品名を入れる
+                      </button>
+                      <span style={{ fontSize: 10, color: colors.textMute }}>
+                        納品名: {deliveryBaseName(form.projectName, vp.viewpointName, vp.deliveryName) || '（案件名・視点名を入力）'}_ステップ名
+                      </span>
+                    </div>
                   </div>
                 </div>
               ))}
