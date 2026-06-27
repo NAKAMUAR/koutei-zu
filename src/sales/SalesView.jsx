@@ -32,7 +32,7 @@ export default function SalesView({ tasks, customerMaster, now, colors, fontJP, 
   const rows = month.rows || [];
 
   const persistMonth = (patch) => {
-    const nextMonth = { rows: month.rows || [], settings, updatedAt: Date.now(), ...month, ...patch, updatedAt: Date.now() };
+    const nextMonth = { rows: month.rows || [], settings, ...month, ...patch, updatedAt: Date.now() };
     const next = { ...ledger, [ym]: nextMonth };
     setLedger(next);
     storage.set(STORAGE_KEY, JSON.stringify(next)).catch(e => console.error('売上登録表 保存エラー:', e));
@@ -255,7 +255,12 @@ function CategoryTable({ category, rows, settings, total, updRow, removeRow, com
               return (
                 <tr key={r.id}>
                   {COLS.map(col => {
-                    if (col.key === 'idx') return <td key={col.key} style={{ ...td, textAlign: 'center', color: colors.textMute, background: '#faf9f5' }}>{i + 1}</td>;
+                    if (col.key === 'idx') return (
+                      <td key={col.key} style={{ ...td, textAlign: 'center', color: colors.textMute, background: r.srcRound ? '#eef3e8' : '#faf9f5' }}
+                        title={r.srcRound ? '視点（進行中案件）の制作履歴から自動連携された行です。会社名・制作名・金額・外注は視点側で編集してください（手動編集は次回同期で上書きされます）。' : undefined}>
+                        {i + 1}{r.srcRound ? <div style={{ fontSize: 8, color: '#5a7a4a', fontWeight: 700 }}>自動</div> : null}
+                      </td>
+                    );
                     if (col.calc) return <td key={col.key} style={{ ...td, textAlign: 'right', padding: '4px 5px', background: '#f7f6f2', color: '#333' }}>{formatYen(calcVal[col.key])}</td>;
                     if (col.type === 'check') return <td key={col.key} style={{ ...td, textAlign: 'center' }}><input type="checkbox" checked={!!r[col.key]} onChange={e => updRow(r.id, { [col.key]: e.target.checked })} /></td>;
                     if (col.type === 'date') return <td key={col.key} style={td}><input type="date" value={r[col.key] || ''} onChange={e => updRow(r.id, { [col.key]: e.target.value })} style={cellInput()} /></td>;
