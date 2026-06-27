@@ -92,7 +92,7 @@ export function collectSalesSyncRows(tasks, customerMaster) {
     if (num(t.stepAmount) <= 0) continue;
     const vp = vpMap.get(viewpointKey(t.projectName, t.viewpointName));
     const base = deliveryBaseName(t.projectName, t.viewpointName, vp ? vp.deliveryNameOverride : (t.deliveryNameOverride || ''));
-    const date = t.stepRequestDate || '';
+    const date = t.stepRequestDate || t.projectRequestDate || '';
     const month = /^\d{4}-\d{2}/.test(date) ? date.slice(0, 7) : null;
     out.push({
       srcVp: viewpointKey(t.projectName, t.viewpointName),

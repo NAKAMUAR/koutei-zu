@@ -1197,6 +1197,8 @@ export default function App() {
   const makeEmptyViewpoint = () => makeViewpointFromPreset(VIEWPOINT_PRESETS[0]);
   const emptyForm = {
     projectName: '', projectNameInternal: '', companyName: '', customerContact: '', assignee: '', priority: '', memo: '', tentative: false, tentativeStart: '', tentativeEnd: '',
+    // 案件全体の依頼日（案件共通）。ステップに個別の依頼日が無いとき売上の発注/着手日に使う
+    projectRequestDate: '',
     // 案件全体の納期（全体設定）。各視点の納期（個別設定）が未設定のとき適用する
     projectDeadline: '',
     // 視点（担当タスク）の動的リスト。各視点の中にステップ（工程）を持つ。
@@ -1758,6 +1760,7 @@ export default function App() {
             tentativeEnd: form.tentative ? (form.tentativeEnd || null) : null,
             deadline: vp.deadline || null,               // 個別納期（視点）
             projectDeadline: (form.projectDeadline || '').trim() || null, // 全体納期（案件）
+            projectRequestDate: (form.projectRequestDate || '').trim() || null, // 依頼日（案件共通）
             // ステップ個別の開始・終了指定は維持（フォームの欄は下で先頭/末尾の未完了ステップに適用）
             manualStart: existing?.manualStart || null,
             manualEnd: existing?.manualEnd || null,
@@ -1960,6 +1963,7 @@ export default function App() {
       tentativeStart: task.tentativeStart || '',
       tentativeEnd: task.tentativeEnd || '',
       projectDeadline: task.projectDeadline || '',
+      projectRequestDate: task.projectRequestDate || '',
       viewpoints: [{
         viewpointName: task.viewpointName || '',
         assignee: task.assignee || '',
@@ -2041,6 +2045,7 @@ export default function App() {
       tentativeStart: (projectTasks.find(t => t.tentativeStart) || {}).tentativeStart || '',
       tentativeEnd: (projectTasks.find(t => t.tentativeEnd) || {}).tentativeEnd || '',
       projectDeadline: (projectTasks.find(t => t.projectDeadline) || {}).projectDeadline || '',
+      projectRequestDate: (projectTasks.find(t => t.projectRequestDate) || {}).projectRequestDate || '',
       viewpoints,
     });
     setEditingId(null);
@@ -2116,6 +2121,7 @@ export default function App() {
       tentativeStart: sibling?.tentativeStart || '',
       tentativeEnd: sibling?.tentativeEnd || '',
       projectDeadline: sibling?.projectDeadline || '',
+      projectRequestDate: sibling?.projectRequestDate || '',
       viewpoints: [makeEmptyViewpoint()],
     });
     setEditingId(null);
@@ -2161,6 +2167,7 @@ export default function App() {
       assignee: group.assignee,
       priority: String(group.minPriority || first.priority),
       projectDeadline: group.projectDeadline || first.projectDeadline || '',
+      projectRequestDate: first.projectRequestDate || '',
       viewpoints,
     });
     setEditingId(null);
@@ -2180,6 +2187,7 @@ export default function App() {
       assignee: group.assignee,
       priority: String(group.minPriority),
       projectDeadline: group.projectDeadline || '',
+      projectRequestDate: (group.tasks?.find(t => t.projectRequestDate) || {}).projectRequestDate || '',
       // 追加ステップはこの視点の個別納期を引き継ぐ（開始・終了の指定は既存ステップ側を維持）
       viewpoints: [{ viewpointName: group.viewpointName, assignee: group.assignee, manualStart: '', manualEnd: '', deadline: group.individualDeadline || '', deliveryName: group.deliveryNameOverride || '', steps: [{ name: '', hours: '', completedHours: '', amount: '', requestDate: '' }] }],
     });
@@ -3757,7 +3765,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
 
   const isFormDirty = () => {
     const f = form;
-    if ((f.projectName || f.projectNameInternal || f.companyName || f.customerContact || f.assignee || f.priority || f.projectDeadline || '').toString().trim()) return true;
+    if ((f.projectName || f.projectNameInternal || f.companyName || f.customerContact || f.assignee || f.priority || f.projectDeadline || f.projectRequestDate || '').toString().trim()) return true;
     for (const vp of (f.viewpoints || [])) {
       if ((vp.viewpointName || '').trim() || (vp.assignee || '').trim()) return true;
       if ((vp.manualStart || '').trim() || (vp.manualEnd || '').trim() || (vp.deadline || '').trim()) return true;
@@ -3975,6 +3983,21 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                   全視点へ適用
                 </button>
               )}
+            </div>
+          </div>
+          <div>
+            <label style={labelStyle}>依頼日（案件共通・任意）</label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input type="date" value={form.projectRequestDate || ''}
+                onChange={(e) => setForm({ ...form, projectRequestDate: e.target.value })}
+                style={{ ...inputStyle, flex: '0 0 160px', width: 'auto' }} />
+              {form.projectRequestDate && (
+                <button type="button" onClick={() => setForm({ ...form, projectRequestDate: '' })}
+                  style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '6px 10px', borderRadius: 3, fontSize: 11, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP }}>
+                  クリア
+                </button>
+              )}
+              <span style={{ fontSize: 10, color: colors.textMute }}>任意・案件の依頼日。ステップに依頼日が無いとき売上へ反映</span>
             </div>
           </div>
           <div>
