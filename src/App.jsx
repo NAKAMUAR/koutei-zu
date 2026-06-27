@@ -145,7 +145,7 @@ const VIEWPOINT_PRESETS = [
   { id: 'photo', name: '写真合成', steps: ['写真合成'] },
 ];
 function makeViewpointFromPreset(preset) {
-  if (!preset) return { viewpointName: '', assignee: '', manualStart: '', manualEnd: '', deadline: '', requestDate: '', amount: '', steps: [{ name: '', hours: '', completedHours: '' }] };
+  if (!preset) return { viewpointName: '', assignee: '', manualStart: '', manualEnd: '', deadline: '', requestDate: '', amount: '', deliveryName: '', steps: [{ name: '', hours: '', completedHours: '' }] };
   return {
     viewpointName: preset.name,
     assignee: '',
@@ -153,7 +153,8 @@ function makeViewpointFromPreset(preset) {
     manualEnd: '',   // 視点ごとの終了時間指定（最後の未完了ステップに適用・作業終了予定）
     deadline: '',    // 視点ごとの納期（お客様への提出日）
     requestDate: '', // 初回の依頼日（制作履歴の初回ラウンドになる）
-    amount: '',      // 金額（円・税抜。オフショアの新規制作金額。売上へ自動連携）
+    amount: '',      // 金額（円・税抜。新規制作金額。売上へ自動連携）
+    deliveryName: '', // 納品名（納品用の視点名）の手動上書き。空なら自動（案件名_視点名）
     steps: preset.steps.map(name => ({ name, hours: '', completedHours: '' })),
   };
 }
@@ -1802,9 +1803,12 @@ export default function App() {
           const r0 = blankRound('initial', reqDate); r0.amount = amtStr;
           vpHistory = [r0, ...vpHistory];
         }
+        // 納品名（上書き）：フォーム値（編集時は既存値が初期表示される）。空なら自動（案件名_視点名）。
+        // add-step フローでは vp.deliveryName 未定義＝既存ステップは別レコードで保持されるため空でよい。
+        const deliveryOverride = (vp.deliveryName ?? '').toString().trim() || (vp.deliveryName === undefined ? (existingMeta?.deliveryNameOverride || '') : '');
         for (const rec of upserts.slice(vpFirstIdx)) {
           if (vpHistory.length) rec.prodHistory = vpHistory;
-          if (existingMeta?.deliveryNameOverride) rec.deliveryNameOverride = existingMeta.deliveryNameOverride;
+          if (deliveryOverride) rec.deliveryNameOverride = deliveryOverride;
           if (existingMeta && existingMeta.countAsDelivery === false) rec.countAsDelivery = false;
         }
       }
@@ -2015,11 +2019,12 @@ export default function App() {
           : ((sortedSteps[sortedSteps.length - 1])?.manualEnd || latestActualEnd(sortedSteps) || ''),
         // 視点ごとの納期：この視点のタスクから（最初に見つかったもの）
         deadline: (sortedSteps.find(t => t.deadline) || {}).deadline || '',
-        // 初回依頼日・金額：制作履歴の初回ラウンドから（無ければ空）
+        // 初回依頼日・金額：制作履歴の初回ラウンドから／納品名：上書き値から（無ければ空）
         ...(() => {
           const ht = sortedSteps.find(t => Array.isArray(t.prodHistory) && t.prodHistory.length);
           const init = ht ? normalizeHistory(ht.prodHistory).find(r => r.type === 'initial') : null;
-          return { requestDate: init?.date || '', amount: init?.amount ?? '' };
+          const ov = (sortedSteps.find(t => t.deliveryNameOverride) || {}).deliveryNameOverride || '';
+          return { requestDate: init?.date || '', amount: init?.amount ?? '', deliveryName: ov };
         })(),
         steps: sortedSteps.map(t => ({
           taskId: t.id,
@@ -2148,7 +2153,7 @@ export default function App() {
       deadline: (tasksOfVp.find(t => t.deadline) || {}).deadline || '',
       ...(() => {
         const init = normalizeHistory(group.prodHistory).find(r => r.type === 'initial');
-        return { requestDate: init?.date || '', amount: init?.amount ?? '' };
+        return { requestDate: init?.date || '', amount: init?.amount ?? '', deliveryName: group.deliveryNameOverride || '' };
       })(),
       steps: tasksOfVp.map(t => ({
         taskId: t.id,
@@ -3657,6 +3662,8 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
     setForm({ ...form, viewpoints: form.viewpoints.map((vp, i) => i === vi ? { ...vp, requestDate: val || '' } : vp) });
   const setVpAmount = (vi, val) =>
     setForm({ ...form, viewpoints: form.viewpoints.map((vp, i) => i === vi ? { ...vp, amount: val } : vp) });
+  const setVpDeliveryName = (vi, val) =>
+    setForm({ ...form, viewpoints: form.viewpoints.map((vp, i) => i === vi ? { ...vp, deliveryName: val } : vp) });
 
   // 案件の検索：案件名・社内案件名・会社名・お客様担当者・制作担当者・視点名・ステップ名で絞り込み
   const [searchQuery, setSearchQuery] = useState('');
@@ -3679,9 +3686,8 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
       const counted = g.countAsDelivery !== false;
       const n = Math.max(1, g.deliveryCount || 0);
       if (counted) for (let i = 0; i < n; i++) parseNames.push(g.viewpointName);
-      const isOff = offshoreCompanies.has((g.companyName || '').trim());
       for (const r of normalizeHistory(g.prodHistory)) {
-        if (isOff) prodAmount += vpNum(r.amount);
+        prodAmount += vpNum(r.amount);
         const v = vpNum(r.outVND);
         outVND += v;
         const ppl = [r.outInHouse, r.outExternal].map(s => (s || '').trim()).filter(Boolean);
@@ -3759,7 +3765,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
     for (const vp of (f.viewpoints || [])) {
       if ((vp.viewpointName || '').trim() || (vp.assignee || '').trim()) return true;
       if ((vp.manualStart || '').trim() || (vp.manualEnd || '').trim() || (vp.deadline || '').trim()) return true;
-      if ((vp.requestDate || '').trim() || String(vp.amount ?? '').trim()) return true;
+      if ((vp.requestDate || '').trim() || String(vp.amount ?? '').trim() || (vp.deliveryName || '').trim()) return true;
       for (const s of (vp.steps || [])) {
         if ((s.name || '').trim() || String(s.hours ?? '').trim() || String(s.completedHours ?? '').trim()) return true;
       }
@@ -4126,6 +4132,19 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                         任意・この視点の個別納期。未設定なら全体納期{form.projectDeadline ? `（${form.projectDeadline}）` : ''}を使用
                       </span>
                     </div>
+                    {/* 納品名（納品用の視点名・上書き）。空なら自動で「案件名_視点名」 */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', minWidth: 64, fontWeight: 600 }}>
+                        納品名
+                      </span>
+                      <input type="text" value={vp.deliveryName || ''}
+                        onChange={(e) => setVpDeliveryName(vi, e.target.value)}
+                        placeholder={deliveryBaseName(form.projectName, vp.viewpointName, '') || '（自動：案件名_視点名）'}
+                        style={{ ...inputStyle, width: 'auto', flex: '1 1 300px', padding: '6px 8px', fontSize: 12 }} />
+                      <span style={{ fontSize: 10, color: colors.textMute }}>
+                        任意・納品用の視点名。空欄なら自動（案件名_視点名／追加制作で連番）。売上の「制作名」へ連携
+                      </span>
+                    </div>
                     {/* 初回依頼日・金額（制作履歴の初回ラウンド／売上へ自動連携） */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                       <span style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', minWidth: 64, fontWeight: 600 }}>
@@ -4134,22 +4153,14 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                       <input type="date" value={vp.requestDate || ''}
                         onChange={(e) => setVpRequestDate(vi, e.target.value)}
                         style={{ ...inputStyle, width: 'auto', flex: '0 0 150px', padding: '6px 8px', fontSize: 12 }} />
-                      {offshoreCompanies.has((form.companyName || '').trim()) ? (
-                        <>
-                          <span style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', fontWeight: 600, marginLeft: 8 }}>金額（円）</span>
-                          <input type="text" inputMode="numeric" value={vp.amount ?? ''}
-                            onChange={(e) => setVpAmount(vi, e.target.value)}
-                            placeholder="例: 50000"
-                            style={{ ...inputStyle, width: 'auto', flex: '0 0 120px', padding: '6px 8px', fontSize: 12, textAlign: 'right' }} />
-                          <span style={{ fontSize: 10, color: colors.textMute }}>
-                            任意・新規制作の金額（税抜）。売上登録表へ自動連携。追加・修正や外注は登録後カードの「制作・納品」で
-                          </span>
-                        </>
-                      ) : (
-                        <span style={{ fontSize: 10, color: colors.textMute }}>
-                          任意・初回の制作依頼日。{(form.companyName || '').trim() ? '金額欄はオフショア会社で表示されます' : '会社名を選ぶと金額欄が表示されます（オフショアのみ）'}
-                        </span>
-                      )}
+                      <span style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', fontWeight: 600, marginLeft: 8 }}>金額（円）</span>
+                      <input type="text" inputMode="numeric" value={vp.amount ?? ''}
+                        onChange={(e) => setVpAmount(vi, e.target.value)}
+                        placeholder="例: 50000"
+                        style={{ ...inputStyle, width: 'auto', flex: '0 0 120px', padding: '6px 8px', fontSize: 12, textAlign: 'right' }} />
+                      <span style={{ fontSize: 10, color: colors.textMute }}>
+                        任意・新規制作の金額（税抜）。売上登録表へ自動連携。追加・修正や外注は登録後カードの「制作・納品」で
+                      </span>
                     </div>
                   </div>
 
@@ -4330,7 +4341,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', background: '#fbf9f4', border: `1px solid ${colors.border}`, borderRadius: 6, padding: '8px 14px', marginBottom: 14, fontFamily: fontJP, fontSize: 12 }}>
             <span style={{ fontWeight: 700, color: '#9c7b3c' }}>進行中の集計</span>
             <span>納品パース <b>{deliverySummary.parseCount}</b>枚{deliverySummary.parseLabel ? `（${deliverySummary.parseLabel}）` : ''}</span>
-            {deliverySummary.prodAmount > 0 && <span>制作金額(オフショア) <b>¥{Math.round(deliverySummary.prodAmount).toLocaleString('ja-JP')}</b></span>}
+            {deliverySummary.prodAmount > 0 && <span>制作金額計 <b>¥{Math.round(deliverySummary.prodAmount).toLocaleString('ja-JP')}</b></span>}
             {deliverySummary.outVND > 0 && (
               <span>外注金額計 <b>{Math.round(deliverySummary.outVND).toLocaleString('ja-JP')}₫</b>
                 {Object.keys(deliverySummary.offPeople).length > 0 && (
@@ -5549,7 +5560,7 @@ function ViewpointMetaPanel({ group, setViewpointMeta, isOffshore, createBilling
           <span style={{ fontSize: 10, color: '#fff', background: '#b07d3c', borderRadius: 10, padding: '1px 7px' }}>納品{group.deliveryCount}回</span>
         )}
         {history.length > 0 && <span style={{ fontSize: 10.5, color: colors.textMute }}>履歴 {history.length}件</span>}
-        {isOffshore && totalAmount > 0 && <span style={{ fontSize: 10.5, color: '#3a7bd5', fontWeight: 600 }}>金額 {yen(totalAmount)}</span>}
+        {totalAmount > 0 && <span style={{ fontSize: 10.5, color: '#3a7bd5', fontWeight: 600 }}>金額 {yen(totalAmount)}</span>}
         {totalVND > 0 && <span style={{ fontSize: 10.5, color: '#7a8471' }}>外注 {Math.round(totalVND).toLocaleString('ja-JP')}₫</span>}
         {!countAs && <span style={{ fontSize: 10, color: '#b00', border: '1px solid #e6b3b3', borderRadius: 3, padding: '0 5px' }}>集計対象外</span>}
       </div>
@@ -5573,7 +5584,7 @@ function ViewpointMetaPanel({ group, setViewpointMeta, isOffshore, createBilling
 
           {/* 制作履歴 */}
           <div style={{ ...labelStyle, fontSize: 10.5, marginBottom: 4 }}>
-            制作履歴（初回・追加・修正と依頼日。{isOffshore ? '金額・' : ''}外注を入力すると売上登録表へ自動連携されます）
+            制作履歴（初回・追加・修正と依頼日。金額・外注を入力すると売上登録表へ自動連携されます）
           </div>
           {named.length === 0 ? (
             <div style={{ fontSize: 11, color: colors.textMute, padding: '4px 0 8px' }}>まだ制作履歴がありません。下のボタンで追加してください。</div>
@@ -5594,12 +5605,10 @@ function ViewpointMetaPanel({ group, setViewpointMeta, isOffshore, createBilling
                       <div style={labelStyle}>{r.type === 'initial' ? '初回依頼日' : r.type === 'add' ? '追加依頼日' : '修正依頼日'}</div>
                       <input type="date" value={r.date || ''} onChange={(e) => updateRound(r.id, { date: e.target.value })} style={{ ...inputBase, cursor: 'pointer' }} />
                     </div>
-                    {isOffshore && (
-                      <div>
-                        <div style={labelStyle}>金額（円・税抜）</div>
-                        <input value={r.amount ?? ''} inputMode="numeric" placeholder="0" onChange={(e) => updateRound(r.id, { amount: e.target.value })} style={{ ...inputBase, width: 90, textAlign: 'right' }} />
-                      </div>
-                    )}
+                    <div>
+                      <div style={labelStyle}>金額（円・税抜）</div>
+                      <input value={r.amount ?? ''} inputMode="numeric" placeholder="0" onChange={(e) => updateRound(r.id, { amount: e.target.value })} style={{ ...inputBase, width: 90, textAlign: 'right' }} />
+                    </div>
                     <div>
                       <div style={labelStyle}>社内外注者</div>
                       <input value={r.outInHouse || ''} onChange={(e) => updateRound(r.id, { outInHouse: e.target.value })} style={{ ...inputBase, width: 90 }} />
