@@ -4242,56 +4242,56 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                           fontSize: 11, fontWeight: 600, marginBottom: 1,
                         }}>{si + 1}</div>
                         {/* ステップ名称（納品名は隣のボタンで一括反映可） */}
-                        <div style={{ flex: '2 1 180px' }}>
+                        <div style={{ flex: '1 1 180px', minWidth: 150 }}>
                           <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>ステップ名称</label>
                           <input type="text" value={step.name}
                             onChange={(e) => updateStep(vi, si, 'name', e.target.value)}
                             placeholder="例: ホワイト" style={{ ...inputStyle, padding: '7px 10px', fontSize: 13 }} />
                         </div>
                         {/* 依頼日 */}
-                        <div style={{ flex: '0 1 140px' }}>
+                        <div style={{ flex: '0 0 130px' }}>
                           <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>依頼日</label>
                           <input type="date" value={step.requestDate || ''}
                             onChange={(e) => updateStep(vi, si, 'requestDate', e.target.value)}
                             style={{ ...inputStyle, padding: '6px 8px', fontSize: 12 }}
                             title="このステップ（納品）の依頼日。売上の発注/着手日へ連携されます" />
                         </div>
-                        {/* 完了日（年月日＋時分） */}
-                        <div style={{ flex: '0 1 230px' }}>
+                        {/* 完了日（年月日＋時分）：1行に収める */}
+                        <div style={{ flex: '0 0 320px' }}>
                           <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>完了日</label>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'nowrap' }}>
                             <input type="date" value={step.completedDate ? step.completedDate.split('T')[0] : ''}
                               onChange={(e) => setStepCompletedDate(vi, si, e.target.value, step.completedDate ? (step.completedDate.split('T')[1] || '') : '')}
-                              style={{ ...inputStyle, width: 'auto', flex: '0 0 130px', padding: '6px 8px', fontSize: 12 }} />
+                              style={{ ...inputStyle, width: 'auto', flex: '0 0 120px', padding: '6px 6px', fontSize: 12 }} />
                             <TimeSelect value={step.completedDate ? (step.completedDate.split('T')[1] || '') : ''}
                               onChange={(val) => setStepCompletedDate(vi, si, step.completedDate ? step.completedDate.split('T')[0] : '', val)}
                               colors={colors} fontJP={fontJP} allowEmpty />
                             {step.completedDate && (
                               <button type="button" onClick={() => updateStep(vi, si, 'completedDate', '')}
-                                style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '4px 6px', borderRadius: 3, fontSize: 10, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP }}>×</button>
+                                style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '4px 6px', borderRadius: 3, fontSize: 10, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP, flexShrink: 0 }}>×</button>
                             )}
                           </div>
                         </div>
                         {/* 金額（ラボ会社は対象外。制作時間×2,500円をデフォルト算出） */}
                         {amountApplicable && (
-                          <div style={{ flex: '0 1 120px' }}>
+                          <div style={{ flex: '0 0 110px' }}>
                             <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>金額（円）</label>
                             <input type="text" inputMode="numeric" value={step.amount ?? ''}
                               onChange={(e) => updateStep(vi, si, 'amount', e.target.value)}
                               placeholder={amtDefault ? `自動 ${Number(amtDefault).toLocaleString('ja-JP')}` : '例: 30000'}
-                              style={{ ...inputStyle, padding: '7px 10px', fontSize: 13, textAlign: 'right' }}
+                              style={{ ...inputStyle, padding: '7px 8px', fontSize: 13, textAlign: 'right' }}
                               title="このステップ（納品）の金額（税抜）。制作時間×2,500円で自動算出（上書き可）。売上登録表へ1行連携" />
                           </div>
                         )}
                         {/* 制作時間（変更すると金額を自動算出） */}
-                        <div style={{ flex: '1 1 140px' }}>
+                        <div style={{ flex: '0 0 140px' }}>
                           <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>制作時間</label>
                           <DurationSelect value={step.hours}
                             onChange={(val) => updateStepHours(vi, si, val)}
                             colors={colors} fontJP={fontJP} />
                         </div>
                         {/* 完了時間 */}
-                        <div style={{ flex: '1 1 130px' }}>
+                        <div style={{ flex: '0 0 130px' }}>
                           <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>完了時間</label>
                           <DurationSelect value={step.completedHours}
                             onChange={(val) => updateStep(vi, si, 'completedHours', val)}
