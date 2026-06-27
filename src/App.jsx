@@ -145,7 +145,7 @@ const VIEWPOINT_PRESETS = [
   { id: 'photo', name: '写真合成', steps: ['写真合成'] },
 ];
 function makeViewpointFromPreset(preset) {
-  if (!preset) return { viewpointName: '', viewpointNameExternal: '', viewpointCategory: '', assignee: '', manualStart: '', manualEnd: '', deadline: '', deliveryName: '', steps: [{ name: '', hours: '', completedHours: '', amount: '', requestDate: '', completedDate: '' }] };
+  if (!preset) return { viewpointName: '', viewpointNameExternal: '', viewpointCategory: '', assignee: '', manualStart: '', manualEnd: '', deadline: '', deliveryName: '', steps: [{ name: '', hours: '', completedHours: '', amount: '', requestDate: '', completedDate: '', deliveryName: '' }] };
   return {
     viewpointName: preset.name,
     viewpointNameExternal: '', // 社外視点名（お客様向け・納品名のベース）
@@ -156,7 +156,7 @@ function makeViewpointFromPreset(preset) {
     deadline: '',    // 視点ごとの納期（お客様への提出日）
     deliveryName: '', // 納品名（納品用の視点名）の手動上書き。空なら自動（案件名_視点名）
     // ステップごとに金額・依頼日・完了日を持つ（ステップ＝納品単位。売上へ1ステップ1行で連携）
-    steps: preset.steps.map(name => ({ name, hours: '', completedHours: '', amount: '', requestDate: '', completedDate: '' })),
+    steps: preset.steps.map(name => ({ name, hours: '', completedHours: '', amount: '', requestDate: '', completedDate: '', deliveryName: '' })),
   };
 }
 
@@ -1780,6 +1780,7 @@ export default function App() {
             stepAmount: (step.amount === undefined || step.amount === null) ? '' : String(step.amount).trim(),
             stepRequestDate: (step.requestDate || '').trim(),
             stepCompletedDate: (step.completedDate || '').trim(),
+            stepDeliveryNameOverride: (step.deliveryName || '').trim(),
           };
           // 完了実績（actualEnd）・中止フラグは編集後も維持する
           if (status === 'done' && existing?.actualEnd) record.actualEnd = existing.actualEnd;
@@ -2039,6 +2040,7 @@ export default function App() {
           amount: t.stepAmount ?? '',
           requestDate: t.stepRequestDate || '',
           completedDate: t.stepCompletedDate || '',
+          deliveryName: t.stepDeliveryNameOverride || '',
         })),
       };
     });
@@ -2172,6 +2174,7 @@ export default function App() {
         amount: t.stepAmount ?? '',
         requestDate: t.stepRequestDate || '',
         completedDate: t.stepCompletedDate || '',
+        deliveryName: t.stepDeliveryNameOverride || '',
       })),
     }];
     setForm({
@@ -2205,7 +2208,7 @@ export default function App() {
       projectDeadline: group.projectDeadline || '',
       projectRequestDate: (group.tasks?.find(t => t.projectRequestDate) || {}).projectRequestDate || '',
       // 追加ステップはこの視点の個別納期を引き継ぐ（開始・終了の指定は既存ステップ側を維持）
-      viewpoints: [{ viewpointName: group.viewpointName, viewpointNameExternal: group.viewpointNameExternal || '', viewpointCategory: group.viewpointCategory || '', assignee: group.assignee, manualStart: '', manualEnd: '', deadline: group.individualDeadline || '', deliveryName: group.deliveryNameOverride || '', steps: [{ name: '', hours: '', completedHours: '', amount: '', requestDate: '', completedDate: '' }] }],
+      viewpoints: [{ viewpointName: group.viewpointName, viewpointNameExternal: group.viewpointNameExternal || '', viewpointCategory: group.viewpointCategory || '', assignee: group.assignee, manualStart: '', manualEnd: '', deadline: group.individualDeadline || '', deliveryName: group.deliveryNameOverride || '', steps: [{ name: '', hours: '', completedHours: '', amount: '', requestDate: '', completedDate: '', deliveryName: '' }] }],
     });
     setEditingId(null);
     setEditMode(null);
@@ -3212,20 +3215,21 @@ function TimeSelect({ value, onChange, colors, fontJP, allowEmpty = false }) {
   };
   const selectStyle = {
     padding: '6px 4px', border: `1px solid ${colors.border}`, borderRadius: 3,
-    fontFamily: fontJP, fontSize: 13, background: '#fff', color: colors.text, cursor: 'pointer',
+    fontFamily: fontJP, fontSize: 13, background: '#fff', color: colors.text, cursor: 'pointer', flexShrink: 0,
   };
+  const lbl = { color: colors.textMute, fontSize: 13, whiteSpace: 'nowrap', flexShrink: 0 };
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, whiteSpace: 'nowrap' }}>
       <select value={h} onChange={(e) => update(e.target.value, m)} style={selectStyle}>
         {allowEmpty && <option value="">--</option>}
         {hours.map(hr => <option key={hr} value={hr}>{hr}</option>)}
       </select>
-      <span style={{ color: colors.textMute, fontSize: 13 }}>時</span>
+      <span style={lbl}>時</span>
       <select value={m} onChange={(e) => update(h, e.target.value)} style={selectStyle}>
         {allowEmpty && <option value="">--</option>}
         {mins.map(mn => <option key={mn} value={mn}>{mn}</option>)}
       </select>
-      <span style={{ color: colors.textMute, fontSize: 13 }}>分</span>
+      <span style={lbl}>分</span>
     </span>
   );
 }
@@ -3260,20 +3264,21 @@ function DurationSelect({ value, onChange, colors, fontJP, maxHours = 24 }) {
   };
   const selectStyle = {
     padding: '6px 4px', border: `1px solid ${colors.border}`, borderRadius: 3,
-    fontFamily: fontJP, fontSize: 13, background: '#fff', color: colors.text, cursor: 'pointer',
+    fontFamily: fontJP, fontSize: 13, background: '#fff', color: colors.text, cursor: 'pointer', flexShrink: 0,
   };
+  const lbl = { color: colors.textMute, fontSize: 13, whiteSpace: 'nowrap', flexShrink: 0 };
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, whiteSpace: 'nowrap' }}>
       <select value={h} onChange={(e) => update(e.target.value, m)} style={selectStyle}>
         <option value="">--</option>
         {hours.map(hr => <option key={hr} value={hr}>{hr}</option>)}
       </select>
-      <span style={{ color: colors.textMute, fontSize: 13 }}>時間</span>
+      <span style={lbl}>時間</span>
       <select value={m} onChange={(e) => update(h, e.target.value)} style={selectStyle}>
         <option value="">--</option>
         {mins.map(mn => <option key={mn} value={mn}>{mn}</option>)}
       </select>
-      <span style={{ color: colors.textMute, fontSize: 13 }}>分</span>
+      <span style={lbl}>分</span>
     </span>
   );
 }
@@ -3639,7 +3644,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
   };
   const addStep = (vi) => {
     const vps = [...form.viewpoints];
-    vps[vi] = { ...vps[vi], steps: [...vps[vi].steps, { name: '', hours: '', completedHours: '', amount: '', requestDate: '', completedDate: '' }] };
+    vps[vi] = { ...vps[vi], steps: [...vps[vi].steps, { name: '', hours: '', completedHours: '', amount: '', requestDate: '', completedDate: '', deliveryName: '' }] };
     setForm({ ...form, viewpoints: vps });
   };
   // 各ステップ名称に納品名（納品名＋ステップ名）を一括反映する。二重付与はしない。
@@ -4215,20 +4220,13 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                     </div>
                   </div>
 
-                  {/* ステップリスト（下段）：先頭に納品名（納品用の視点名） */}
+                  {/* ステップリスト（下段）：納品名はステップごとに持つ */}
                   <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', fontWeight: 600 }}>納品名</span>
-                      <input type="text" value={vp.deliveryName || ''}
-                        onChange={(e) => setVpDeliveryName(vi, e.target.value)}
-                        placeholder={deliveryBaseName(form.projectName, vp.viewpointNameExternal || vp.viewpointName, '') || '（自動：案件名_社外視点名）'}
-                        title="納品用の視点名。空欄なら自動（案件名_社外視点名）。各ステップ名称は『納品名＋ステップ名』にできます"
-                        style={{ ...inputStyle, width: 'auto', flex: '1 1 280px', padding: '6px 8px', fontSize: 12 }} />
-                      <span style={{ fontSize: 10, color: colors.textMute }}>納品名: {deliveryBaseName(form.projectName, vp.viewpointNameExternal || vp.viewpointName, vp.deliveryName) || '（案件名・視点名を入力）'}_ステップ名</span>
-                    </div>
                     {vp.steps.map((step, si) => {
                       const hNum = parseHM(step.hours);
                       const amtDefault = (!isNaN(hNum) && hNum > 0) ? String(Math.round(hNum * STEP_AMOUNT_RATE)) : '';
+                      const vpBase = deliveryBaseName(form.projectName, vp.viewpointNameExternal || vp.viewpointName, vp.deliveryName);
+                      const stepDelivery = stepDeliveryName(vpBase, step.name);
                       return (
                       <div key={si} style={{
                         display: 'flex', gap: 10, alignItems: 'flex-end',
@@ -4241,12 +4239,21 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                           display: 'flex', alignItems: 'center', justifyContent: 'center',
                           fontSize: 11, fontWeight: 600, marginBottom: 1,
                         }}>{si + 1}</div>
-                        {/* ステップ名称（納品名は隣のボタンで一括反映可） */}
-                        <div style={{ flex: '1 1 180px', minWidth: 150 }}>
+                        {/* ステップ名称 */}
+                        <div style={{ flex: '0 1 130px', minWidth: 110 }}>
                           <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>ステップ名称</label>
                           <input type="text" value={step.name}
                             onChange={(e) => updateStep(vi, si, 'name', e.target.value)}
                             placeholder="例: ホワイト" style={{ ...inputStyle, padding: '7px 10px', fontSize: 13 }} />
+                        </div>
+                        {/* 納品名（ステップごと。案件名_社外視点名_ステップ名称。空欄なら自動） */}
+                        <div style={{ flex: '1 1 220px', minWidth: 160 }}>
+                          <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>納品名</label>
+                          <input type="text" value={step.deliveryName || ''}
+                            onChange={(e) => updateStep(vi, si, 'deliveryName', e.target.value)}
+                            placeholder={stepDelivery || '案件名_社外視点名_ステップ名称'}
+                            title="このステップの納品名。空欄なら自動（案件名_社外視点名_ステップ名称）。売上の制作名へ連携されます"
+                            style={{ ...inputStyle, padding: '7px 10px', fontSize: 13 }} />
                         </div>
                         {/* 依頼日 */}
                         <div style={{ flex: '0 0 130px' }}>
@@ -4284,14 +4291,14 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                           </div>
                         )}
                         {/* 制作時間（変更すると金額を自動算出） */}
-                        <div style={{ flex: '0 0 140px' }}>
+                        <div style={{ flex: '0 0 160px' }}>
                           <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>制作時間</label>
                           <DurationSelect value={step.hours}
                             onChange={(val) => updateStepHours(vi, si, val)}
                             colors={colors} fontJP={fontJP} />
                         </div>
                         {/* 完了時間 */}
-                        <div style={{ flex: '0 0 130px' }}>
+                        <div style={{ flex: '0 0 160px' }}>
                           <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>完了時間</label>
                           <DurationSelect value={step.completedHours}
                             onChange={(val) => updateStep(vi, si, 'completedHours', val)}
@@ -4320,16 +4327,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                         }}>
                         <Plus size={12} /> ステップを追加
                       </button>
-                      <button type="button" onClick={() => fillStepNamesWithDelivery(vi)}
-                        title="各ステップ名称を「納品名＋ステップ名」（例：案件名_視点名_ホワイト）に一括変更します。あとから手で編集もできます"
-                        style={{
-                          background: '#fff', border: `1px solid ${colors.border}`,
-                          padding: '6px 12px', borderRadius: 4, cursor: 'pointer',
-                          fontFamily: fontJP, fontSize: 11, color: '#9c7b3c', fontWeight: 600,
-                          display: 'flex', alignItems: 'center', gap: 4,
-                        }}>
-                        <FileText size={12} /> ステップ名称に納品名を入れる
-                      </button>
+                      <span style={{ fontSize: 10, color: colors.textMute }}>納品名は各ステップ欄で自動表示・編集できます（空欄なら自動）</span>
                     </div>
                   </div>
                 </div>

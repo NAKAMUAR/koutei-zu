@@ -113,7 +113,7 @@ export function collectSalesSyncRows(tasks, customerMaster) {
         person: t.customerContact || '',
         projectName: t.projectName || '',
         prodType: t.viewpointCategory || classifyProdType(t.viewpointName),
-        prodName: stepDeliveryName(base, t.stepName),
+        prodName: (t.stepDeliveryNameOverride || '').trim() || stepDeliveryName(base, t.stepName),
         prodAmount: String(t.stepAmount),
         inHouseOutsourcer: '',
         externalOutsourcer: '',
