@@ -99,12 +99,15 @@ export function collectSalesSyncRows(tasks, customerMaster) {
     const base = deliveryBaseName(t.projectName, extName, vp ? vp.deliveryNameOverride : (t.deliveryNameOverride || ''));
     const date = t.stepRequestDate || t.projectRequestDate || '';
     const month = /^\d{4}-\d{2}/.test(date) ? date.slice(0, 7) : null;
+    const deliveryDate = /^\d{4}-\d{2}-\d{2}/.test(t.stepCompletedDate || '') ? t.stepCompletedDate.slice(0, 10) : '';
     out.push({
       srcVp: viewpointKey(t.projectName, t.viewpointName),
       srcRound: `step:${t.id}`,
       month,
       category: categoryForCompany(t.companyName, customerMaster),
       roundType: 'step',
+      // 完了日（納品日）も source 所有にする（このステップ行限定）
+      ownFields: [...SOURCE_FIELDS, 'deliveryDate'],
       fields: {
         company: t.companyName || '',
         person: t.customerContact || '',
@@ -116,6 +119,7 @@ export function collectSalesSyncRows(tasks, customerMaster) {
         externalOutsourcer: '',
         outsourceVND: '',
         orderDate: date,
+        deliveryDate,
       },
     });
   }
@@ -149,7 +153,7 @@ export function reconcileLedger(ledger, syncRows, fallbackMonth) {
     if (existing) {
       const row = next[existing.ym].rows.find(r => r.id === existing.id);
       if (!row) continue;
-      for (const k of SOURCE_FIELDS) {
+      for (const k of (sr.ownFields || SOURCE_FIELDS)) {
         const v = sr.fields[k] ?? '';
         if ((row[k] ?? '') !== v) { row[k] = v; changed = true; }
       }

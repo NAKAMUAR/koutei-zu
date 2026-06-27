@@ -145,7 +145,7 @@ const VIEWPOINT_PRESETS = [
   { id: 'photo', name: '写真合成', steps: ['写真合成'] },
 ];
 function makeViewpointFromPreset(preset) {
-  if (!preset) return { viewpointName: '', viewpointNameExternal: '', viewpointCategory: '', assignee: '', manualStart: '', manualEnd: '', deadline: '', deliveryName: '', steps: [{ name: '', hours: '', completedHours: '', amount: '', requestDate: '' }] };
+  if (!preset) return { viewpointName: '', viewpointNameExternal: '', viewpointCategory: '', assignee: '', manualStart: '', manualEnd: '', deadline: '', deliveryName: '', steps: [{ name: '', hours: '', completedHours: '', amount: '', requestDate: '', completedDate: '' }] };
   return {
     viewpointName: preset.name,
     viewpointNameExternal: '', // 社外視点名（お客様向け・納品名のベース）
@@ -155,8 +155,8 @@ function makeViewpointFromPreset(preset) {
     manualEnd: '',   // 視点ごとの終了時間指定（最後の未完了ステップに適用・作業終了予定）
     deadline: '',    // 視点ごとの納期（お客様への提出日）
     deliveryName: '', // 納品名（納品用の視点名）の手動上書き。空なら自動（案件名_視点名）
-    // ステップごとに金額・依頼日を持つ（ステップ＝納品単位。売上へ1ステップ1行で連携）
-    steps: preset.steps.map(name => ({ name, hours: '', completedHours: '', amount: '', requestDate: '' })),
+    // ステップごとに金額・依頼日・完了日を持つ（ステップ＝納品単位。売上へ1ステップ1行で連携）
+    steps: preset.steps.map(name => ({ name, hours: '', completedHours: '', amount: '', requestDate: '', completedDate: '' })),
   };
 }
 
@@ -1776,9 +1776,10 @@ export default function App() {
             status,
             completedAt: status === 'done' ? (existing?.completedAt || (baseTime + seq)) : null,
             createdAt: existing?.createdAt || (baseTime + seq),
-            // ステップごとの金額・依頼日（ステップ＝納品単位。売上へ1ステップ1行で連携）
+            // ステップごとの金額・依頼日・完了日（ステップ＝納品単位。売上へ1ステップ1行で連携）
             stepAmount: (step.amount === undefined || step.amount === null) ? '' : String(step.amount).trim(),
             stepRequestDate: (step.requestDate || '').trim(),
+            stepCompletedDate: (step.completedDate || '').trim(),
           };
           // 完了実績（actualEnd）・中止フラグは編集後も維持する
           if (status === 'done' && existing?.actualEnd) record.actualEnd = existing.actualEnd;
@@ -2037,6 +2038,7 @@ export default function App() {
           completedHours: fmtHM(t.completedHours || 0),
           amount: t.stepAmount ?? '',
           requestDate: t.stepRequestDate || '',
+          completedDate: t.stepCompletedDate || '',
         })),
       };
     });
@@ -2169,6 +2171,7 @@ export default function App() {
         completedHours: fmtHM(t.completedHours || 0),
         amount: t.stepAmount ?? '',
         requestDate: t.stepRequestDate || '',
+        completedDate: t.stepCompletedDate || '',
       })),
     }];
     setForm({
@@ -2202,7 +2205,7 @@ export default function App() {
       projectDeadline: group.projectDeadline || '',
       projectRequestDate: (group.tasks?.find(t => t.projectRequestDate) || {}).projectRequestDate || '',
       // 追加ステップはこの視点の個別納期を引き継ぐ（開始・終了の指定は既存ステップ側を維持）
-      viewpoints: [{ viewpointName: group.viewpointName, viewpointNameExternal: group.viewpointNameExternal || '', viewpointCategory: group.viewpointCategory || '', assignee: group.assignee, manualStart: '', manualEnd: '', deadline: group.individualDeadline || '', deliveryName: group.deliveryNameOverride || '', steps: [{ name: '', hours: '', completedHours: '', amount: '', requestDate: '' }] }],
+      viewpoints: [{ viewpointName: group.viewpointName, viewpointNameExternal: group.viewpointNameExternal || '', viewpointCategory: group.viewpointCategory || '', assignee: group.assignee, manualStart: '', manualEnd: '', deadline: group.individualDeadline || '', deliveryName: group.deliveryNameOverride || '', steps: [{ name: '', hours: '', completedHours: '', amount: '', requestDate: '', completedDate: '' }] }],
     });
     setEditingId(null);
     setEditMode(null);
@@ -3636,7 +3639,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
   };
   const addStep = (vi) => {
     const vps = [...form.viewpoints];
-    vps[vi] = { ...vps[vi], steps: [...vps[vi].steps, { name: '', hours: '', completedHours: '', amount: '', requestDate: '' }] };
+    vps[vi] = { ...vps[vi], steps: [...vps[vi].steps, { name: '', hours: '', completedHours: '', amount: '', requestDate: '', completedDate: '' }] };
     setForm({ ...form, viewpoints: vps });
   };
   // 各ステップ名称に納品名（納品名＋ステップ名）を一括反映する。二重付与はしない。
@@ -3673,6 +3676,16 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
     steps[si] = next;
     vps[vi] = { ...vps[vi], steps };
     setForm({ ...form, viewpoints: vps });
+  };
+  // ステップの完了日（年月日＋時分）。日付・時刻を別々に受け取り 'YYYY-MM-DDTHH:mm' で保存。
+  const setStepCompletedDate = (vi, si, datePart, timePart) => {
+    let val = '';
+    if (datePart || timePart) {
+      const d = datePart || fmtYMD(new Date());
+      const tm = timePart || '00:00';
+      val = `${d}T${tm}`;
+    }
+    updateStep(vi, si, 'completedDate', val);
   };
 
   // 開始・終了予定のプレビュー：実データ（他タスク）に混ぜて実スケジュールと同じ計算をする
@@ -4038,7 +4051,6 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                   クリア
                 </button>
               )}
-              <span style={{ fontSize: 10, color: colors.textMute }}>任意・案件の依頼日。ステップに依頼日が無いとき売上へ反映</span>
             </div>
           </div>
           <div>
@@ -4243,6 +4255,22 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                             onChange={(e) => updateStep(vi, si, 'requestDate', e.target.value)}
                             style={{ ...inputStyle, padding: '6px 8px', fontSize: 12 }}
                             title="このステップ（納品）の依頼日。売上の発注/着手日へ連携されます" />
+                        </div>
+                        {/* 完了日（年月日＋時分） */}
+                        <div style={{ flex: '0 1 230px' }}>
+                          <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>完了日</label>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+                            <input type="date" value={step.completedDate ? step.completedDate.split('T')[0] : ''}
+                              onChange={(e) => setStepCompletedDate(vi, si, e.target.value, step.completedDate ? (step.completedDate.split('T')[1] || '') : '')}
+                              style={{ ...inputStyle, width: 'auto', flex: '0 0 130px', padding: '6px 8px', fontSize: 12 }} />
+                            <TimeSelect value={step.completedDate ? (step.completedDate.split('T')[1] || '') : ''}
+                              onChange={(val) => setStepCompletedDate(vi, si, step.completedDate ? step.completedDate.split('T')[0] : '', val)}
+                              colors={colors} fontJP={fontJP} allowEmpty />
+                            {step.completedDate && (
+                              <button type="button" onClick={() => updateStep(vi, si, 'completedDate', '')}
+                                style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '4px 6px', borderRadius: 3, fontSize: 10, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP }}>×</button>
+                            )}
+                          </div>
                         </div>
                         {/* 金額（ラボ会社は対象外。制作時間×2,500円をデフォルト算出） */}
                         {amountApplicable && (
