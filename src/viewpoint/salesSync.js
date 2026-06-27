@@ -36,6 +36,8 @@ export function collectSalesSyncRows(tasks, customerMaster) {
         key,
         projectName: t.projectName || '',
         viewpointName: t.viewpointName || '',
+        viewpointNameExternal: t.viewpointNameExternal || '',
+        viewpointCategory: t.viewpointCategory || '',
         companyName: t.companyName || '',
         customerContact: t.customerContact || '',
         history: normalizeHistory(t.prodHistory),
@@ -48,6 +50,8 @@ export function collectSalesSyncRows(tasks, customerMaster) {
       if (!e.companyName && t.companyName) e.companyName = t.companyName;
       if (!e.customerContact && t.customerContact) e.customerContact = t.customerContact;
       if (!e.deliveryNameOverride && t.deliveryNameOverride) e.deliveryNameOverride = t.deliveryNameOverride;
+      if (!e.viewpointNameExternal && t.viewpointNameExternal) e.viewpointNameExternal = t.viewpointNameExternal;
+      if (!e.viewpointCategory && t.viewpointCategory) e.viewpointCategory = t.viewpointCategory;
     }
   }
 
@@ -55,10 +59,10 @@ export function collectSalesSyncRows(tasks, customerMaster) {
 
   // (1) 視点の制作履歴（カードの「制作・納品」で入れた追加・修正・外注など）→ 1ラウンド1行
   for (const vp of vpMap.values()) {
-    const base = deliveryBaseName(vp.projectName, vp.viewpointName, vp.deliveryNameOverride);
+    const base = deliveryBaseName(vp.projectName, vp.viewpointNameExternal || vp.viewpointName, vp.deliveryNameOverride);
     const named = computeRoundNames(vp.history, base);
     const category = categoryForCompany(vp.companyName, customerMaster);
-    const prodType = classifyProdType(vp.viewpointName);
+    const prodType = vp.viewpointCategory || classifyProdType(vp.viewpointName);
     for (const r of named) {
       const hasMoney = num(r.amount) > 0 || num(r.outVND) > 0;
       if (!hasMoney) continue;
@@ -91,7 +95,8 @@ export function collectSalesSyncRows(tasks, customerMaster) {
     if (t.cancelled) continue;
     if (num(t.stepAmount) <= 0) continue;
     const vp = vpMap.get(viewpointKey(t.projectName, t.viewpointName));
-    const base = deliveryBaseName(t.projectName, t.viewpointName, vp ? vp.deliveryNameOverride : (t.deliveryNameOverride || ''));
+    const extName = (vp && vp.viewpointNameExternal) || t.viewpointNameExternal || t.viewpointName;
+    const base = deliveryBaseName(t.projectName, extName, vp ? vp.deliveryNameOverride : (t.deliveryNameOverride || ''));
     const date = t.stepRequestDate || t.projectRequestDate || '';
     const month = /^\d{4}-\d{2}/.test(date) ? date.slice(0, 7) : null;
     out.push({
@@ -104,7 +109,7 @@ export function collectSalesSyncRows(tasks, customerMaster) {
         company: t.companyName || '',
         person: t.customerContact || '',
         projectName: t.projectName || '',
-        prodType: classifyProdType(t.viewpointName),
+        prodType: t.viewpointCategory || classifyProdType(t.viewpointName),
         prodName: stepDeliveryName(base, t.stepName),
         prodAmount: String(t.stepAmount),
         inHouseOutsourcer: '',

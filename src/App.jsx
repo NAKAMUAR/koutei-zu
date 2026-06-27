@@ -145,9 +145,11 @@ const VIEWPOINT_PRESETS = [
   { id: 'photo', name: '写真合成', steps: ['写真合成'] },
 ];
 function makeViewpointFromPreset(preset) {
-  if (!preset) return { viewpointName: '', assignee: '', manualStart: '', manualEnd: '', deadline: '', deliveryName: '', steps: [{ name: '', hours: '', completedHours: '', amount: '', requestDate: '' }] };
+  if (!preset) return { viewpointName: '', viewpointNameExternal: '', viewpointCategory: '', assignee: '', manualStart: '', manualEnd: '', deadline: '', deliveryName: '', steps: [{ name: '', hours: '', completedHours: '', amount: '', requestDate: '' }] };
   return {
     viewpointName: preset.name,
+    viewpointNameExternal: '', // 社外視点名（お客様向け・納品名のベース）
+    viewpointCategory: '',     // 内観/外観（制作種類）
     assignee: '',
     manualStart: '', // 視点ごとの開始時間指定（最初の未完了ステップに適用）
     manualEnd: '',   // 視点ごとの終了時間指定（最後の未完了ステップに適用・作業終了予定）
@@ -1030,6 +1032,8 @@ function groupByViewpoint(tasks) {
         companyName: task.companyName || '',
         customerContact: task.customerContact || '',
         viewpointName: task.viewpointName,
+        viewpointNameExternal: task.viewpointNameExternal || '',
+        viewpointCategory: task.viewpointCategory || '',
         assignee: task.assignee,
         memo: task.memo || '',
         tentative: !!task.tentative,
@@ -1049,6 +1053,8 @@ function groupByViewpoint(tasks) {
     if (!groups[key].tentativeEnd && task.tentativeEnd) groups[key].tentativeEnd = task.tentativeEnd;
     if (task.deadline && (!groups[key].individualDeadline || task.deadline < groups[key].individualDeadline)) groups[key].individualDeadline = task.deadline;
     if (task.projectDeadline && !groups[key].projectDeadline) groups[key].projectDeadline = task.projectDeadline;
+    if (!groups[key].viewpointNameExternal && task.viewpointNameExternal) groups[key].viewpointNameExternal = task.viewpointNameExternal;
+    if (!groups[key].viewpointCategory && task.viewpointCategory) groups[key].viewpointCategory = task.viewpointCategory;
     if (task.priority < groups[key].minPriority) groups[key].minPriority = task.priority;
   }
   // 各グループ内：stepOrder → priority → createdAt の順
@@ -1069,7 +1075,8 @@ function groupByViewpoint(tasks) {
     g.prodHistory = meta.history;
     g.deliveryNameOverride = meta.deliveryNameOverride;
     g.countAsDelivery = meta.countAsDelivery;
-    const base = deliveryBaseName(g.projectName, g.viewpointName, meta.deliveryNameOverride);
+    // 納品名のベースは「社外視点名」優先（無ければ社内視点名）
+    const base = deliveryBaseName(g.projectName, g.viewpointNameExternal || g.viewpointName, meta.deliveryNameOverride);
     g.deliveryBaseName = base;
     g.deliveryCount = deliveryCount(meta.history);
     g.deliveryName = currentDeliveryName(meta.history, base);
@@ -1751,6 +1758,8 @@ export default function App() {
             companyName: (form.companyName || '').trim(),
             customerContact: (form.customerContact || '').trim(),
             viewpointName: vpName,
+            viewpointNameExternal: (vp.viewpointNameExternal || '').trim(),
+            viewpointCategory: (vp.viewpointCategory || '').trim(),
             stepName: name, stepOrder: order,
             assignee: stepAssignee,
             priority, hours: stepHours, completedHours: stepCompleted,
@@ -2006,6 +2015,8 @@ export default function App() {
       const vpAssignees = [...new Set(sortedSteps.map(t => t.assignee).filter(Boolean))];
       return {
         viewpointName: v.viewpointName,
+        viewpointNameExternal: (sortedSteps.find(t => t.viewpointNameExternal) || {}).viewpointNameExternal || '',
+        viewpointCategory: (sortedSteps.find(t => t.viewpointCategory) || {}).viewpointCategory || '',
         assignee: vpAssignees.length === 1 ? vpAssignees[0] : '',
         // 視点ごとの開始時間：最初の未完了ステップの指定を表示（無ければ先頭ステップ）
         manualStart: (firstActive || sortedSteps[0])?.manualStart || '',
@@ -2143,6 +2154,8 @@ export default function App() {
     const last = tasksOfVp[tasksOfVp.length - 1];
     const viewpoints = [{
       viewpointName: group.viewpointName,
+      viewpointNameExternal: group.viewpointNameExternal || (tasksOfVp.find(t => t.viewpointNameExternal) || {}).viewpointNameExternal || '',
+      viewpointCategory: group.viewpointCategory || (tasksOfVp.find(t => t.viewpointCategory) || {}).viewpointCategory || '',
       assignee: group.assignee,
       manualStart: first.manualStart || '',
       manualEnd: last.manualEnd || '',
@@ -2189,7 +2202,7 @@ export default function App() {
       projectDeadline: group.projectDeadline || '',
       projectRequestDate: (group.tasks?.find(t => t.projectRequestDate) || {}).projectRequestDate || '',
       // 追加ステップはこの視点の個別納期を引き継ぐ（開始・終了の指定は既存ステップ側を維持）
-      viewpoints: [{ viewpointName: group.viewpointName, assignee: group.assignee, manualStart: '', manualEnd: '', deadline: group.individualDeadline || '', deliveryName: group.deliveryNameOverride || '', steps: [{ name: '', hours: '', completedHours: '', amount: '', requestDate: '' }] }],
+      viewpoints: [{ viewpointName: group.viewpointName, viewpointNameExternal: group.viewpointNameExternal || '', viewpointCategory: group.viewpointCategory || '', assignee: group.assignee, manualStart: '', manualEnd: '', deadline: group.individualDeadline || '', deliveryName: group.deliveryNameOverride || '', steps: [{ name: '', hours: '', completedHours: '', amount: '', requestDate: '' }] }],
     });
     setEditingId(null);
     setEditMode(null);
@@ -3571,6 +3584,15 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
     () => new Set((customerMaster || []).filter(c => c.contractType === 'offshore').map(c => (c.company || '').trim()).filter(Boolean)),
     [customerMaster]
   );
+  // 契約形態「ラボ」の会社（金額欄の対象外）
+  const labCompanies = useMemo(
+    () => new Set((customerMaster || []).filter(c => (c.contractType || 'labo') === 'labo').map(c => (c.company || '').trim()).filter(Boolean)),
+    [customerMaster]
+  );
+  // この案件の会社で金額欄を出すか（ラボ会社のときは対象外）
+  const amountApplicable = !labCompanies.has((form.companyName || '').trim());
+  // 制作時間（時間）からの金額デフォルト：制作時間(h) × 2,500円（税抜）
+  const STEP_AMOUNT_RATE = 2500;
   // 入力ページ内の表示切替：進行中一覧 / カレンダー / 担当者別
   const [inputTab, setInputTab] = useState('list');
   // 新規案件登録フォームの折畳み（カレンダー・担当者別では既定で折畳み）
@@ -3602,6 +3624,11 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
     vps[vi] = { ...vps[vi], viewpointName: value };
     setForm({ ...form, viewpoints: vps });
   };
+  const updateViewpointField = (vi, field, value) => {
+    const vps = [...form.viewpoints];
+    vps[vi] = { ...vps[vi], [field]: value };
+    setForm({ ...form, viewpoints: vps });
+  };
   const updateViewpointAssignee = (vi, value) => {
     const vps = [...form.viewpoints];
     vps[vi] = { ...vps[vi], assignee: value };
@@ -3630,6 +3657,20 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
     const vps = [...form.viewpoints];
     const steps = [...vps[vi].steps];
     steps[si] = { ...steps[si], [field]: value };
+    vps[vi] = { ...vps[vi], steps };
+    setForm({ ...form, viewpoints: vps });
+  };
+  // 制作時間の変更：金額が未入力かつ金額対象（ラボ以外）なら、制作時間×レートで金額を自動算出。
+  const updateStepHours = (vi, si, value) => {
+    const vps = [...form.viewpoints];
+    const steps = [...vps[vi].steps];
+    const cur = steps[si];
+    const next = { ...cur, hours: value };
+    if (amountApplicable && (cur.amount === '' || cur.amount == null)) {
+      const h = parseHM(value);
+      if (!isNaN(h) && h > 0) next.amount = String(Math.round(h * STEP_AMOUNT_RATE));
+    }
+    steps[si] = next;
     vps[vi] = { ...vps[vi], steps };
     setForm({ ...form, viewpoints: vps });
   };
@@ -3687,7 +3728,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
     for (const g of groups) {
       const counted = g.countAsDelivery !== false;
       const n = Math.max(1, g.deliveryCount || 0);
-      if (counted) for (let i = 0; i < n; i++) parseNames.push(g.viewpointName);
+      if (counted) for (let i = 0; i < n; i++) parseNames.push(g.viewpointCategory || g.viewpointName);
       for (const r of normalizeHistory(g.prodHistory)) {
         prodAmount += vpNum(r.amount);
         const v = vpNum(r.outVND);
@@ -4062,31 +4103,56 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                   border: `1px solid ${colors.border}`, borderRadius: 6,
                   overflow: 'hidden',
                 }}>
-                  {/* 視点ヘッダー */}
+                  {/* 視点ヘッダー（上段1行目）：社内視点名・社外視点名・内観/外観・担当者・削除 */}
                   <div style={{
-                    display: 'flex', gap: 10, alignItems: 'center',
+                    display: 'flex', gap: 8, alignItems: 'flex-end',
                     background: '#f3efe4', padding: '10px 12px', flexWrap: 'wrap',
                   }}>
                     <span style={{
                       fontSize: 12, fontWeight: 700, color: colors.text,
                       background: '#fff', border: `1px solid ${colors.border}`,
-                      borderRadius: 12, padding: '2px 10px', flexShrink: 0,
+                      borderRadius: 12, padding: '6px 10px', flexShrink: 0, marginBottom: 1,
                     }}>視点 {vi + 1}</span>
-                    <input type="text" list="viewpoint-list" value={vp.viewpointName}
-                      onChange={(e) => updateViewpointName(vi, e.target.value)}
-                      placeholder="視点名（例: 外観昼景）"
-                      style={{ ...inputStyle, flex: '1 1 180px', padding: '8px 10px', fontSize: 14, fontWeight: 500 }} />
-                    <Combobox value={vp.assignee || ''} onChange={(v) => updateViewpointAssignee(vi, v)}
-                      options={assigneeList}
-                      placeholder={form.assignee ? `担当者（既定: ${form.assignee}）` : '担当者'}
-                      title="この視点の担当者。空欄なら上の「デフォルト担当者」が使われます"
-                      inputStyle={{ ...inputStyle, padding: '8px 10px', fontSize: 13 }}
-                      colors={colors} fontJP={fontJP} wrapperStyle={{ flex: '1 1 150px' }} />
+                    <div style={{ flex: '1 1 160px' }}>
+                      <label style={{ ...labelStyle, fontSize: 10, marginBottom: 3 }}>社内視点名</label>
+                      <input type="text" list="viewpoint-list" value={vp.viewpointName}
+                        onChange={(e) => updateViewpointName(vi, e.target.value)}
+                        placeholder="例: 外観昼景"
+                        title="社内管理用の視点名。グループ化・スケジュールに使われます"
+                        style={{ ...inputStyle, padding: '8px 10px', fontSize: 14, fontWeight: 500 }} />
+                    </div>
+                    <div style={{ flex: '1 1 160px' }}>
+                      <label style={{ ...labelStyle, fontSize: 10, marginBottom: 3 }}>社外視点名</label>
+                      <input type="text" value={vp.viewpointNameExternal || ''}
+                        onChange={(e) => updateViewpointField(vi, 'viewpointNameExternal', e.target.value)}
+                        placeholder="お客様向け（任意）"
+                        title="お客様向けの視点名。納品名のベースになります（空欄なら社内視点名）"
+                        style={{ ...inputStyle, padding: '8px 10px', fontSize: 13 }} />
+                    </div>
+                    <div style={{ flex: '0 1 120px' }}>
+                      <label style={{ ...labelStyle, fontSize: 10, marginBottom: 3 }}>内観/外観</label>
+                      <select value={vp.viewpointCategory || ''}
+                        onChange={(e) => updateViewpointField(vi, 'viewpointCategory', e.target.value)}
+                        style={{ ...inputStyle, padding: '8px 8px', fontSize: 13, cursor: 'pointer' }}>
+                        <option value="">未設定</option>
+                        <option value="外観">外観</option>
+                        <option value="内観">内観</option>
+                      </select>
+                    </div>
+                    <div style={{ flex: '1 1 140px' }}>
+                      <label style={{ ...labelStyle, fontSize: 10, marginBottom: 3 }}>担当者</label>
+                      <Combobox value={vp.assignee || ''} onChange={(v) => updateViewpointAssignee(vi, v)}
+                        options={assigneeList}
+                        placeholder={form.assignee ? `既定: ${form.assignee}` : '担当者'}
+                        title="この視点の担当者。空欄なら上の「デフォルト担当者」が使われます"
+                        inputStyle={{ ...inputStyle, padding: '8px 10px', fontSize: 13 }}
+                        colors={colors} fontJP={fontJP} />
+                    </div>
                     <button type="button" onClick={() => removeViewpoint(vi)}
                       disabled={form.viewpoints.length <= 1}
                       style={{
                         background: '#fff', border: `1px solid ${colors.border}`,
-                        padding: '6px 10px', borderRadius: 4,
+                        padding: '8px 10px', borderRadius: 4, marginBottom: 1,
                         cursor: form.viewpoints.length <= 1 ? 'not-allowed' : 'pointer',
                         color: form.viewpoints.length <= 1 ? '#ccc' : colors.textMute,
                         display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, fontFamily: fontJP,
@@ -4094,82 +4160,64 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                       title="この視点を削除"><Trash2 size={13} /> 視点削除</button>
                   </div>
 
-                  {/* 視点ごとのスケジュール設定：開始時間・終了時間・納期 */}
+                  {/* 上段2行目：開始時間・終了時間・個別納期（1行にまとめる） */}
                   <div style={{
-                    display: 'flex', flexDirection: 'column', gap: 6,
+                    display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap',
                     padding: '8px 12px', background: '#faf7ef', borderBottom: `1px solid ${colors.border}`,
                   }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', minWidth: 64, fontWeight: 600 }}>
-                        開始時間
-                      </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }} title="任意・この視点の最初の未完了ステップに適用・差し込み優先">
+                      <span style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', fontWeight: 600 }}>開始時間</span>
                       <input type="date" value={vp.manualStart ? vp.manualStart.split('T')[0] : ''}
                         onChange={(e) => setVpManualStart(vi, e.target.value, vp.manualStart ? (vp.manualStart.split('T')[1] || '') : '')}
-                        style={{ ...inputStyle, width: 'auto', flex: '0 0 150px', padding: '6px 8px', fontSize: 12 }} />
+                        style={{ ...inputStyle, width: 'auto', flex: '0 0 140px', padding: '6px 8px', fontSize: 12 }} />
                       <TimeSelect value={vp.manualStart ? (vp.manualStart.split('T')[1] || '') : ''}
                         onChange={(val) => setVpManualStart(vi, vp.manualStart ? vp.manualStart.split('T')[0] : '', val)}
                         colors={colors} fontJP={fontJP} allowEmpty />
                       {vp.manualStart && (
                         <button type="button" onClick={() => setVpManualStart(vi, '', '')}
-                          style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '6px 10px', borderRadius: 3, fontSize: 11, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP }}>
-                          クリア
-                        </button>
+                          style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '5px 8px', borderRadius: 3, fontSize: 10, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP }}>クリア</button>
                       )}
-                      <span style={{ fontSize: 10, color: colors.textMute }}>任意・この視点の最初の未完了ステップに適用・差し込み優先</span>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', minWidth: 64, fontWeight: 600 }}>
-                        終了時間
-                      </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }} title="任意・作業終了予定。この視点の最後の未完了ステップに適用・次のタスクはこの時刻以降に開始">
+                      <span style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', fontWeight: 600 }}>終了時間</span>
                       <input type="date" value={vp.manualEnd ? vp.manualEnd.split('T')[0] : ''}
                         onChange={(e) => setVpManualEnd(vi, e.target.value, vp.manualEnd ? (vp.manualEnd.split('T')[1] || '') : '')}
-                        style={{ ...inputStyle, width: 'auto', flex: '0 0 150px', padding: '6px 8px', fontSize: 12 }} />
+                        style={{ ...inputStyle, width: 'auto', flex: '0 0 140px', padding: '6px 8px', fontSize: 12 }} />
                       <TimeSelect value={vp.manualEnd ? (vp.manualEnd.split('T')[1] || '') : ''}
                         onChange={(val) => setVpManualEnd(vi, vp.manualEnd ? vp.manualEnd.split('T')[0] : '', val)}
                         colors={colors} fontJP={fontJP} allowEmpty />
                       {vp.manualEnd && (
                         <button type="button" onClick={() => setVpManualEnd(vi, '', '')}
-                          style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '6px 10px', borderRadius: 3, fontSize: 11, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP }}>
-                          クリア
-                        </button>
+                          style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '5px 8px', borderRadius: 3, fontSize: 10, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP }}>クリア</button>
                       )}
-                      <span style={{ fontSize: 10, color: colors.textMute }}>任意・作業終了予定。この視点の最後の未完了ステップに適用・次のタスクはこの時刻以降に開始</span>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', minWidth: 64, fontWeight: 600 }}>
-                        納期（個別）
-                      </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }} title={`任意・この視点の個別納期。未設定なら全体納期${form.projectDeadline ? `（${form.projectDeadline}）` : ''}を使用`}>
+                      <span style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', fontWeight: 600 }}>個別納期</span>
                       <input type="date" value={vp.deadline || ''}
                         onChange={(e) => setVpDeadline(vi, e.target.value)}
-                        style={{ ...inputStyle, width: 'auto', flex: '0 0 150px', padding: '6px 8px', fontSize: 12 }} />
+                        style={{ ...inputStyle, width: 'auto', flex: '0 0 140px', padding: '6px 8px', fontSize: 12 }} />
                       {vp.deadline && (
                         <button type="button" onClick={() => setVpDeadline(vi, '')}
-                          style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '6px 10px', borderRadius: 3, fontSize: 11, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP }}>
-                          クリア
-                        </button>
+                          style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '5px 8px', borderRadius: 3, fontSize: 10, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP }}>クリア</button>
                       )}
-                      <span style={{ fontSize: 10, color: colors.textMute }}>
-                        任意・この視点の個別納期。未設定なら全体納期{form.projectDeadline ? `（${form.projectDeadline}）` : ''}を使用
-                      </span>
-                    </div>
-                    {/* 納品名（納品用の視点名・上書き）。空なら自動で「案件名_視点名」 */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', minWidth: 64, fontWeight: 600 }}>
-                        納品名
-                      </span>
-                      <input type="text" value={vp.deliveryName || ''}
-                        onChange={(e) => setVpDeliveryName(vi, e.target.value)}
-                        placeholder={deliveryBaseName(form.projectName, vp.viewpointName, '') || '（自動：案件名_視点名）'}
-                        style={{ ...inputStyle, width: 'auto', flex: '1 1 300px', padding: '6px 8px', fontSize: 12 }} />
-                      <span style={{ fontSize: 10, color: colors.textMute }}>
-                        任意・納品用の視点名。空欄なら自動（案件名_視点名）。各ステップの金額・依頼日・納品名は下のステップ欄で
-                      </span>
                     </div>
                   </div>
 
-                  {/* ステップリスト */}
+                  {/* ステップリスト（下段）：先頭に納品名（納品用の視点名） */}
                   <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {vp.steps.map((step, si) => (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', fontWeight: 600 }}>納品名</span>
+                      <input type="text" value={vp.deliveryName || ''}
+                        onChange={(e) => setVpDeliveryName(vi, e.target.value)}
+                        placeholder={deliveryBaseName(form.projectName, vp.viewpointNameExternal || vp.viewpointName, '') || '（自動：案件名_社外視点名）'}
+                        title="納品用の視点名。空欄なら自動（案件名_社外視点名）。各ステップ名称は『納品名＋ステップ名』にできます"
+                        style={{ ...inputStyle, width: 'auto', flex: '1 1 280px', padding: '6px 8px', fontSize: 12 }} />
+                      <span style={{ fontSize: 10, color: colors.textMute }}>納品名: {deliveryBaseName(form.projectName, vp.viewpointNameExternal || vp.viewpointName, vp.deliveryName) || '（案件名・視点名を入力）'}_ステップ名</span>
+                    </div>
+                    {vp.steps.map((step, si) => {
+                      const hNum = parseHM(step.hours);
+                      const amtDefault = (!isNaN(hNum) && hNum > 0) ? String(Math.round(hNum * STEP_AMOUNT_RATE)) : '';
+                      return (
                       <div key={si} style={{
                         display: 'flex', gap: 10, alignItems: 'flex-end',
                         background: '#fbf9f4', border: `1px solid ${colors.border}`,
@@ -4181,46 +4229,45 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                           display: 'flex', alignItems: 'center', justifyContent: 'center',
                           fontSize: 11, fontWeight: 600, marginBottom: 1,
                         }}>{si + 1}</div>
-                        <div style={{ flex: '2 1 150px' }}>
+                        {/* ステップ名称（納品名は隣のボタンで一括反映可） */}
+                        <div style={{ flex: '2 1 180px' }}>
                           <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>ステップ名称</label>
                           <input type="text" value={step.name}
                             onChange={(e) => updateStep(vi, si, 'name', e.target.value)}
                             placeholder="例: ホワイト" style={{ ...inputStyle, padding: '7px 10px', fontSize: 13 }} />
                         </div>
-                        <div style={{ flex: '1 1 150px' }}>
-                          <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>担当者</label>
-                          <Combobox value={step.assignee || ''} onChange={(v) => updateStep(vi, si, 'assignee', v)}
-                            options={assigneeList}
-                            placeholder={(vp.assignee || form.assignee) ? `既定: ${vp.assignee || form.assignee}` : '担当者'}
-                            title="このステップの担当者。空欄なら視点の担当者（または既定担当者）が使われます"
-                            inputStyle={{ ...inputStyle, padding: '7px 10px', fontSize: 13 }}
-                            colors={colors} fontJP={fontJP} />
-                        </div>
-                        <div style={{ flex: '1 1 150px' }}>
-                          <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>制作時間</label>
-                          <DurationSelect value={step.hours}
-                            onChange={(val) => updateStep(vi, si, 'hours', val)}
-                            colors={colors} fontJP={fontJP} />
-                        </div>
-                        <div style={{ flex: '1 1 130px' }}>
-                          <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>完了済</label>
-                          <DurationSelect value={step.completedHours}
-                            onChange={(val) => updateStep(vi, si, 'completedHours', val)}
-                            colors={colors} fontJP={fontJP} />
-                        </div>
-                        <div style={{ flex: '0 1 110px' }}>
-                          <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>金額（円）</label>
-                          <input type="text" inputMode="numeric" value={step.amount ?? ''}
-                            onChange={(e) => updateStep(vi, si, 'amount', e.target.value)}
-                            placeholder="例: 30000" style={{ ...inputStyle, padding: '7px 10px', fontSize: 13, textAlign: 'right' }}
-                            title="このステップ（納品）の金額（税抜）。入力すると売上登録表へ1行連携されます" />
-                        </div>
+                        {/* 依頼日 */}
                         <div style={{ flex: '0 1 140px' }}>
                           <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>依頼日</label>
                           <input type="date" value={step.requestDate || ''}
                             onChange={(e) => updateStep(vi, si, 'requestDate', e.target.value)}
                             style={{ ...inputStyle, padding: '6px 8px', fontSize: 12 }}
                             title="このステップ（納品）の依頼日。売上の発注/着手日へ連携されます" />
+                        </div>
+                        {/* 金額（ラボ会社は対象外。制作時間×2,500円をデフォルト算出） */}
+                        {amountApplicable && (
+                          <div style={{ flex: '0 1 120px' }}>
+                            <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>金額（円）</label>
+                            <input type="text" inputMode="numeric" value={step.amount ?? ''}
+                              onChange={(e) => updateStep(vi, si, 'amount', e.target.value)}
+                              placeholder={amtDefault ? `自動 ${Number(amtDefault).toLocaleString('ja-JP')}` : '例: 30000'}
+                              style={{ ...inputStyle, padding: '7px 10px', fontSize: 13, textAlign: 'right' }}
+                              title="このステップ（納品）の金額（税抜）。制作時間×2,500円で自動算出（上書き可）。売上登録表へ1行連携" />
+                          </div>
+                        )}
+                        {/* 制作時間（変更すると金額を自動算出） */}
+                        <div style={{ flex: '1 1 140px' }}>
+                          <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>制作時間</label>
+                          <DurationSelect value={step.hours}
+                            onChange={(val) => updateStepHours(vi, si, val)}
+                            colors={colors} fontJP={fontJP} />
+                        </div>
+                        {/* 完了時間 */}
+                        <div style={{ flex: '1 1 130px' }}>
+                          <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>完了時間</label>
+                          <DurationSelect value={step.completedHours}
+                            onChange={(val) => updateStep(vi, si, 'completedHours', val)}
+                            colors={colors} fontJP={fontJP} />
                         </div>
                         <button type="button" onClick={() => removeStep(vi, si)}
                           disabled={vp.steps.length <= 1}
@@ -4233,7 +4280,8 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                           }}
                           title="このステップを削除"><Trash2 size={13} /></button>
                       </div>
-                    ))}
+                      );
+                    })}
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
                       <button type="button" onClick={() => addStep(vi)}
                         style={{
@@ -4254,9 +4302,6 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                         }}>
                         <FileText size={12} /> ステップ名称に納品名を入れる
                       </button>
-                      <span style={{ fontSize: 10, color: colors.textMute }}>
-                        納品名: {deliveryBaseName(form.projectName, vp.viewpointName, vp.deliveryName) || '（案件名・視点名を入力）'}_ステップ名
-                      </span>
                     </div>
                   </div>
                 </div>
@@ -5562,7 +5607,7 @@ function ViewpointGroupList({ groups, allActive, now, caseEditMode, companyOrder
 function ViewpointMetaPanel({ group, setViewpointMeta, isOffshore, createBillingFromViewpoint, colors, fontJP }) {
   const [open, setOpen] = useState(false);
   const history = normalizeHistory(group.prodHistory);
-  const base = group.deliveryBaseName || deliveryBaseName(group.projectName, group.viewpointName, group.deliveryNameOverride);
+  const base = group.deliveryBaseName || deliveryBaseName(group.projectName, group.viewpointNameExternal || group.viewpointName, group.deliveryNameOverride);
   const named = computeRoundNames(history, base);
   const countAs = group.countAsDelivery !== false;
 
@@ -5733,6 +5778,12 @@ function ViewpointCard({ group, now, caseEditMode, allSortedIds, companyFirstIds
             {group.projectNameInternal || group.projectName}
             <span style={{ color: colors.textMute, fontWeight: 400, margin: '0 8px' }}>／</span>
             {group.viewpointName}
+            {group.viewpointCategory && (
+              <span style={{ fontSize: 10, fontWeight: 700, color: '#fff', background: group.viewpointCategory === '外観' ? '#3a7bd5' : '#7a8471', borderRadius: 10, padding: '1px 7px', marginLeft: 8, verticalAlign: 'middle' }}>{group.viewpointCategory}</span>
+            )}
+            {group.viewpointNameExternal && (
+              <span style={{ fontSize: 11, color: colors.textMute, fontWeight: 400, marginLeft: 8 }}>（社外: {group.viewpointNameExternal}）</span>
+            )}
           </div>
           {group.projectNameInternal && group.projectName && (
             <div style={{ fontSize: 11, color: colors.textMute, marginBottom: 4 }}>
