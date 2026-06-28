@@ -6025,6 +6025,7 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
   const [editingCompletedHours, setEditingCompletedHours] = useState(false);
   const [totalHoursInput, setTotalHoursInput] = useState(fmtHM(task.hours));
   const [completedHoursInput, setCompletedHoursInput] = useState(fmtHM(task.completedHours || 0));
+  const [copiedDelivery, setCopiedDelivery] = useState(''); // コピー済みフィードバック（コピーした文字列）
   useEffect(() => { setPriorityInput(String(task.priority)); }, [task.priority]);
   useEffect(() => { setTotalHoursInput(fmtHM(task.hours)); }, [task.hours]);
   useEffect(() => { setCompletedHoursInput(fmtHM(task.completedHours || 0)); }, [task.completedHours]);
@@ -6052,6 +6053,17 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
     const v = parseHM(completedHoursInput);
     if (!isNaN(v) && v >= 0 && v !== (task.completedHours || 0) && onSetCompletedHours) onSetCompletedHours(v);
     else setCompletedHoursInput(fmtHM(task.completedHours || 0));
+  };
+
+  // 納品名をクリップボードへコピー（クリックで使う）
+  const copyDelivery = async (text) => {
+    const t = (text || '').trim();
+    if (!t) return;
+    try {
+      await navigator.clipboard.writeText(t);
+      setCopiedDelivery(t);
+      setTimeout(() => setCopiedDelivery(c => (c === t ? '' : c)), 1500);
+    } catch (e) { alert('コピーに失敗しました: ' + e); }
   };
 
   // 開始時間指定の編集を開始（既定値：現在の指定 → 無ければ現在のスケジュール開始）
@@ -6197,9 +6209,24 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
             <div style={{ fontSize: 10.5, color: colors.textMute, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 4 }}>
               {stepDelivery && (
                 <span title="納品名（社外視点名ベース／社内視点名ベースを併記）">
-                  納品名: <span style={{ color: '#9c7b3c', fontWeight: 600 }}>{stepDelivery}</span>
+                  納品名:{' '}
+                  <button type="button" onClick={() => copyDelivery(stepDelivery)}
+                    title="クリックでコピー"
+                    style={{ background: 'transparent', border: 'none', padding: 0, margin: 0, font: 'inherit', color: '#9c7b3c', fontWeight: 600, cursor: 'pointer' }}>
+                    {stepDelivery}
+                  </button>
                   {stepDeliveryInternal && stepDeliveryInternal !== stepDelivery && (
-                    <span style={{ color: colors.textMute, marginLeft: 4 }} title="社内視点名ベース">／ {stepDeliveryInternal}</span>
+                    <>
+                      <span style={{ color: colors.textMute }}> ／ </span>
+                      <button type="button" onClick={() => copyDelivery(stepDeliveryInternal)}
+                        title="クリックでコピー（社内視点名ベース）"
+                        style={{ background: 'transparent', border: 'none', padding: 0, margin: 0, font: 'inherit', color: colors.textMute, cursor: 'pointer' }}>
+                        {stepDeliveryInternal}
+                      </button>
+                    </>
+                  )}
+                  {copiedDelivery && (copiedDelivery === stepDelivery || copiedDelivery === stepDeliveryInternal) && (
+                    <span style={{ color: colors.progress, fontWeight: 600, marginLeft: 6 }}>✓ コピーしました</span>
                   )}
                 </span>
               )}
