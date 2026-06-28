@@ -1,8 +1,9 @@
-// 視点（依頼項目）の制作履歴 → 売上登録表への自動同期ロジック（純粋関数）。
+// ステップ（タスク）の請求情報 → 売上登録表への自動同期ロジック（純粋関数）。
 //
 // 方針：
-//  - 制作ラウンドのうち「金額（制作金額 or 外注金額）が入っているもの」を売上行へ反映する。
-//  - 生成行は srcVp（視点キー）・srcRound（ラウンドID）で識別。手動行（src 無し）は一切触らない。
+//  - 請求の元データはステップに一本化（種類・金額・外注・依頼日・納品名）。制作履歴(prodHistory)は使わない。
+//  - 「金額（制作金額 or 外注金額VND）が入っているステップ」を1ステップ1行で売上行へ反映する。
+//  - 生成行は srcVp（視点キー）・srcRound（`step:${taskId}`）で識別。手動行（src 無し）は一切触らない。
 //  - 既存の生成行は source 所有フィールドのみ更新し、ユーザが編集する項目
 //    （区分・納品日・請求/入金・備考・枚数など）は保持する。
 //  - ラウンドが消えた生成行は削除する（＝視点から金額を消すと売上行も消える）。
@@ -10,7 +11,7 @@
 
 import { blankRow } from '../sales/salesUtils.js';
 import {
-  normalizeHistory, computeRoundNames, deliveryBaseName, classifyProdType,
+  normalizeHistory, deliveryBaseName, classifyProdType,
   viewpointKey, isOffshoreCompany, num, roundTypeOf, stepDeliveryName,
 } from './viewpointUtils.js';
 
@@ -57,43 +58,13 @@ export function collectSalesSyncRows(tasks, customerMaster) {
 
   const out = [];
 
-  // (1) 視点の制作履歴（カードの「制作・納品」で入れた追加・修正・外注など）→ 1ラウンド1行
-  for (const vp of vpMap.values()) {
-    const base = deliveryBaseName(vp.projectName, vp.viewpointNameExternal || vp.viewpointName, vp.deliveryNameOverride);
-    const named = computeRoundNames(vp.history, base);
-    const category = categoryForCompany(vp.companyName, customerMaster);
-    const prodType = vp.viewpointCategory || classifyProdType(vp.viewpointName);
-    for (const r of named) {
-      const hasMoney = num(r.amount) > 0 || num(r.outVND) > 0;
-      if (!hasMoney) continue;
-      const month = /^\d{4}-\d{2}/.test(r.date || '') ? r.date.slice(0, 7) : null;
-      out.push({
-        srcVp: vp.key,
-        srcRound: r.id,
-        month,
-        category,
-        roundType: roundTypeOf(r.type).id,
-        fields: {
-          company: vp.companyName,
-          person: vp.customerContact,
-          projectName: vp.projectName,
-          prodType,
-          prodName: r.deliveryName,
-          prodAmount: r.amount === '' || r.amount == null ? '' : String(r.amount),
-          inHouseOutsourcer: r.outInHouse || '',
-          externalOutsourcer: r.outExternal || '',
-          outsourceVND: r.outVND === '' || r.outVND == null ? '' : String(r.outVND),
-          orderDate: r.date || '',
-        },
-      });
-    }
-  }
-
-  // (2) ステップごとの金額（登録/編集フォームで入れた金額）→ 1ステップ1行。
-  //     納品名は「納品名＋ステップ名」。金額の入ったステップのみ売上行にする。
+  // ステップ（タスク）ごとの請求 → 1ステップ1行。
+  // 請求の元データはステップに一本化（種類・金額・外注・依頼日・納品名）。
+  // 金額（制作金額）または外注金額(VND)のどちらかが入っているステップのみ売上行にする。
+  // 納品名は「納品名＋ステップ名」（手動上書き優先）。
   for (const t of (tasks || [])) {
     if (t.cancelled) continue;
-    if (num(t.stepAmount) <= 0) continue;
+    if (num(t.stepAmount) <= 0 && num(t.stepOutVND) <= 0) continue;
     const vp = vpMap.get(viewpointKey(t.projectName, t.viewpointName));
     const extName = (vp && vp.viewpointNameExternal) || t.viewpointNameExternal || t.viewpointName;
     const base = deliveryBaseName(t.projectName, extName, vp ? vp.deliveryNameOverride : (t.deliveryNameOverride || ''));
@@ -105,7 +76,8 @@ export function collectSalesSyncRows(tasks, customerMaster) {
       srcRound: `step:${t.id}`,
       month,
       category: categoryForCompany(t.companyName, customerMaster),
-      roundType: 'step',
+      // 種類（初回/追加/修正）。空なら初回扱い。判定不能なら従来どおり 'step'。
+      roundType: (t.stepRoundType || '').trim() ? roundTypeOf(t.stepRoundType).id : 'step',
       // 完了日（納品日）も source 所有にする（このステップ行限定）
       ownFields: [...SOURCE_FIELDS, 'deliveryDate'],
       fields: {
@@ -114,10 +86,10 @@ export function collectSalesSyncRows(tasks, customerMaster) {
         projectName: t.projectName || '',
         prodType: t.viewpointCategory || classifyProdType(t.viewpointName),
         prodName: (t.stepDeliveryNameOverride || '').trim() || stepDeliveryName(base, t.stepName),
-        prodAmount: String(t.stepAmount),
-        inHouseOutsourcer: '',
-        externalOutsourcer: '',
-        outsourceVND: '',
+        prodAmount: (t.stepAmount === '' || t.stepAmount == null) ? '' : String(t.stepAmount),
+        inHouseOutsourcer: t.stepOutInHouse || '',
+        externalOutsourcer: t.stepOutExternal || '',
+        outsourceVND: (t.stepOutVND === '' || t.stepOutVND == null) ? '' : String(t.stepOutVND),
         orderDate: date,
         deliveryDate,
       },

@@ -4,9 +4,9 @@ import { storage, tasksStore, signIn, signOutUser, subscribeAuth } from './fireb
 import BillingView from './billing/BillingView.jsx';
 import SalesView from './sales/SalesView.jsx';
 import {
-  ROUND_TYPES, roundTypeOf, blankRound, normalizeHistory, deliveryBaseName,
-  deliveryCount, computeRoundNames, currentDeliveryName, classifyProdType,
-  isOffshoreCompany, metaFromGroup, num as vpNum, stepDeliveryName,
+  ROUND_TYPES, roundTypeOf, normalizeHistory, deliveryBaseName,
+  deliveryCount, currentDeliveryName,
+  metaFromGroup, num as vpNum, stepDeliveryName,
 } from './viewpoint/viewpointUtils.js';
 import { collectSalesSyncRows, reconcileLedger } from './viewpoint/salesSync.js';
 import { blankDoc, blankItem } from './billing/billingUtils.js';
@@ -144,8 +144,17 @@ const VIEWPOINT_PRESETS = [
   { id: 'pers', name: 'パース', steps: ['ホワイト', 'カラー', 'その他修正'] },
   { id: 'photo', name: '写真合成', steps: ['写真合成'] },
 ];
+// ステップ1件分の空テンプレート（種類・外注などの請求情報を含む）。
+function makeEmptyStep(name = '') {
+  return {
+    name, hours: '', completedHours: '',
+    amount: '', requestDate: '', completedDate: '', deliveryName: '',
+    // 種類（初回/追加/修正）・外注情報（社内外注者/社外外注者/外注VND）。請求はステップが唯一の元データ。
+    roundType: '', outInHouse: '', outExternal: '', outVND: '',
+  };
+}
 function makeViewpointFromPreset(preset) {
-  if (!preset) return { viewpointName: '', viewpointNameExternal: '', viewpointCategory: '', assignee: '', manualStart: '', manualEnd: '', deadline: '', deliveryName: '', steps: [{ name: '', hours: '', completedHours: '', amount: '', requestDate: '', completedDate: '', deliveryName: '' }] };
+  if (!preset) return { viewpointName: '', viewpointNameExternal: '', viewpointCategory: '', assignee: '', manualStart: '', manualEnd: '', deadline: '', deliveryName: '', steps: [makeEmptyStep()] };
   return {
     viewpointName: preset.name,
     viewpointNameExternal: '', // 社外視点名（お客様向け・納品名のベース）
@@ -155,8 +164,8 @@ function makeViewpointFromPreset(preset) {
     manualEnd: '',   // 視点ごとの終了時間指定（最後の未完了ステップに適用・作業終了予定）
     deadline: '',    // 視点ごとの納期（お客様への提出日）
     deliveryName: '', // 納品名（納品用の視点名）の手動上書き。空なら自動（案件名_視点名）
-    // ステップごとに金額・依頼日・完了日を持つ（ステップ＝納品単位。売上へ1ステップ1行で連携）
-    steps: preset.steps.map(name => ({ name, hours: '', completedHours: '', amount: '', requestDate: '', completedDate: '', deliveryName: '' })),
+    // ステップごとに金額・依頼日・完了日・種類・外注を持つ（ステップ＝納品単位。売上へ1ステップ1行で連携）
+    steps: preset.steps.map((name, i) => ({ ...makeEmptyStep(name), roundType: i === 0 ? 'initial' : 'add' })),
   };
 }
 
@@ -1390,6 +1399,101 @@ export default function App() {
     // tasks の中身が変わるたびに再評価（参照は tasksRef を使うので tasks を依存に入れる）
   }, [tasks, customerMaster, salesLedgerSync, auth.allowed, tasksLoaded]);
 
+  // 制作履歴(prodHistory) → ステップ（請求の元データ）への一度きりの自動移行。
+  // 請求情報をステップに一本化したため、過去に制作履歴へ入れたラウンドを請求専用ステップへ写し取る。
+  //  - 非破壊：prodHistory は削除しない（既存データは残す）。
+  //  - 冪等：作成ステップに migratedFromRound=round.id を付け、同じ視点で既に移行済みのラウンドは飛ばす。
+  //          → 何度ロードしても重複を作らない。移行対象が無ければ書き込みもしない（ループしない）。
+  //  - 作成ステップは hours=0/completedHours=0・status='done'（スケジュールに出さない・請求専用）。
+  const migrationDone = useRef(false);
+  useEffect(() => {
+    if (!auth.allowed || !tasksLoaded) return;
+    if (migrationDone.current) return;
+    const handle = setTimeout(() => {
+      try {
+        const all = tasksRef.current || [];
+        // 視点キー → その視点のタスク群
+        const byVp = new Map();
+        for (const t of all) {
+          const key = `${t.assignee}::${t.projectName}::${t.viewpointName}`;
+          if (!byVp.has(key)) byVp.set(key, []);
+          byVp.get(key).push(t);
+        }
+        const baseTime = Date.now();
+        let seq = 0;
+        const newSteps = [];
+        // 既に移行済みのラウンドIDは「全タスク横断」で集める。
+        // 移行ステップは assignee='' で作るため視点グループ（assignee::案件::視点）が
+        // 元タスクと別キーになる。グループ単位で見るとリロードのたびに重複生成してしまうため、
+        // 冪等性は全体集合で担保する。
+        const migratedIds = new Set(all.map(t => t.migratedFromRound).filter(Boolean));
+        for (const [, group] of byVp) {
+          // 履歴は複製ずれ対策で最長を採用（metaFromGroup と同じ流儀）
+          let history = [];
+          for (const t of group) {
+            const h = normalizeHistory(t.prodHistory);
+            if (h.length > history.length) history = h;
+          }
+          if (history.length === 0) continue;
+          // 既存ステップの最大 stepOrder（請求専用ステップは末尾に積む）
+          let maxOrder = -1;
+          for (const t of group) {
+            const o = (t.stepOrder == null) ? -1 : t.stepOrder;
+            if (o > maxOrder) maxOrder = o;
+          }
+          // テンプレ（案件・視点メタ）として最初のタスクを使う
+          const tpl = group[0];
+          for (const r of history) {
+            if (migratedIds.has(r.id)) continue; // 冪等：移行済みは飛ばす
+            maxOrder += 1;
+            const id = `task-mig-${baseTime}-${seq}-${Math.random().toString(36).slice(2, 7)}`;
+            newSteps.push({
+              id,
+              projectName: tpl.projectName || '',
+              projectNameInternal: tpl.projectNameInternal || '',
+              companyName: tpl.companyName || '',
+              customerContact: tpl.customerContact || '',
+              viewpointName: tpl.viewpointName || '',
+              viewpointNameExternal: tpl.viewpointNameExternal || '',
+              viewpointCategory: tpl.viewpointCategory || '',
+              stepName: (r.memo || '').trim() || `${roundTypeOf(r.type).short}制作`,
+              stepOrder: maxOrder,
+              assignee: '',           // 0時間なのでスケジュールに影響しない
+              priority: tpl.priority || 99,
+              hours: 0, completedHours: 0,
+              memo: '',
+              tentative: false, tentativeStart: null, tentativeEnd: null,
+              deadline: tpl.deadline || null,
+              projectDeadline: tpl.projectDeadline || null,
+              projectRequestDate: tpl.projectRequestDate || null,
+              manualStart: null, manualEnd: null,
+              status: 'done',         // 請求専用：未対応の作業として出さない
+              completedAt: baseTime + seq,
+              createdAt: baseTime + seq,
+              // 請求情報（ステップへ写し取り）
+              stepAmount: (r.amount === '' || r.amount == null) ? '' : String(r.amount),
+              stepRequestDate: r.date || '',
+              stepCompletedDate: '',
+              stepDeliveryNameOverride: (r.memo || '').trim(),
+              stepRoundType: roundTypeOf(r.type).id,
+              stepOutInHouse: r.outInHouse || '',
+              stepOutExternal: r.outExternal || '',
+              stepOutVND: (r.outVND === '' || r.outVND == null) ? '' : String(r.outVND),
+              // 冪等キー（prodHistory は残す＝非破壊）
+              migratedFromRound: r.id,
+            });
+            migratedIds.add(r.id); // 同一ラウンドの二重生成を防ぐ（複数担当グループ対策）
+            seq += 1;
+          }
+        }
+        migrationDone.current = true; // 走るのは一度きり
+        if (newSteps.length === 0) return; // 移行対象なし → 書き込まない
+        saveTasks(prev => normalizePriorities([...prev, ...newSteps]));
+      } catch (e) { console.error('制作履歴→ステップ移行に失敗:', e); migrationDone.current = true; }
+    }, 1200);
+    return () => clearTimeout(handle);
+  }, [auth.allowed, tasksLoaded]);
+
   // データベース（Firestore）から最新データを手動で再取得して反映する。
   // アプリ更新直後などにタスクが一時的に消えて見える場合の復旧用。購読は維持したまま、
   // サーバの最新値を即座に読み直して画面へ反映する（ローカルの変更を消すことはしない）。
@@ -1795,6 +1899,12 @@ export default function App() {
             stepRequestDate: (step.requestDate || '').trim(),
             stepCompletedDate: (step.completedDate || '').trim(),
             stepDeliveryNameOverride: (step.deliveryName || '').trim(),
+            // ステップごとの請求情報（種類・外注）。請求はステップが唯一の元データ。
+            // 種類は空なら初回扱い。先頭ステップ（order 0）の既定を初回、それ以外を追加にする。
+            stepRoundType: (step.roundType || '').trim() || (order === 0 ? 'initial' : 'add'),
+            stepOutInHouse: (step.outInHouse || '').trim(),
+            stepOutExternal: (step.outExternal || '').trim(),
+            stepOutVND: (step.outVND === undefined || step.outVND === null) ? '' : String(step.outVND).trim(),
           };
           // 完了実績（actualEnd）・中止フラグは編集後も維持する
           if (status === 'done' && existing?.actualEnd) record.actualEnd = existing.actualEnd;
@@ -2056,6 +2166,10 @@ export default function App() {
           requestDate: t.stepRequestDate || '',
           completedDate: t.stepCompletedDate || '',
           deliveryName: t.stepDeliveryNameOverride || '',
+          roundType: t.stepRoundType || '',
+          outInHouse: t.stepOutInHouse || '',
+          outExternal: t.stepOutExternal || '',
+          outVND: t.stepOutVND ?? '',
         })),
       };
     });
@@ -2191,6 +2305,10 @@ export default function App() {
         requestDate: t.stepRequestDate || '',
         completedDate: t.stepCompletedDate || '',
         deliveryName: t.stepDeliveryNameOverride || '',
+        roundType: t.stepRoundType || '',
+        outInHouse: t.stepOutInHouse || '',
+        outExternal: t.stepOutExternal || '',
+        outVND: t.stepOutVND ?? '',
       })),
     }];
     setForm({
@@ -2225,7 +2343,7 @@ export default function App() {
       projectDeadline: group.projectDeadline || '',
       projectRequestDate: (group.tasks?.find(t => t.projectRequestDate) || {}).projectRequestDate || '',
       // 追加ステップはこの視点の個別納期を引き継ぐ（開始・終了の指定は既存ステップ側を維持）
-      viewpoints: [{ viewpointName: group.viewpointName, viewpointNameExternal: group.viewpointNameExternal || '', viewpointCategory: group.viewpointCategory || '', assignee: group.assignee, manualStart: '', manualEnd: '', deadline: group.individualDeadline || '', deliveryName: group.deliveryNameOverride || '', steps: [{ name: '', hours: '', completedHours: '', amount: '', requestDate: '', completedDate: '', deliveryName: '' }] }],
+      viewpoints: [{ viewpointName: group.viewpointName, viewpointNameExternal: group.viewpointNameExternal || '', viewpointCategory: group.viewpointCategory || '', assignee: group.assignee, manualStart: '', manualEnd: '', deadline: group.individualDeadline || '', deliveryName: group.deliveryNameOverride || '', steps: [{ ...makeEmptyStep(), roundType: 'add' }] }],
     });
     setEditingId(null);
     setEditMode(null);
@@ -2257,7 +2375,13 @@ export default function App() {
     saveTasks(prev => prev.map(t => ids.has(t.id) ? { ...t, ...clean } : t));
   };
 
-  // 見積書／発注書を視点の制作履歴から自動作成して帳票へ保存し、帳票ビューへ遷移する。
+  // 1ステップ（タスク）単位の請求情報更新（種類・依頼日・金額・外注・納品名など）。
+  // 請求はステップが唯一の元データ。カードの「制作・納品」パネルから個別に編集する。
+  const setStepMeta = (task, patch) => {
+    saveTasks(prev => prev.map(t => t.id === task.id ? { ...t, ...patch } : t));
+  };
+
+  // 見積書／発注書を視点のステップ（請求の元データ）から自動作成して帳票へ保存し、帳票ビューへ遷移する。
   const createBillingFromViewpoint = async (group, docType) => {
     try {
       const cur = await storage.get('billingDocuments');
@@ -2269,15 +2393,16 @@ export default function App() {
         doc.to = { ...doc.to, company: group.companyName || '', zip: cm?.zip || '', address: cm?.address || '', tel: cm?.tel || '', rep: group.customerContact || '' };
       }
       doc.subject = `${group.projectName || ''}${group.viewpointName ? ' ' + group.viewpointName : ''}`.trim();
-      // 制作金額のあるラウンドを明細化（無ければ空明細1行）。
-      const base = deliveryBaseName(group.projectName, group.viewpointName, group.deliveryNameOverride);
-      const named = computeRoundNames(normalizeHistory(group.prodHistory), base);
-      const moneyRounds = named.filter(r => vpNum(r.amount) > 0);
-      const items = moneyRounds.map(r => {
+      // 制作金額のあるステップを明細化（無ければ空明細1行）。
+      const base = group.deliveryBaseName || deliveryBaseName(group.projectName, group.viewpointNameExternal || group.viewpointName, group.deliveryNameOverride);
+      const moneySteps = (group.tasks || []).filter(t => vpNum(t.stepAmount) > 0);
+      const items = moneySteps.map(t => {
         const it = blankItem(docType);
-        it.name = `${r.deliveryName}（${roundTypeOf(r.type).label}）`;
+        const rtId = (t.stepRoundType || '').trim() || 'initial';
+        const name = (t.stepDeliveryNameOverride || '').trim() || stepDeliveryName(base, t.stepName);
+        it.name = `${name}（${roundTypeOf(rtId).label}）`;
         it.qty = '1';
-        it.unit = String(vpNum(r.amount));
+        it.unit = String(vpNum(t.stepAmount));
         return it;
       });
       while (items.length < 3) items.push(blankItem(docType));
@@ -2949,7 +3074,7 @@ export default function App() {
             handleDeleteViewpoint={handleDeleteViewpoint}
             handleDelete={handleDelete} toggleStatus={toggleStatus}
             moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={setDragTaskId} onDropTask={reorderTaskPriority} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} setTaskAssignee={setTaskAssignee} completeProject={completeProject} cancelProject={cancelProject} suspendProject={suspendProject} completeViewpoint={completeViewpoint}
-            handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} setViewpointMeta={setViewpointMeta} createBillingFromViewpoint={createBillingFromViewpoint} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline}
+            handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} setViewpointMeta={setViewpointMeta} setStepMeta={setStepMeta} createBillingFromViewpoint={createBillingFromViewpoint} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline}
             finalizeReview={finalizeReview} reopenReview={reopenReview} setReviewNote={setReviewNote} setReviewActualEnd={setReviewActualEnd} resumeProject={resumeProject}
             projectList={projectList} projectInternalList={projectInternalList} viewpointList={viewpointList} assigneeList={assigneeList} assigneeOrder={assigneeOrder}
             settings={settings} now={now}
@@ -2975,7 +3100,7 @@ export default function App() {
                 handleDeleteViewpoint={handleDeleteViewpoint}
                 handleDelete={handleDelete} toggleStatus={toggleStatus}
                 moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={setDragTaskId} onDropTask={reorderTaskPriority} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} setTaskAssignee={setTaskAssignee} completeProject={completeProject} cancelProject={cancelProject} suspendProject={suspendProject} completeViewpoint={completeViewpoint}
-                handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} setViewpointMeta={setViewpointMeta} createBillingFromViewpoint={createBillingFromViewpoint} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline}
+                handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} setViewpointMeta={setViewpointMeta} setStepMeta={setStepMeta} createBillingFromViewpoint={createBillingFromViewpoint} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline}
                 finalizeReview={finalizeReview} reopenReview={reopenReview} setReviewNote={setReviewNote} setReviewActualEnd={setReviewActualEnd} resumeProject={resumeProject}
                 projectList={projectList} projectInternalList={projectInternalList} viewpointList={viewpointList} assigneeList={assigneeList} assigneeOrder={assigneeOrder}
                 settings={settings} now={now}
@@ -3592,7 +3717,7 @@ function MemoView({ memos, upsertMemo, deleteMemo, now, colors, fontJP, fontDisp
 }
 
 // ============ 入力ビュー ============
-function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit, editingId, editMode, caseEditMode, cancelEdit, tasks, scheduled, projectOrder, saveProjectOrder, companyList, customerMaster, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, setTaskAssignee, completeProject, cancelProject, suspendProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, setViewpointMeta, createBillingFromViewpoint, saveProjectInfo, setProjectDeadline, finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, resumeProject, projectList, projectInternalList, viewpointList, assigneeList, assigneeOrder, settings, now, selectedAssignee, setSelectedAssignee, companyOrder, onReorderAssignee, onReorderProject, onReassignViewpoint, colors, fontJP, fontDisplay }) {
+function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit, editingId, editMode, caseEditMode, cancelEdit, tasks, scheduled, projectOrder, saveProjectOrder, companyList, customerMaster, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, setTaskAssignee, completeProject, cancelProject, suspendProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, setViewpointMeta, setStepMeta, createBillingFromViewpoint, saveProjectInfo, setProjectDeadline, finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, resumeProject, projectList, projectInternalList, viewpointList, assigneeList, assigneeOrder, settings, now, selectedAssignee, setSelectedAssignee, companyOrder, onReorderAssignee, onReorderProject, onReassignViewpoint, colors, fontJP, fontDisplay }) {
   // お客様担当者の候補：会社名を選んでいればその会社に所属する担当者を表示
   // （会社名はひらがな/カタカナ/全半角の違いを無視して照合）
   const contactOptions = useMemo(() => {
@@ -4570,7 +4695,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                   handleDeleteViewpoint={handleDeleteViewpoint}
                   handleDelete={handleDelete} toggleStatus={toggleStatus}
                   moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={onDragTask} onDropTask={onDropTask} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} setTaskAssignee={setTaskAssignee} completeProject={completeProject} cancelProject={cancelProject} suspendProject={suspendProject} completeViewpoint={completeViewpoint}
-                  handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} setViewpointMeta={setViewpointMeta} createBillingFromViewpoint={createBillingFromViewpoint} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline} companyList={companyList} assigneeList={assigneeList} offshoreCompanies={offshoreCompanies} defaultCollapsed
+                  handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} setViewpointMeta={setViewpointMeta} setStepMeta={setStepMeta} createBillingFromViewpoint={createBillingFromViewpoint} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline} companyList={companyList} assigneeList={assigneeList} offshoreCompanies={offshoreCompanies} defaultCollapsed
                   colors={colors} fontJP={fontJP} />
               </section>
             );
@@ -4591,7 +4716,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
             handleDeleteViewpoint={handleDeleteViewpoint}
             handleDelete={handleDelete} toggleStatus={toggleStatus}
             moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={onDragTask} onDropTask={onDropTask} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} setTaskAssignee={setTaskAssignee} completeProject={completeProject} cancelProject={cancelProject} suspendProject={suspendProject} completeViewpoint={completeViewpoint}
-            handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} setViewpointMeta={setViewpointMeta} createBillingFromViewpoint={createBillingFromViewpoint} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline} companyList={companyList} assigneeList={assigneeList} offshoreCompanies={offshoreCompanies} defaultCollapsed
+            handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} setViewpointMeta={setViewpointMeta} setStepMeta={setStepMeta} createBillingFromViewpoint={createBillingFromViewpoint} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline} companyList={companyList} assigneeList={assigneeList} offshoreCompanies={offshoreCompanies} defaultCollapsed
             colors={colors} fontJP={fontJP} />
         )}
       </section>
@@ -4620,7 +4745,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
           handleDeleteViewpoint={handleDeleteViewpoint}
           handleDelete={handleDelete} toggleStatus={toggleStatus}
           moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={onDragTask} onDropTask={onDropTask} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} setTaskAssignee={setTaskAssignee} completeProject={completeProject} cancelProject={cancelProject} suspendProject={suspendProject} completeViewpoint={completeViewpoint}
-          handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} setViewpointMeta={setViewpointMeta} createBillingFromViewpoint={createBillingFromViewpoint} offshoreCompanies={offshoreCompanies} assigneeList={assigneeList}
+          handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} setViewpointMeta={setViewpointMeta} setStepMeta={setStepMeta} createBillingFromViewpoint={createBillingFromViewpoint} offshoreCompanies={offshoreCompanies} assigneeList={assigneeList}
           colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
       )}
     </div>
@@ -5111,7 +5236,7 @@ function AssigneeBoard({ tasks, now, assigneeOrder, colors, fontJP }) {
   );
 }
 
-function ViewpointGroupList({ groups, allActive, now, caseEditMode, companyOrder, projectOrder, saveProjectOrder, sortMode, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, setTaskAssignee, completeProject, cancelProject, suspendProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, setViewpointMeta, createBillingFromViewpoint, saveProjectInfo, setProjectDeadline, companyList, assigneeList, offshoreCompanies, defaultCollapsed, colors, fontJP }) {
+function ViewpointGroupList({ groups, allActive, now, caseEditMode, companyOrder, projectOrder, saveProjectOrder, sortMode, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, setTaskAssignee, completeProject, cancelProject, suspendProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, setViewpointMeta, setStepMeta, createBillingFromViewpoint, saveProjectInfo, setProjectDeadline, companyList, assigneeList, offshoreCompanies, defaultCollapsed, colors, fontJP }) {
   // 契約形態「オフショア」の会社（お客様マスタ由来）。会社別表示で「オフショア（その他）」へ集約する。
   // 渡されない（担当者別など）場合は集約しない。
   const isOffshore = (c) => !!offshoreCompanies && offshoreCompanies.has(c || '');
@@ -5632,7 +5757,7 @@ function ViewpointGroupList({ groups, allActive, now, caseEditMode, companyOrder
                 handleDelete={handleDelete} toggleStatus={toggleStatus}
                 moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={onDragTask} onDropTask={onDropTask} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} setTaskAssignee={setTaskAssignee} completeProject={completeProject} cancelProject={cancelProject} suspendProject={suspendProject} completeViewpoint={completeViewpoint}
                 handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline}
-                setViewpointMeta={setViewpointMeta} offshoreCompanies={offshoreCompanies} createBillingFromViewpoint={createBillingFromViewpoint}
+                setViewpointMeta={setViewpointMeta} setStepMeta={setStepMeta} offshoreCompanies={offshoreCompanies} createBillingFromViewpoint={createBillingFromViewpoint}
                 assigneeList={assigneeList}
                 colors={colors} fontJP={fontJP} />
               </div>
@@ -5648,20 +5773,18 @@ function ViewpointGroupList({ groups, allActive, now, caseEditMode, companyOrder
 
 // 視点の「制作・納品」パネル：納品名（自動/上書き）・納品集計・制作履歴（初回/追加/修正の依頼日）・
 // オフショア金額・外注情報。売上登録表へは自動同期（金額の入ったラウンドが売上行になる）。
-function ViewpointMetaPanel({ group, setViewpointMeta, isOffshore, createBillingFromViewpoint, colors, fontJP }) {
+function ViewpointMetaPanel({ group, setViewpointMeta, setStepMeta, isOffshore, createBillingFromViewpoint, colors, fontJP }) {
   const [open, setOpen] = useState(false);
-  const history = normalizeHistory(group.prodHistory);
   const base = group.deliveryBaseName || deliveryBaseName(group.projectName, group.viewpointNameExternal || group.viewpointName, group.deliveryNameOverride);
-  const named = computeRoundNames(history, base);
   const countAs = group.countAsDelivery !== false;
+  // 請求の元データはステップ（タスク）。視点内の全ステップを1行ずつ表示する。
+  const steps = group.tasks || [];
 
   const update = (patch) => setViewpointMeta && setViewpointMeta(group, patch);
-  const updateRound = (id, patch) => update({ prodHistory: history.map(r => r.id === id ? { ...r, ...patch } : r) });
-  const addRound = (type) => update({ prodHistory: [...history, blankRound(type, todayStr(new Date()))] });
-  const removeRound = (id) => update({ prodHistory: history.filter(r => r.id !== id) });
+  const updateStep = (task, patch) => setStepMeta && setStepMeta(task, patch);
 
-  const totalAmount = history.reduce((s, r) => s + vpNum(r.amount), 0);
-  const totalVND = history.reduce((s, r) => s + vpNum(r.outVND), 0);
+  const totalAmount = steps.reduce((s, t) => s + vpNum(t.stepAmount), 0);
+  const totalVND = steps.reduce((s, t) => s + vpNum(t.stepOutVND), 0);
   const yen = (v) => '¥' + Math.round(v).toLocaleString('ja-JP');
 
   const inputBase = { fontFamily: fontJP, fontSize: 11, padding: '3px 5px', border: `1px solid ${colors.border}`, borderRadius: 3, background: '#fff', color: colors.text, boxSizing: 'border-box' };
@@ -5680,7 +5803,7 @@ function ViewpointMetaPanel({ group, setViewpointMeta, isOffshore, createBilling
         {group.deliveryCount > 1 && (
           <span style={{ fontSize: 10, color: '#fff', background: '#b07d3c', borderRadius: 10, padding: '1px 7px' }}>納品{group.deliveryCount}回</span>
         )}
-        {history.length > 0 && <span style={{ fontSize: 10.5, color: colors.textMute }}>履歴 {history.length}件</span>}
+        {steps.length > 0 && <span style={{ fontSize: 10.5, color: colors.textMute }}>ステップ {steps.length}件</span>}
         {totalAmount > 0 && <span style={{ fontSize: 10.5, color: '#3a7bd5', fontWeight: 600 }}>金額 {yen(totalAmount)}</span>}
         {totalVND > 0 && <span style={{ fontSize: 10.5, color: '#7a8471' }}>外注 {Math.round(totalVND).toLocaleString('ja-JP')}₫</span>}
         {!countAs && <span style={{ fontSize: 10, color: '#b00', border: '1px solid #e6b3b3', borderRadius: 3, padding: '0 5px' }}>集計対象外</span>}
@@ -5703,67 +5826,59 @@ function ViewpointMetaPanel({ group, setViewpointMeta, isOffshore, createBilling
             </label>
           </div>
 
-          {/* 制作履歴 */}
+          {/* ステップごとの請求情報（種類・依頼日・金額・外注・納品名）。請求はステップが唯一の元データ。 */}
           <div style={{ ...labelStyle, fontSize: 10.5, marginBottom: 4 }}>
-            制作履歴（初回・追加・修正と依頼日。金額・外注を入力すると売上登録表へ自動連携されます）
+            ステップごとの請求（種類・依頼日・金額・外注。金額や外注VNDを入力すると売上登録表へ自動連携されます。ステップの追加・削除は「ステップ追加／視点編集」で行います）
           </div>
-          {named.length === 0 ? (
-            <div style={{ fontSize: 11, color: colors.textMute, padding: '4px 0 8px' }}>まだ制作履歴がありません。下のボタンで追加してください。</div>
+          {steps.length === 0 ? (
+            <div style={{ fontSize: 11, color: colors.textMute, padding: '4px 0 8px' }}>ステップがありません。</div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 }}>
-              {named.map(r => {
-                const rt = roundTypeOf(r.type);
+              {steps.map(t => {
+                const rtId = (t.stepRoundType || '').trim() || 'initial';
+                const rt = roundTypeOf(rtId);
+                const autoName = stepDeliveryName(base, t.stepName);
                 return (
-                  <div key={r.id} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end', background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 4, padding: '6px 8px' }}>
-                    <span style={{ fontSize: 9, fontWeight: 700, color: '#fff', background: rt.color, borderRadius: 8, padding: '2px 7px', alignSelf: 'center' }}>{r.isDelivery ? `納品${r.number}` : '修正'}</span>
+                  <div key={t.id} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end', background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 4, padding: '6px 8px' }}>
+                    <span style={{ fontSize: 9, fontWeight: 700, color: '#fff', background: rt.color, borderRadius: 8, padding: '2px 7px', alignSelf: 'center' }} title={t.stepName || ''}>{rt.short}</span>
                     <div>
                       <div style={labelStyle}>種類</div>
-                      <select value={r.type} onChange={(e) => updateRound(r.id, { type: e.target.value })} style={{ ...inputBase, cursor: 'pointer' }}>
-                        {ROUND_TYPES.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+                      <select value={rtId} onChange={(e) => updateStep(t, { stepRoundType: e.target.value })} style={{ ...inputBase, cursor: 'pointer' }}>
+                        {ROUND_TYPES.map(rtype => <option key={rtype.id} value={rtype.id}>{rtype.label}</option>)}
                       </select>
                     </div>
                     <div>
-                      <div style={labelStyle}>{r.type === 'initial' ? '初回依頼日' : r.type === 'add' ? '追加依頼日' : '修正依頼日'}</div>
-                      <input type="date" value={r.date || ''} onChange={(e) => updateRound(r.id, { date: e.target.value })} style={{ ...inputBase, cursor: 'pointer' }} />
+                      <div style={labelStyle}>依頼日</div>
+                      <input type="date" value={t.stepRequestDate || ''} onChange={(e) => updateStep(t, { stepRequestDate: e.target.value })} style={{ ...inputBase, cursor: 'pointer' }} />
                     </div>
                     <div>
                       <div style={labelStyle}>金額（円・税抜）</div>
-                      <input value={r.amount ?? ''} inputMode="numeric" placeholder="0" onChange={(e) => updateRound(r.id, { amount: e.target.value })} style={{ ...inputBase, width: 90, textAlign: 'right' }} />
+                      <input value={t.stepAmount ?? ''} inputMode="numeric" placeholder="0" onChange={(e) => updateStep(t, { stepAmount: e.target.value })} style={{ ...inputBase, width: 90, textAlign: 'right' }} />
                     </div>
                     <div>
                       <div style={labelStyle}>社内外注者</div>
-                      <input value={r.outInHouse || ''} onChange={(e) => updateRound(r.id, { outInHouse: e.target.value })} style={{ ...inputBase, width: 90 }} />
+                      <input value={t.stepOutInHouse || ''} onChange={(e) => updateStep(t, { stepOutInHouse: e.target.value })} style={{ ...inputBase, width: 90 }} />
                     </div>
                     <div>
                       <div style={labelStyle}>社外外注者</div>
-                      <input value={r.outExternal || ''} onChange={(e) => updateRound(r.id, { outExternal: e.target.value })} style={{ ...inputBase, width: 90 }} />
+                      <input value={t.stepOutExternal || ''} onChange={(e) => updateStep(t, { stepOutExternal: e.target.value })} style={{ ...inputBase, width: 90 }} />
                     </div>
                     <div>
                       <div style={labelStyle}>外注金額(VND)</div>
-                      <input value={r.outVND ?? ''} inputMode="numeric" placeholder="0" onChange={(e) => updateRound(r.id, { outVND: e.target.value })} style={{ ...inputBase, width: 100, textAlign: 'right' }} />
+                      <input value={t.stepOutVND ?? ''} inputMode="numeric" placeholder="0" onChange={(e) => updateStep(t, { stepOutVND: e.target.value })} style={{ ...inputBase, width: 100, textAlign: 'right' }} />
                     </div>
                     <div style={{ flex: '1 1 120px', minWidth: 100 }}>
                       <div style={labelStyle}>納品名 / メモ</div>
-                      <input value={r.memo || ''} placeholder={r.deliveryName} onChange={(e) => updateRound(r.id, { memo: e.target.value })} style={{ ...inputBase, width: '100%' }} />
+                      <input value={t.stepDeliveryNameOverride || ''} placeholder={autoName} onChange={(e) => updateStep(t, { stepDeliveryNameOverride: e.target.value })} style={{ ...inputBase, width: '100%' }} />
                     </div>
-                    <button type="button" onClick={() => removeRound(r.id)} title="この履歴を削除"
-                      style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: colors.accent, padding: 4, alignSelf: 'center' }}>
-                      <Trash2 size={13} />
-                    </button>
                   </div>
                 );
               })}
             </div>
           )}
 
-          {/* 追加ボタン＋帳票連携 */}
+          {/* 帳票連携 */}
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-            {ROUND_TYPES.map(t => (
-              <button key={t.id} type="button" onClick={() => addRound(t.id)}
-                style={{ display: 'flex', alignItems: 'center', gap: 3, padding: '4px 9px', background: '#fff', border: `1px dashed ${colors.border}`, borderRadius: 3, cursor: 'pointer', fontFamily: fontJP, fontSize: 11, color: colors.textMute }}>
-                <Plus size={11} />{t.label}
-              </button>
-            ))}
             {isOffshore && createBillingFromViewpoint && (
               <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
                 <button type="button" onClick={() => createBillingFromViewpoint(group, 'estimate')}
@@ -5783,7 +5898,7 @@ function ViewpointMetaPanel({ group, setViewpointMeta, isOffshore, createBilling
   );
 }
 
-function ViewpointCard({ group, now, caseEditMode, allSortedIds, companyFirstIds, companyLastIds, handleEdit, handleEditViewpoint, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, setTaskAssignee, completeProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, setViewpointMeta, offshoreCompanies, createBillingFromViewpoint, assigneeList, colors, fontJP }) {
+function ViewpointCard({ group, now, caseEditMode, allSortedIds, companyFirstIds, companyLastIds, handleEdit, handleEditViewpoint, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, setTaskAssignee, completeProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, setViewpointMeta, setStepMeta, offshoreCompanies, createBillingFromViewpoint, assigneeList, colors, fontJP }) {
   const projectColor = getProjectColor(group.projectName);
   const progressPct = group.totalHours > 0 ? (group.completedHours / group.totalHours) * 100 : 0;
   // 経過進捗（時間経過ベース・表示用）
@@ -5975,7 +6090,7 @@ function ViewpointCard({ group, now, caseEditMode, allSortedIds, companyFirstIds
 
       {/* 制作・納品パネル（納品名・制作履歴・金額・外注） */}
       {setViewpointMeta && (
-        <ViewpointMetaPanel group={group} setViewpointMeta={setViewpointMeta}
+        <ViewpointMetaPanel group={group} setViewpointMeta={setViewpointMeta} setStepMeta={setStepMeta}
           isOffshore={!!offshoreCompanies && offshoreCompanies.has(group.companyName || '')}
           createBillingFromViewpoint={createBillingFromViewpoint}
           colors={colors} fontJP={fontJP} />
@@ -7105,7 +7220,7 @@ function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact
 }
 
 // ============ 担当者別ビュー ============
-function AssigneeView({ scheduled, selectedAssignee, setSelectedAssignee, now, caseEditMode, assigneeOrder, companyOrder, companyList, saveProjectInfo, setProjectDeadline, projectOrder, saveProjectOrder, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, setTaskAssignee, completeProject, cancelProject, suspendProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, setViewpointMeta, createBillingFromViewpoint, offshoreCompanies, assigneeList, colors, fontJP, fontDisplay }) {
+function AssigneeView({ scheduled, selectedAssignee, setSelectedAssignee, now, caseEditMode, assigneeOrder, companyOrder, companyList, saveProjectInfo, setProjectDeadline, projectOrder, saveProjectOrder, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, setTaskAssignee, completeProject, cancelProject, suspendProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, setViewpointMeta, setStepMeta, createBillingFromViewpoint, offshoreCompanies, assigneeList, colors, fontJP, fontDisplay }) {
   const assignees = sortAssigneesByMaster([...new Set(scheduled.active.map(t => t.assignee))], assigneeOrder);
   if (assignees.length === 0) {
     return (
@@ -7192,7 +7307,7 @@ function AssigneeView({ scheduled, selectedAssignee, setSelectedAssignee, now, c
               handleDeleteViewpoint={handleDeleteViewpoint}
               handleDelete={handleDelete} toggleStatus={toggleStatus}
               moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={onDragTask} onDropTask={onDropTask} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} setTaskAssignee={setTaskAssignee} completeProject={completeProject} cancelProject={cancelProject} suspendProject={suspendProject} completeViewpoint={completeViewpoint}
-              handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} setViewpointMeta={setViewpointMeta} createBillingFromViewpoint={createBillingFromViewpoint} offshoreCompanies={offshoreCompanies} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline} companyList={companyList} assigneeList={assigneeList}
+              handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} setViewpointMeta={setViewpointMeta} setStepMeta={setStepMeta} createBillingFromViewpoint={createBillingFromViewpoint} offshoreCompanies={offshoreCompanies} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline} companyList={companyList} assigneeList={assigneeList}
               colors={colors} fontJP={fontJP} />
           </section>
         );
