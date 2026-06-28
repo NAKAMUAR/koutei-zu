@@ -6192,9 +6192,9 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
           if (!stepDelivery && !task.stepRequestDate && !cdStr && !amt) return null;
           return (
             <div style={{ fontSize: 10.5, color: colors.textMute, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 4 }}>
-              {stepDelivery && <span title="納品名">納品名: <span style={{ color: '#9c7b3c', fontWeight: 600 }}>{stepDelivery}</span></span>}
-              {task.stepRequestDate && <span>依頼 {task.stepRequestDate}</span>}
-              {cdStr && <span>完了 {cdStr}</span>}
+              {stepDelivery && <span title={stepDelivery} style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 260 }}>納品名: <span style={{ color: '#9c7b3c', fontWeight: 600 }}>{stepDelivery}</span></span>}
+              {task.stepRequestDate && <span style={{ whiteSpace: 'nowrap' }}>依頼 {task.stepRequestDate}</span>}
+              {cdStr && <span style={{ whiteSpace: 'nowrap' }}>完了 {cdStr}</span>}
               {amt > 0 && <span style={{ color: '#3a7bd5', fontWeight: 600 }}>¥{Math.round(amt).toLocaleString('ja-JP')}</span>}
             </div>
           );
