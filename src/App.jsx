@@ -5095,8 +5095,6 @@ function AssigneeBoard({ tasks, now, assigneeOrder, colors, fontJP }) {
 }
 
 function ViewpointGroupList({ groups, allActive, now, caseEditMode, companyOrder, projectOrder, saveProjectOrder, sortMode, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, setTaskAssignee, completeProject, cancelProject, suspendProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, setViewpointMeta, createBillingFromViewpoint, saveProjectInfo, setProjectDeadline, companyList, assigneeList, offshoreCompanies, defaultCollapsed, colors, fontJP }) {
-  // 案件情報をインライン編集中の案件名（null = 非編集）
-  const [editingInfo, setEditingInfo] = useState(null);
   // 契約形態「オフショア」の会社（お客様マスタ由来）。会社別表示で「オフショア（その他）」へ集約する。
   // 渡されない（担当者別など）場合は集約しない。
   const isOffshore = (c) => !!offshoreCompanies && offshoreCompanies.has(c || '');
@@ -5449,19 +5447,6 @@ function ViewpointGroupList({ groups, allActive, now, caseEditMode, companyOrder
                   )}
                 </span>
               </div>
-              {saveProjectInfo && (
-                <button type="button"
-                  onClick={(e) => { e.stopPropagation(); setEditingInfo(editingInfo === pg.projectName ? null : pg.projectName); }}
-                  title="案件情報をここで編集（案件名・社内案件名・会社名・お客様担当者・メモ・仮案件）"
-                  style={{
-                    background: editingInfo === pg.projectName ? colors.accentSoft : 'transparent',
-                    border: `1px solid ${editingInfo === pg.projectName ? colors.accent : colors.border}`,
-                    cursor: 'pointer', color: editingInfo === pg.projectName ? colors.accent : colors.textMute,
-                    display: 'flex', alignItems: 'center', padding: '3px 5px', borderRadius: 3, flexShrink: 0,
-                  }}>
-                  <Edit2 size={12} />
-                </button>
-              )}
               {pg.customerContact && (
                 <span title={`お客様: ${pg.customerContact}`} style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', flexShrink: 0, maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   お客様: {pg.customerContact}
@@ -5619,12 +5604,6 @@ function ViewpointGroupList({ groups, allActive, now, caseEditMode, companyOrder
                 </button>
               )}
             </div>
-            {editingInfo === pg.projectName && saveProjectInfo && (
-              <ProjectInfoEditor pg={pg} companyList={companyList}
-                onSave={(info) => { if (saveProjectInfo(pg.projectName, info)) setEditingInfo(null); }}
-                onCancel={() => setEditingInfo(null)}
-                colors={colors} fontJP={fontJP} />
-            )}
             {!isCollapsed && pg.viewpointGroups.map(group => (
               // 視点カードは案件ヘッダーから1段インデント（全視点同じ深さで揃える）
               <div key={group.key} style={{ marginLeft: 22 }}>
