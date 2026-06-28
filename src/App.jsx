@@ -1108,6 +1108,20 @@ export default function App() {
   const [editingId, setEditingId] = useState(null);
   // 編集モード：{ type: 'step'|'viewpoint'|'project', ... }（フォーム上部の見出し・保存スコープを切替）
   const [editMode, setEditMode] = useState(null);
+  // 進行中一覧から編集を開いたとき、編集終了後に元の案件の位置へ戻すための案件名
+  const editReturnProject = useRef(null);
+  // 編集が終わって（保存／キャンセル）editMode が null に戻ったら、元の案件ヘッダーへスクロールして戻す
+  useEffect(() => {
+    if (editMode !== null) return;
+    const name = editReturnProject.current;
+    if (!name || typeof document === 'undefined') return;
+    editReturnProject.current = null;
+    // 一覧の再描画・レイアウト確定後にスクロールする
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const el = document.querySelector(`[data-project-name="${(window.CSS && CSS.escape) ? CSS.escape(name) : name}"]`);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }));
+  }, [editMode]);
   // カレンダーから案件編集を開いた場合 true（入力へ遷移せず、カレンダーのすぐ下にフォームを表示）
   const [calendarEdit, setCalendarEdit] = useState(false);
   // 案件の並び順（ドラッグ＆ドロップ用）。Firestore に projectOrder として保存
@@ -1993,6 +2007,7 @@ export default function App() {
     });
     setEditingId(null);
     setEditMode({ type: 'step', taskId: task.id, projectName: task.projectName, viewpointName: task.viewpointName, assignee: task.assignee });
+    editReturnProject.current = task.projectName; // 編集後に元の位置へ戻す
     setView('input');
     if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -2070,6 +2085,7 @@ export default function App() {
       setCalendarEdit(true);
     } else {
       setCalendarEdit(false);
+      editReturnProject.current = first.projectName; // 編集後に元の位置へ戻す
       setView('input');
       if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
     }
@@ -2191,6 +2207,7 @@ export default function App() {
     });
     setEditingId(null);
     setEditMode({ type: 'viewpoint', projectName: group.projectName, viewpointName: group.viewpointName, assignee: group.assignee });
+    editReturnProject.current = group.projectName; // 編集後に元の位置へ戻す
     setView('input');
     if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -5376,7 +5393,7 @@ function ViewpointGroupList({ groups, allActive, now, caseEditMode, companyOrder
         const headerBg = atRisk ? '#fbdcdc' : dueToday ? '#ffe6c9' : started ? '#fdf3a6' : '#fff';
         const nameColor = deadlinePassed ? '#c1272d' : colors.text;
         return (
-          <div key={pg.projectName} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div key={pg.projectName} data-project-name={pg.projectName} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div
               draggable={draggable}
               onDragStart={draggable ? onDragStart(pg.projectName) : undefined}
