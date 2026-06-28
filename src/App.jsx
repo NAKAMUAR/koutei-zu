@@ -6400,7 +6400,7 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
         <button onClick={commitCustomHours} style={progressBtnStyle(colors, fontJP)} title="入力した時間を完了済みに加算">追加</button>
       </div>
       <div style={{ display: 'flex', gap: 4 }}>
-        <button onClick={onEdit} style={iconBtnStyle(colors)} title="編集"><Edit2 size={14} /></button>
+        {/* ステップ単体の編集は「視点編集」に統合（視点編集で各ステップを一括編集できる） */}
         <button onClick={onDelete} style={iconBtnStyle(colors)} title="削除"><Trash2 size={14} /></button>
       </div>
     </div>
