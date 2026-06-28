@@ -4239,7 +4239,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                       const stepDelivery = stepDeliveryName(vpBase, step.name);
                       return (
                       <div key={si} style={{
-                        display: 'flex', gap: 8, alignItems: 'flex-end',
+                        display: 'flex', gap: 6, alignItems: 'flex-end',
                         background: '#fbf9f4', border: `1px solid ${colors.border}`,
                         borderRadius: 4, padding: 10, flexWrap: 'wrap',
                       }}>
@@ -4250,14 +4250,14 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                           fontSize: 11, fontWeight: 600, marginBottom: 1,
                         }}>{si + 1}</div>
                         {/* ステップ名称 */}
-                        <div style={{ flex: '0 1 108px', minWidth: 90 }}>
+                        <div style={{ flex: '0 1 96px', minWidth: 78 }}>
                           <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>ステップ名称</label>
                           <input type="text" value={step.name}
                             onChange={(e) => updateStep(vi, si, 'name', e.target.value)}
                             placeholder="例: ホワイト" style={{ ...inputStyle, padding: '7px 10px', fontSize: 13 }} />
                         </div>
                         {/* 納品名（ステップごと。案件名_社外視点名_ステップ名称。空欄なら自動） */}
-                        <div style={{ flex: '1 1 150px', minWidth: 128 }}>
+                        <div style={{ flex: '1 1 120px', minWidth: 100 }}>
                           <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>納品名</label>
                           <input type="text" value={step.deliveryName || ''}
                             onChange={(e) => updateStep(vi, si, 'deliveryName', e.target.value)}
@@ -4279,7 +4279,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                           <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'nowrap' }}>
                             <input type="date" value={step.completedDate ? step.completedDate.split('T')[0] : ''}
                               onChange={(e) => setStepCompletedDate(vi, si, e.target.value, step.completedDate ? (step.completedDate.split('T')[1] || '') : '')}
-                              style={{ ...inputStyle, width: 'auto', flex: '0 0 110px', padding: '6px 4px', fontSize: 12 }} />
+                              style={{ ...inputStyle, width: 'auto', flex: '0 0 100px', padding: '6px 4px', fontSize: 12 }} />
                             <TimeSelect value={step.completedDate ? (step.completedDate.split('T')[1] || '') : ''}
                               onChange={(val) => setStepCompletedDate(vi, si, step.completedDate ? step.completedDate.split('T')[0] : '', val)}
                               colors={colors} fontJP={fontJP} allowEmpty />
@@ -4291,7 +4291,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                         </div>
                         {/* 金額（ラボ会社は対象外。制作時間×2,500円をデフォルト算出） */}
                         {amountApplicable && (
-                          <div style={{ flex: '0 0 96px' }}>
+                          <div style={{ flex: '0 0 86px' }}>
                             <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>金額（円）</label>
                             <input type="text" inputMode="numeric" value={step.amount ?? ''}
                               onChange={(e) => updateStep(vi, si, 'amount', e.target.value)}
@@ -4318,7 +4318,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                           disabled={vp.steps.length <= 1}
                           style={{
                             background: 'transparent', border: `1px solid ${colors.border}`,
-                            padding: 7, borderRadius: 4, marginBottom: 1,
+                            padding: 7, borderRadius: 4, marginBottom: 1, flexShrink: 0,
                             cursor: vp.steps.length <= 1 ? 'not-allowed' : 'pointer',
                             color: vp.steps.length <= 1 ? '#ccc' : colors.textMute,
                             display: 'flex', alignItems: 'center',
