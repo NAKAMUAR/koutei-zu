@@ -5,7 +5,7 @@ import BillingView from './billing/BillingView.jsx';
 import SalesView from './sales/SalesView.jsx';
 import {
   ROUND_TYPES, roundTypeOf, normalizeHistory, deliveryBaseName,
-  deliveryCount, currentDeliveryName,
+  deliveryNameForNumber,
   metaFromGroup, num as vpNum, stepDeliveryName,
 } from './viewpoint/viewpointUtils.js';
 import { collectSalesSyncRows, reconcileLedger } from './viewpoint/salesSync.js';
@@ -165,7 +165,8 @@ function makeViewpointFromPreset(preset) {
     deadline: '',    // 視点ごとの納期（お客様への提出日）
     deliveryName: '', // 納品名（納品用の視点名）の手動上書き。空なら自動（案件名_視点名）
     // ステップごとに金額・依頼日・完了日・種類・外注を持つ（ステップ＝納品単位。売上へ1ステップ1行で連携）
-    steps: preset.steps.map((name, i) => ({ ...makeEmptyStep(name), roundType: i === 0 ? 'initial' : 'add' })),
+    // 種類は既定で空（''＝納品に数えない）。納品種類（初回/追加）はカードの請求パネルで明示的に設定する。
+    steps: preset.steps.map((name) => ({ ...makeEmptyStep(name), roundType: '' })),
   };
 }
 
@@ -1029,7 +1030,10 @@ function sortAssigneesByMaster(names, masterNames) {
 }
 
 // ============ 視点ごとにグループ化 ============
-function groupByViewpoint(tasks) {
+// 第2引数 vpDeliveryCount（任意）：project::viewpoint → 納品ステップ数 の Map。
+// 渡されると「視点の全タスク（active+done＝移行済みの請求専用ステップ含む）」を横断した
+// 正確な納品回数を使う。未指定ならグループ内（＝渡された tasks 範囲）のみで数える。
+function groupByViewpoint(tasks, vpDeliveryCount) {
   const groups = {};
   for (const task of tasks) {
     const key = `${task.assignee}::${task.projectName}::${task.viewpointName}`;
@@ -1087,8 +1091,14 @@ function groupByViewpoint(tasks) {
     // 納品名のベースは「社外視点名」優先（無ければ社内視点名）
     const base = deliveryBaseName(g.projectName, g.viewpointNameExternal || g.viewpointName, meta.deliveryNameOverride);
     g.deliveryBaseName = base;
-    g.deliveryCount = deliveryCount(meta.history);
-    g.deliveryName = currentDeliveryName(meta.history, base);
+    // 納品回数＝納品種類（初回/追加）のステップ数。種類が空（''）や修正(fix)は数えない。
+    // vpDeliveryCount があれば視点の全タスク（移行済みの完了ステップ含む）を横断した値を使う。
+    const pvKey = `${g.projectName || ''}::${g.viewpointName || ''}`;
+    const dcnt = vpDeliveryCount
+      ? (vpDeliveryCount.get(pvKey) || 0)
+      : g.tasks.filter(t => { const rt = (t.stepRoundType || '').trim(); return rt && roundTypeOf(rt).isDelivery; }).length;
+    g.deliveryCount = dcnt;
+    g.deliveryName = deliveryNameForNumber(base, dcnt > 1 ? dcnt : 1);
     // 視点全体の開始～終了
     const validSlots = g.tasks.filter(t => t.scheduledStart && t.scheduledEnd);
     if (validSlots.length > 0) {
@@ -1900,8 +1910,8 @@ export default function App() {
             stepCompletedDate: (step.completedDate || '').trim(),
             stepDeliveryNameOverride: (step.deliveryName || '').trim(),
             // ステップごとの請求情報（種類・外注）。請求はステップが唯一の元データ。
-            // 種類は空なら初回扱い。先頭ステップ（order 0）の既定を初回、それ以外を追加にする。
-            stepRoundType: (step.roundType || '').trim() || (order === 0 ? 'initial' : 'add'),
+            // 種類は空（''）＝納品に数えない。納品種類（初回/追加）は請求パネルで明示的に設定する。
+            stepRoundType: (step.roundType || '').trim(),
             stepOutInHouse: (step.outInHouse || '').trim(),
             stepOutExternal: (step.outExternal || '').trim(),
             stepOutVND: (step.outVND === undefined || step.outVND === null) ? '' : String(step.outVND).trim(),
@@ -2343,7 +2353,7 @@ export default function App() {
       projectDeadline: group.projectDeadline || '',
       projectRequestDate: (group.tasks?.find(t => t.projectRequestDate) || {}).projectRequestDate || '',
       // 追加ステップはこの視点の個別納期を引き継ぐ（開始・終了の指定は既存ステップ側を維持）
-      viewpoints: [{ viewpointName: group.viewpointName, viewpointNameExternal: group.viewpointNameExternal || '', viewpointCategory: group.viewpointCategory || '', assignee: group.assignee, manualStart: '', manualEnd: '', deadline: group.individualDeadline || '', deliveryName: group.deliveryNameOverride || '', steps: [{ ...makeEmptyStep(), roundType: 'add' }] }],
+      viewpoints: [{ viewpointName: group.viewpointName, viewpointNameExternal: group.viewpointNameExternal || '', viewpointCategory: group.viewpointCategory || '', assignee: group.assignee, manualStart: '', manualEnd: '', deadline: group.individualDeadline || '', deliveryName: group.deliveryNameOverride || '', steps: [makeEmptyStep()] }],
     });
     setEditingId(null);
     setEditMode(null);
@@ -2891,6 +2901,20 @@ export default function App() {
   const projectList = useMemo(() => [...new Set(tasks.map(t => t.projectName))].filter(Boolean), [tasks]);
   const projectInternalList = useMemo(() => [...new Set(tasks.map(t => t.projectNameInternal))].filter(Boolean), [tasks]);
   const viewpointList = useMemo(() => [...new Set(tasks.map(t => t.viewpointName))].filter(Boolean), [tasks]);
+  // 視点ごとの納品回数（project::viewpoint → 納品種類ステップ数）。
+  // 全タスク（active+done＝移行済みの請求専用ステップ含む）を横断して数える。担当者非依存。
+  // groupByViewpoint へ渡すと active のみの集合でも正しい納品回数が出る。
+  const vpDeliveryCount = useMemo(() => {
+    const m = new Map();
+    for (const t of tasks) {
+      const rt = (t.stepRoundType || '').trim();
+      if (!rt) continue;
+      if (!roundTypeOf(rt).isDelivery) continue;
+      const k = `${t.projectName || ''}::${t.viewpointName || ''}`;
+      m.set(k, (m.get(k) || 0) + 1);
+    }
+    return m;
+  }, [tasks]);
   // 制作担当者の候補：従業員マスタ ＋ 既存タスクの担当者
   // 従業員マスタの並び順 ＝ 担当者の表示順（カレンダー・担当者別・サマリー等）
   const assigneeOrder = useMemo(() => employeeMaster.map(e => e.name).filter(Boolean), [employeeMaster]);
@@ -3064,7 +3088,7 @@ export default function App() {
 
       <main style={{ maxWidth: 1600, margin: '0 auto', padding: '28px' }}>
         {view === 'input' && (
-          <InputView form={form} setForm={setForm} handleSubmit={handleSubmit} registerDraftAndEdit={registerDraftAndEdit} editingId={editingId} editMode={editMode} caseEditMode={caseEditMode}
+          <InputView form={form} setForm={setForm} handleSubmit={handleSubmit} registerDraftAndEdit={registerDraftAndEdit} editingId={editingId} editMode={editMode} caseEditMode={caseEditMode} vpDeliveryCount={vpDeliveryCount}
             cancelEdit={() => { setEditingId(null); setEditMode(null); setForm(emptyForm); }}
             tasks={tasks} scheduled={scheduled}
             projectOrder={projectOrder} saveProjectOrder={saveProjectOrderPartial}
@@ -3090,7 +3114,7 @@ export default function App() {
           {/* カレンダーから案件編集を開いた場合、入力へ遷移せずスケジュールのすぐ下にフォームを表示 */}
           {calendarEdit && editMode && (
             <div style={{ marginTop: 24 }}>
-              <InputView embedded form={form} setForm={setForm} handleSubmit={handleSubmit} registerDraftAndEdit={registerDraftAndEdit} editingId={editingId} editMode={editMode} caseEditMode={caseEditMode}
+              <InputView embedded form={form} setForm={setForm} handleSubmit={handleSubmit} registerDraftAndEdit={registerDraftAndEdit} editingId={editingId} editMode={editMode} caseEditMode={caseEditMode} vpDeliveryCount={vpDeliveryCount}
                 cancelEdit={() => { setEditingId(null); setEditMode(null); setForm(emptyForm); setCalendarEdit(false); }}
                 tasks={tasks} scheduled={scheduled}
                 projectOrder={projectOrder} saveProjectOrder={saveProjectOrderPartial}
@@ -3110,7 +3134,7 @@ export default function App() {
           </>
         )}
         {view === 'byAssignee' && (
-          <AssigneeView scheduled={scheduled} selectedAssignee={selectedAssignee} setSelectedAssignee={setSelectedAssignee} now={now} caseEditMode={caseEditMode} assigneeOrder={assigneeOrder}
+          <AssigneeView scheduled={scheduled} selectedAssignee={selectedAssignee} setSelectedAssignee={setSelectedAssignee} now={now} caseEditMode={caseEditMode} assigneeOrder={assigneeOrder} vpDeliveryCount={vpDeliveryCount}
             companyOrder={settings.companyOrder || []} companyList={companyList} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline}
             projectOrder={projectOrder} saveProjectOrder={saveProjectOrderPartial}
             handleEdit={handleEdit} handleEditProject={handleEditProject} handleEditViewpoint={handleEditViewpoint}
@@ -3122,7 +3146,7 @@ export default function App() {
             colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
         )}
         {view === 'message' && (
-          <MessageView scheduled={scheduled} settings={settings} colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} assigneeOrder={assigneeOrder} />
+          <MessageView scheduled={scheduled} settings={settings} colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} assigneeOrder={assigneeOrder} vpDeliveryCount={vpDeliveryCount} />
         )}
         {view === 'done' && (
           <DoneView scheduled={scheduled} toggleStatus={toggleStatus} handleDelete={handleDelete}
@@ -3717,7 +3741,7 @@ function MemoView({ memos, upsertMemo, deleteMemo, now, colors, fontJP, fontDisp
 }
 
 // ============ 入力ビュー ============
-function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit, editingId, editMode, caseEditMode, cancelEdit, tasks, scheduled, projectOrder, saveProjectOrder, companyList, customerMaster, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, setTaskAssignee, completeProject, cancelProject, suspendProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, setViewpointMeta, setStepMeta, createBillingFromViewpoint, saveProjectInfo, setProjectDeadline, finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, resumeProject, projectList, projectInternalList, viewpointList, assigneeList, assigneeOrder, settings, now, selectedAssignee, setSelectedAssignee, companyOrder, onReorderAssignee, onReorderProject, onReassignViewpoint, colors, fontJP, fontDisplay }) {
+function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit, editingId, editMode, caseEditMode, cancelEdit, tasks, scheduled, vpDeliveryCount, projectOrder, saveProjectOrder, companyList, customerMaster, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, setTaskAssignee, completeProject, cancelProject, suspendProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, setViewpointMeta, setStepMeta, createBillingFromViewpoint, saveProjectInfo, setProjectDeadline, finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, resumeProject, projectList, projectInternalList, viewpointList, assigneeList, assigneeOrder, settings, now, selectedAssignee, setSelectedAssignee, companyOrder, onReorderAssignee, onReorderProject, onReassignViewpoint, colors, fontJP, fontDisplay }) {
   // お客様担当者の候補：会社名を選んでいればその会社に所属する担当者を表示
   // （会社名はひらがな/カタカナ/全半角の違いを無視して照合）
   const contactOptions = useMemo(() => {
@@ -3891,7 +3915,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
 
   // 納品パース・外注の集計（①の納品集計・⑤の外注集計）。進行中案件の上部に表示する。
   const deliverySummary = useMemo(() => {
-    const groups = groupByViewpoint(scheduled.active);
+    const groups = groupByViewpoint(scheduled.active, vpDeliveryCount);
     const parseNames = [];
     let prodAmount = 0, outVND = 0;
     const offPeople = {};
@@ -3899,18 +3923,17 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
       const counted = g.countAsDelivery !== false;
       const n = Math.max(1, g.deliveryCount || 0);
       if (counted) for (let i = 0; i < n; i++) parseNames.push(g.viewpointCategory || g.viewpointName);
-      for (const r of normalizeHistory(g.prodHistory)) {
-        prodAmount += vpNum(r.amount);
-        const v = vpNum(r.outVND);
+      // 金額・外注は請求の単一ソースである「ステップ」から集計する（制作履歴との二重計上を防ぐ）
+      for (const t of (g.tasks || [])) {
+        prodAmount += vpNum(t.stepAmount);
+        const v = vpNum(t.stepOutVND);
         outVND += v;
-        const ppl = [r.outInHouse, r.outExternal].map(s => (s || '').trim()).filter(Boolean);
+        const ppl = [t.stepOutInHouse, t.stepOutExternal].map(s => (s || '').trim()).filter(Boolean);
         if (v && ppl.length) for (const p of ppl) offPeople[p] = (offPeople[p] || 0) + v / ppl.length;
       }
-      // ステップごとの金額も合算
-      for (const t of (g.tasks || [])) prodAmount += vpNum(t.stepAmount);
     }
     return { parseLabel: sheetsLabel(parseNames), parseCount: parseNames.length, prodAmount, outVND, offPeople };
-  }, [scheduled.active, offshoreCompanies]);
+  }, [scheduled.active, offshoreCompanies, vpDeliveryCount]);
 
   // 進行中案件のグループ表示：納期順（既定）／会社別（制作順）／担当者別（制作順）
   const [listGroupMode, setListGroupMode] = useState('deadline');
@@ -4632,7 +4655,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
           </div>
         ) : listGroupMode === 'board' ? (
           // 担当者ボード：担当者ごとの進行中案件を一目で把握できる一覧（④）
-          <AssigneeBoard tasks={filteredActive} now={now} assigneeOrder={assigneeOrder} colors={colors} fontJP={fontJP} />
+          <AssigneeBoard tasks={filteredActive} now={now} assigneeOrder={assigneeOrder} vpDeliveryCount={vpDeliveryCount} colors={colors} fontJP={fontJP} />
         ) : listGroupMode === 'assignee' ? (
           // 担当者別表示：従業員マスタの並び順で担当者ごとにまとめ、タブで絞り込みできる
           (() => {
@@ -4663,7 +4686,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
             const aTasks = filteredActive.filter(t => t.assignee === a);
             const aTotal = aTasks.reduce((s, t) => s + t.hours, 0);
             const aDone = aTasks.reduce((s, t) => s + (t.completedHours || 0), 0);
-            const aGroups = groupByViewpoint(aTasks);
+            const aGroups = groupByViewpoint(aTasks, vpDeliveryCount);
             return (
               <section key={a} style={{ marginBottom: 28 }}>
                 <div style={{
@@ -4706,7 +4729,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
         ) : (
           <ViewpointGroupList
             caseEditMode={caseEditMode}
-            groups={groupByViewpoint(filteredActive)}
+            groups={groupByViewpoint(filteredActive, vpDeliveryCount)}
             allActive={filteredActive} now={now}
             companyOrder={settings.companyOrder || []}
             sortMode={listGroupMode === 'deadline' ? 'deadline' : 'production'}
@@ -4729,6 +4752,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
       <ReviewSection
         review={scheduled.review} now={now}
         finalizeReview={finalizeReview} reopenReview={reopenReview} setReviewNote={setReviewNote} setReviewActualEnd={setReviewActualEnd}
+        vpDeliveryCount={vpDeliveryCount}
         colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
       </>)}
       {inputTab === 'calendar' && (
@@ -4737,7 +4761,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
           onReorderAssignee={onReorderAssignee} onReorderProject={onReorderProject} onReassignViewpoint={onReassignViewpoint} />
       )}
       {inputTab === 'assignee' && (
-        <AssigneeView scheduled={scheduled} selectedAssignee={selectedAssignee} setSelectedAssignee={setSelectedAssignee} now={now} caseEditMode={caseEditMode} assigneeOrder={assigneeOrder}
+        <AssigneeView scheduled={scheduled} selectedAssignee={selectedAssignee} setSelectedAssignee={setSelectedAssignee} now={now} caseEditMode={caseEditMode} assigneeOrder={assigneeOrder} vpDeliveryCount={vpDeliveryCount}
           companyOrder={companyOrder} companyList={companyList} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline}
           projectOrder={projectOrder} saveProjectOrder={saveProjectOrder}
           handleEdit={handleEdit} handleEditProject={handleEditProject} handleEditViewpoint={handleEditViewpoint}
@@ -4864,7 +4888,7 @@ function SuspendedSection({ suspended, now, resumeProject, colors, fontJP, fontD
 // 追加修正があればメモを記入でき、3日更新がないとグレー、7日でアプリが自動的に完了タブへ移す。
 const REVIEW_GRAY_DAYS = 3;
 const REVIEW_AUTO_DONE_DAYS = 7;
-function ReviewSection({ review, now, finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, colors, fontJP, fontDisplay }) {
+function ReviewSection({ review, now, finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, vpDeliveryCount, colors, fontJP, fontDisplay }) {
   // 案件ごとの折りたたみ状態（進行中案件一覧と同じ形式）
   const [collapsed, setCollapsed] = useState(() => new Set());
   const toggle = (p) => setCollapsed(prev => { const n = new Set(prev); n.has(p) ? n.delete(p) : n.add(p); return n; });
@@ -4872,7 +4896,7 @@ function ReviewSection({ review, now, finalizeReview, reopenReview, setReviewNot
   const didInitCollapse = useRef(false);
   if (!review || review.length === 0) return null;
   // 視点単位にまとめ、確認待ちのメタ情報（開始・最終更新・メモ・完了日・完了時刻）を付与
-  const groups = groupByViewpoint(review).map(g => {
+  const groups = groupByViewpoint(review, vpDeliveryCount).map(g => {
     let reviewAt = Infinity, reviewUpdatedAt = 0, completedAt = 0, reviewNote = '', actualEnd = '';
     for (const t of g.tasks) {
       if (t.reviewAt && t.reviewAt < reviewAt) reviewAt = t.reviewAt;
@@ -5155,7 +5179,7 @@ function ProjectInfoEditor({ pg, companyList, onSave, onCancel, colors, fontJP }
 // ============ 視点グループリスト ============
 // 担当者ボード（④）：担当者ごとの進行中案件を一目で把握する一覧。
 // 各担当者を1列のカードにし、視点（依頼項目）を納期の近い順にコンパクト表示する。
-function AssigneeBoard({ tasks, now, assigneeOrder, colors, fontJP }) {
+function AssigneeBoard({ tasks, now, assigneeOrder, vpDeliveryCount, colors, fontJP }) {
   const todayYmd = fmtYMD(now);
   const soonYmd = fmtYMD(addDays(now, 2));
   const assignees = sortAssigneesByMaster([...new Set((tasks || []).map(t => t.assignee))], assigneeOrder);
@@ -5176,7 +5200,7 @@ function AssigneeBoard({ tasks, now, assigneeOrder, colors, fontJP }) {
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 14, fontFamily: fontJP }}>
       {assignees.map(a => {
         const aTasks = (tasks || []).filter(t => t.assignee === a);
-        const groups = groupByViewpoint(aTasks);
+        const groups = groupByViewpoint(aTasks, vpDeliveryCount);
         // 緊急度→納期→終了予定 の順に並べる
         const rank = { over: 0, today: 1, soon: 2, none: 3 };
         const sorted = groups.map(g => ({ g, u: urgency(g) }))
@@ -5835,15 +5859,16 @@ function ViewpointMetaPanel({ group, setViewpointMeta, setStepMeta, isOffshore, 
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 }}>
               {steps.map(t => {
-                const rtId = (t.stepRoundType || '').trim() || 'initial';
-                const rt = roundTypeOf(rtId);
+                const rawType = (t.stepRoundType || '').trim();
+                const rt = rawType ? roundTypeOf(rawType) : null;
                 const autoName = stepDeliveryName(base, t.stepName);
                 return (
                   <div key={t.id} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end', background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 4, padding: '6px 8px' }}>
-                    <span style={{ fontSize: 9, fontWeight: 700, color: '#fff', background: rt.color, borderRadius: 8, padding: '2px 7px', alignSelf: 'center' }} title={t.stepName || ''}>{rt.short}</span>
+                    <span style={{ fontSize: 9, fontWeight: 700, color: rt ? '#fff' : colors.textMute, background: rt ? rt.color : '#eee', borderRadius: 8, padding: '2px 7px', alignSelf: 'center' }} title={t.stepName || ''}>{rt ? rt.short : '—'}</span>
                     <div>
                       <div style={labelStyle}>種類</div>
-                      <select value={rtId} onChange={(e) => updateStep(t, { stepRoundType: e.target.value })} style={{ ...inputBase, cursor: 'pointer' }}>
+                      <select value={rawType} onChange={(e) => updateStep(t, { stepRoundType: e.target.value })} style={{ ...inputBase, cursor: 'pointer' }}>
+                        <option value="">—（納品に数えない）</option>
                         {ROUND_TYPES.map(rtype => <option key={rtype.id} value={rtype.id}>{rtype.label}</option>)}
                       </select>
                     </div>
@@ -7220,7 +7245,7 @@ function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact
 }
 
 // ============ 担当者別ビュー ============
-function AssigneeView({ scheduled, selectedAssignee, setSelectedAssignee, now, caseEditMode, assigneeOrder, companyOrder, companyList, saveProjectInfo, setProjectDeadline, projectOrder, saveProjectOrder, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, setTaskAssignee, completeProject, cancelProject, suspendProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, setViewpointMeta, setStepMeta, createBillingFromViewpoint, offshoreCompanies, assigneeList, colors, fontJP, fontDisplay }) {
+function AssigneeView({ scheduled, selectedAssignee, setSelectedAssignee, now, caseEditMode, assigneeOrder, vpDeliveryCount, companyOrder, companyList, saveProjectInfo, setProjectDeadline, projectOrder, saveProjectOrder, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, setTaskAssignee, completeProject, cancelProject, suspendProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, setViewpointMeta, setStepMeta, createBillingFromViewpoint, offshoreCompanies, assigneeList, colors, fontJP, fontDisplay }) {
   const assignees = sortAssigneesByMaster([...new Set(scheduled.active.map(t => t.assignee))], assigneeOrder);
   if (assignees.length === 0) {
     return (
@@ -7270,7 +7295,7 @@ function AssigneeView({ scheduled, selectedAssignee, setSelectedAssignee, now, c
         const completedHours = tasks.reduce((s, t) => s + (t.completedHours || 0), 0);
         const remainingHours = totalHours - completedHours;
         const progressPct = totalHours > 0 ? (completedHours / totalHours) * 100 : 0;
-        const groups = groupByViewpoint(tasks);
+        const groups = groupByViewpoint(tasks, vpDeliveryCount);
 
         return (
           <section key={a} style={{ marginBottom: 32 }}>
@@ -7375,7 +7400,7 @@ const NO_PROJECT_GREETINGS_EVENING = [
 ];
 
 // ============ メッセージビュー ============
-function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigneeOrder }) {
+function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigneeOrder, vpDeliveryCount }) {
   const today = startOfDay(new Date());
   const weekEnd = addDays(today, 7);
 
@@ -7462,7 +7487,7 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
   };
 
   // ===== 会社別 業務連絡文（挨拶文形式） =====
-  const allGroups = useMemo(() => groupByViewpoint(scheduled.active), [scheduled.active]);
+  const allGroups = useMemo(() => groupByViewpoint(scheduled.active, vpDeliveryCount), [scheduled.active, vpDeliveryCount]);
   // 完了タスクの「着手日」復元：actualEnd から制作時間ぶん遡った最早スロット日（タスクID→Date）
   const doneStartByTask = useMemo(() => {
     const m = new Map();
