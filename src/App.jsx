@@ -6186,13 +6186,23 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
         {(() => {
           const vpBase = deliveryBaseName(task.projectName, task.viewpointNameExternal || task.viewpointName, task.deliveryNameOverride);
           const stepDelivery = (task.stepDeliveryNameOverride || '').trim() || stepDeliveryName(vpBase, task.stepName);
+          // 社内視点名ベースの納品名（併記用）。社外視点名が別にある場合のみ差分が出る。
+          const vpBaseInternal = deliveryBaseName(task.projectName, task.viewpointName, task.deliveryNameOverride);
+          const stepDeliveryInternal = (task.stepDeliveryNameOverride || '').trim() || stepDeliveryName(vpBaseInternal, task.stepName);
           const amt = vpNum(task.stepAmount);
           const cd = task.stepCompletedDate || '';
           const cdStr = cd ? `${cd.split('T')[0]}${cd.split('T')[1] ? ' ' + cd.split('T')[1] : ''}` : '';
           if (!stepDelivery && !task.stepRequestDate && !cdStr && !amt) return null;
           return (
             <div style={{ fontSize: 10.5, color: colors.textMute, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 4 }}>
-              {stepDelivery && <span title="納品名">納品名: <span style={{ color: '#9c7b3c', fontWeight: 600 }}>{stepDelivery}</span></span>}
+              {stepDelivery && (
+                <span title="納品名（社外視点名ベース／社内視点名ベースを併記）">
+                  納品名: <span style={{ color: '#9c7b3c', fontWeight: 600 }}>{stepDelivery}</span>
+                  {stepDeliveryInternal && stepDeliveryInternal !== stepDelivery && (
+                    <span style={{ color: colors.textMute, marginLeft: 4 }} title="社内視点名ベース">／ {stepDeliveryInternal}</span>
+                  )}
+                </span>
+              )}
               {task.stepRequestDate && <span>依頼 {task.stepRequestDate}</span>}
               {cdStr && <span>完了 {cdStr}</span>}
               {amt > 0 && <span style={{ color: '#3a7bd5', fontWeight: 600 }}>¥{Math.round(amt).toLocaleString('ja-JP')}</span>}
