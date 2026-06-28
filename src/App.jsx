@@ -4239,7 +4239,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                       const stepDelivery = stepDeliveryName(vpBase, step.name);
                       return (
                       <div key={si} style={{
-                        display: 'flex', gap: 10, alignItems: 'flex-end',
+                        display: 'flex', gap: 6, alignItems: 'flex-end',
                         background: '#fbf9f4', border: `1px solid ${colors.border}`,
                         borderRadius: 4, padding: 10, flexWrap: 'wrap',
                       }}>
@@ -4250,14 +4250,14 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                           fontSize: 11, fontWeight: 600, marginBottom: 1,
                         }}>{si + 1}</div>
                         {/* ステップ名称 */}
-                        <div style={{ flex: '0 1 130px', minWidth: 110 }}>
+                        <div style={{ flex: '0 1 96px', minWidth: 78 }}>
                           <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>ステップ名称</label>
                           <input type="text" value={step.name}
                             onChange={(e) => updateStep(vi, si, 'name', e.target.value)}
                             placeholder="例: ホワイト" style={{ ...inputStyle, padding: '7px 10px', fontSize: 13 }} />
                         </div>
                         {/* 納品名（ステップごと。案件名_社外視点名_ステップ名称。空欄なら自動） */}
-                        <div style={{ flex: '1 1 220px', minWidth: 160 }}>
+                        <div style={{ flex: '1 1 120px', minWidth: 100 }}>
                           <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>納品名</label>
                           <input type="text" value={step.deliveryName || ''}
                             onChange={(e) => updateStep(vi, si, 'deliveryName', e.target.value)}
@@ -4266,20 +4266,20 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                             style={{ ...inputStyle, padding: '7px 10px', fontSize: 13 }} />
                         </div>
                         {/* 依頼日 */}
-                        <div style={{ flex: '0 0 130px' }}>
+                        <div style={{ flex: '0 0 116px' }}>
                           <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>依頼日</label>
                           <input type="date" value={step.requestDate || ''}
                             onChange={(e) => updateStep(vi, si, 'requestDate', e.target.value)}
-                            style={{ ...inputStyle, padding: '6px 8px', fontSize: 12 }}
+                            style={{ ...inputStyle, padding: '6px 6px', fontSize: 12 }}
                             title="このステップ（納品）の依頼日。売上の発注/着手日へ連携されます" />
                         </div>
                         {/* 完了日（年月日＋時分）：1行に収める */}
-                        <div style={{ flex: '0 0 320px' }}>
+                        <div style={{ flex: '0 0 auto' }}>
                           <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>完了日</label>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'nowrap' }}>
                             <input type="date" value={step.completedDate ? step.completedDate.split('T')[0] : ''}
                               onChange={(e) => setStepCompletedDate(vi, si, e.target.value, step.completedDate ? (step.completedDate.split('T')[1] || '') : '')}
-                              style={{ ...inputStyle, width: 'auto', flex: '0 0 120px', padding: '6px 6px', fontSize: 12 }} />
+                              style={{ ...inputStyle, width: 'auto', flex: '0 0 100px', padding: '6px 4px', fontSize: 12 }} />
                             <TimeSelect value={step.completedDate ? (step.completedDate.split('T')[1] || '') : ''}
                               onChange={(val) => setStepCompletedDate(vi, si, step.completedDate ? step.completedDate.split('T')[0] : '', val)}
                               colors={colors} fontJP={fontJP} allowEmpty />
@@ -4291,7 +4291,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                         </div>
                         {/* 金額（ラボ会社は対象外。制作時間×2,500円をデフォルト算出） */}
                         {amountApplicable && (
-                          <div style={{ flex: '0 0 110px' }}>
+                          <div style={{ flex: '0 0 86px' }}>
                             <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>金額（円）</label>
                             <input type="text" inputMode="numeric" value={step.amount ?? ''}
                               onChange={(e) => updateStep(vi, si, 'amount', e.target.value)}
@@ -4301,14 +4301,14 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                           </div>
                         )}
                         {/* 制作時間（変更すると金額を自動算出） */}
-                        <div style={{ flex: '0 0 160px' }}>
+                        <div style={{ flex: '0 0 auto' }}>
                           <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>制作時間</label>
                           <DurationSelect value={step.hours}
                             onChange={(val) => updateStepHours(vi, si, val)}
                             colors={colors} fontJP={fontJP} />
                         </div>
                         {/* 完了時間 */}
-                        <div style={{ flex: '0 0 160px' }}>
+                        <div style={{ flex: '0 0 auto' }}>
                           <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>完了時間</label>
                           <DurationSelect value={step.completedHours}
                             onChange={(val) => updateStep(vi, si, 'completedHours', val)}
@@ -4318,7 +4318,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                           disabled={vp.steps.length <= 1}
                           style={{
                             background: 'transparent', border: `1px solid ${colors.border}`,
-                            padding: 7, borderRadius: 4, marginBottom: 1,
+                            padding: 7, borderRadius: 4, marginBottom: 1, flexShrink: 0,
                             cursor: vp.steps.length <= 1 ? 'not-allowed' : 'pointer',
                             color: vp.steps.length <= 1 ? '#ccc' : colors.textMute,
                             display: 'flex', alignItems: 'center',
@@ -6025,6 +6025,7 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
   const [editingCompletedHours, setEditingCompletedHours] = useState(false);
   const [totalHoursInput, setTotalHoursInput] = useState(fmtHM(task.hours));
   const [completedHoursInput, setCompletedHoursInput] = useState(fmtHM(task.completedHours || 0));
+  const [copiedDelivery, setCopiedDelivery] = useState(''); // コピー済みフィードバック（コピーした文字列）
   useEffect(() => { setPriorityInput(String(task.priority)); }, [task.priority]);
   useEffect(() => { setTotalHoursInput(fmtHM(task.hours)); }, [task.hours]);
   useEffect(() => { setCompletedHoursInput(fmtHM(task.completedHours || 0)); }, [task.completedHours]);
@@ -6052,6 +6053,17 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
     const v = parseHM(completedHoursInput);
     if (!isNaN(v) && v >= 0 && v !== (task.completedHours || 0) && onSetCompletedHours) onSetCompletedHours(v);
     else setCompletedHoursInput(fmtHM(task.completedHours || 0));
+  };
+
+  // 納品名をクリップボードへコピー（クリックで使う）
+  const copyDelivery = async (text) => {
+    const t = (text || '').trim();
+    if (!t) return;
+    try {
+      await navigator.clipboard.writeText(t);
+      setCopiedDelivery(t);
+      setTimeout(() => setCopiedDelivery(c => (c === t ? '' : c)), 1500);
+    } catch (e) { alert('コピーに失敗しました: ' + e); }
   };
 
   // 開始時間指定の編集を開始（既定値：現在の指定 → 無ければ現在のスケジュール開始）
@@ -6186,13 +6198,38 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
         {(() => {
           const vpBase = deliveryBaseName(task.projectName, task.viewpointNameExternal || task.viewpointName, task.deliveryNameOverride);
           const stepDelivery = (task.stepDeliveryNameOverride || '').trim() || stepDeliveryName(vpBase, task.stepName);
+          // 社内視点名ベースの納品名（併記用）。社外視点名が別にある場合のみ差分が出る。
+          const vpBaseInternal = deliveryBaseName(task.projectName, task.viewpointName, task.deliveryNameOverride);
+          const stepDeliveryInternal = (task.stepDeliveryNameOverride || '').trim() || stepDeliveryName(vpBaseInternal, task.stepName);
           const amt = vpNum(task.stepAmount);
           const cd = task.stepCompletedDate || '';
           const cdStr = cd ? `${cd.split('T')[0]}${cd.split('T')[1] ? ' ' + cd.split('T')[1] : ''}` : '';
           if (!stepDelivery && !task.stepRequestDate && !cdStr && !amt) return null;
           return (
             <div style={{ fontSize: 10.5, color: colors.textMute, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 4 }}>
-              {stepDelivery && <span title="納品名">納品名: <span style={{ color: '#9c7b3c', fontWeight: 600 }}>{stepDelivery}</span></span>}
+              {stepDelivery && (
+                <span title="納品名（社外視点名ベース／社内視点名ベースを併記）">
+                  納品名:{' '}
+                  <button type="button" onClick={() => copyDelivery(stepDelivery)}
+                    title="クリックでコピー"
+                    style={{ background: 'transparent', border: 'none', padding: 0, margin: 0, font: 'inherit', color: '#9c7b3c', fontWeight: 600, cursor: 'pointer' }}>
+                    {stepDelivery}
+                  </button>
+                  {stepDeliveryInternal && stepDeliveryInternal !== stepDelivery && (
+                    <>
+                      <span style={{ color: colors.textMute }}> ／ </span>
+                      <button type="button" onClick={() => copyDelivery(stepDeliveryInternal)}
+                        title="クリックでコピー（社内視点名ベース）"
+                        style={{ background: 'transparent', border: 'none', padding: 0, margin: 0, font: 'inherit', color: colors.textMute, cursor: 'pointer' }}>
+                        {stepDeliveryInternal}
+                      </button>
+                    </>
+                  )}
+                  {copiedDelivery && (copiedDelivery === stepDelivery || copiedDelivery === stepDeliveryInternal) && (
+                    <span style={{ color: colors.progress, fontWeight: 600, marginLeft: 6 }}>✓ コピーしました</span>
+                  )}
+                </span>
+              )}
               {task.stepRequestDate && <span>依頼 {task.stepRequestDate}</span>}
               {cdStr && <span>完了 {cdStr}</span>}
               {amt > 0 && <span style={{ color: '#3a7bd5', fontWeight: 600 }}>¥{Math.round(amt).toLocaleString('ja-JP')}</span>}
