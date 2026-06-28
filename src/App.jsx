@@ -3729,13 +3729,23 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
   // 案件の検索：案件名・社内案件名・会社名・お客様担当者・制作担当者・視点名・ステップ名で絞り込み
   const [searchQuery, setSearchQuery] = useState('');
   const q = searchQuery.trim().toLowerCase();
+  // 完了したステップ・視点も表示するか（進行中の案件に紐づく完了分を一覧に加える）
+  const [showCompleted, setShowCompleted] = useState(false);
+  // 一覧の元データ：標準は進行中（active）のみ。完了表示ONなら、進行中の案件に属する
+  // 完了ステップ・完了視点も加える（過去の完了案件で一覧が溢れないよう案件単位で限定）。
+  const listSource = useMemo(() => {
+    if (!showCompleted) return scheduled.active;
+    const activeProjects = new Set(scheduled.active.map(t => t.projectName));
+    const doneExtra = scheduled.done.filter(t => !t.cancelled && activeProjects.has(t.projectName));
+    return [...scheduled.active, ...doneExtra];
+  }, [showCompleted, scheduled.active, scheduled.done]);
   const filteredActive = useMemo(() => {
-    if (!q) return scheduled.active;
-    return scheduled.active.filter(t =>
+    if (!q) return listSource;
+    return listSource.filter(t =>
       [t.projectName, t.projectNameInternal, t.companyName, t.customerContact, t.assignee, t.viewpointName, t.stepName, t.memo]
         .some(v => (v || '').toLowerCase().includes(q))
     );
-  }, [scheduled.active, q]);
+  }, [listSource, q]);
 
   // 納品パース・外注の集計（①の納品集計・⑤の外注集計）。進行中案件の上部に表示する。
   const deliverySummary = useMemo(() => {
@@ -4437,6 +4447,18 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
               </button>
             )}
           </div>
+          {/* 完了したステップ・視点の表示切替 */}
+          <button type="button" onClick={() => setShowCompleted(v => !v)}
+            title="進行中の案件に紐づく完了ステップ・完了視点も一覧に表示します"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 5, padding: '8px 12px',
+              background: showCompleted ? colors.text : '#fff', color: showCompleted ? '#fff' : colors.textMute,
+              border: `1px solid ${showCompleted ? colors.text : colors.border}`, borderRadius: 20,
+              cursor: 'pointer', fontFamily: fontJP, fontSize: 12,
+            }}>
+            {showCompleted ? <Check size={14} /> : <CheckCircle2 size={14} />}
+            完了も表示
+          </button>
         </div>
 
         {/* 納品パース・外注の集計バー（①納品集計 / ⑤外注集計） */}
@@ -6115,12 +6137,14 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
       )}
       <button onClick={onToggle}
         style={{
-          width: 18, height: 18, border: `1.5px solid ${colors.border}`,
-          background: 'transparent',
+          width: 18, height: 18, border: `1.5px solid ${task.status === 'done' ? colors.progress : colors.border}`,
+          background: task.status === 'done' ? colors.progress : 'transparent',
           borderRadius: 3, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          padding: 0, flexShrink: 0,
+          padding: 0, flexShrink: 0, color: '#fff',
         }}
-        title="完了にする" />
+        title={task.status === 'done' ? '未完了に戻す' : '完了にする'}>
+        {task.status === 'done' && <Check size={12} />}
+      </button>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -6154,9 +6178,27 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
       </div>
 
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 3 }}>
+        <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 3, color: task.status === 'done' ? colors.textMute : 'inherit', textDecoration: task.status === 'done' ? 'line-through' : 'none' }}>
           {displayName}
+          {task.status === 'done' && <span style={{ fontSize: 10, fontWeight: 700, color: '#fff', background: colors.progress, borderRadius: 8, padding: '1px 7px', marginLeft: 8, textDecoration: 'none', verticalAlign: 'middle' }}>完了</span>}
         </div>
+        {/* ステップごとの納品名・依頼日・完了日・金額（新規登録で入力した情報を一覧でも表示） */}
+        {(() => {
+          const vpBase = deliveryBaseName(task.projectName, task.viewpointNameExternal || task.viewpointName, task.deliveryNameOverride);
+          const stepDelivery = (task.stepDeliveryNameOverride || '').trim() || stepDeliveryName(vpBase, task.stepName);
+          const amt = vpNum(task.stepAmount);
+          const cd = task.stepCompletedDate || '';
+          const cdStr = cd ? `${cd.split('T')[0]}${cd.split('T')[1] ? ' ' + cd.split('T')[1] : ''}` : '';
+          if (!stepDelivery && !task.stepRequestDate && !cdStr && !amt) return null;
+          return (
+            <div style={{ fontSize: 10.5, color: colors.textMute, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 4 }}>
+              {stepDelivery && <span title="納品名">納品名: <span style={{ color: '#9c7b3c', fontWeight: 600 }}>{stepDelivery}</span></span>}
+              {task.stepRequestDate && <span>依頼 {task.stepRequestDate}</span>}
+              {cdStr && <span>完了 {cdStr}</span>}
+              {amt > 0 && <span style={{ color: '#3a7bd5', fontWeight: 600 }}>¥{Math.round(amt).toLocaleString('ja-JP')}</span>}
+            </div>
+          );
+        })()}
         <div style={{ fontSize: 11, color: colors.textMute, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 4 }}>
           {onSetAssignee && (
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}
