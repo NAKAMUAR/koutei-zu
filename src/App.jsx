@@ -6267,7 +6267,7 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
         if (onDragTask) onDragTask(null);
       }}
       style={{
-      display: 'flex', alignItems: 'center', gap: 12,
+      display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
       padding: '12px 18px',
       borderBottom: isLast ? 'none' : `1px solid ${colors.border}`,
       background: '#fff',
@@ -6325,12 +6325,7 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
         )}
       </div>
 
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 3, color: task.status === 'done' ? colors.textMute : 'inherit', textDecoration: task.status === 'done' ? 'line-through' : 'none' }}>
-          {displayName}
-          {task.status === 'done' && <span style={{ fontSize: 10, fontWeight: 700, color: '#fff', background: colors.progress, borderRadius: 8, padding: '1px 7px', marginLeft: 8, textDecoration: 'none', verticalAlign: 'middle' }}>完了</span>}
-        </div>
-        {/* ステップごとの納品名・依頼日・完了日・金額（新規登録で入力した情報を一覧でも表示） */}
+      <div style={{ flex: '1 1 200px', minWidth: 180 }}>
         {(() => {
           const vpBase = deliveryBaseName(task.projectName, task.viewpointNameExternal || task.viewpointName, task.deliveryNameOverride);
           const stepDelivery = (task.stepDeliveryNameOverride || '').trim() || stepDeliveryName(vpBase, task.stepName);
@@ -6340,36 +6335,46 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
           const amt = vpNum(task.stepAmount);
           const cd = task.stepCompletedDate || '';
           const cdStr = cd ? `${cd.split('T')[0]}${cd.split('T')[1] ? ' ' + cd.split('T')[1] : ''}` : '';
-          if (!stepDelivery && !task.stepRequestDate && !cdStr && !amt) return null;
           return (
-            <div style={{ fontSize: 10.5, color: colors.textMute, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 4 }}>
-              {stepDelivery && (
-                <span title="納品名（社外視点名ベース／社内視点名ベースを併記）">
-                  納品名:{' '}
-                  <button type="button" onClick={() => copyDelivery(stepDelivery)}
-                    title="クリックでコピー"
-                    style={{ background: 'transparent', border: 'none', padding: 0, margin: 0, font: 'inherit', color: '#9c7b3c', fontWeight: 600, cursor: 'pointer' }}>
-                    {stepDelivery}
-                  </button>
-                  {stepDeliveryInternal && stepDeliveryInternal !== stepDelivery && (
-                    <>
-                      <span style={{ color: colors.textMute }}> ／ </span>
-                      <button type="button" onClick={() => copyDelivery(stepDeliveryInternal)}
-                        title="クリックでコピー（社内視点名ベース）"
-                        style={{ background: 'transparent', border: 'none', padding: 0, margin: 0, font: 'inherit', color: colors.textMute, cursor: 'pointer' }}>
-                        {stepDeliveryInternal}
-                      </button>
-                    </>
-                  )}
-                  {copiedDelivery && (copiedDelivery === stepDelivery || copiedDelivery === stepDeliveryInternal) && (
-                    <span style={{ color: colors.progress, fontWeight: 600, marginLeft: 6 }}>✓ コピーしました</span>
-                  )}
+            <>
+              {/* ステップ名 ＋ 納品名を同じ行・右横に（同じ大きさ）。狭い画面でのみ折り返す */}
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', marginBottom: 3 }}>
+                <span style={{ fontSize: 13, fontWeight: 500, color: task.status === 'done' ? colors.textMute : 'inherit', textDecoration: task.status === 'done' ? 'line-through' : 'none' }}>
+                  {displayName}
                 </span>
+                {task.status === 'done' && <span style={{ fontSize: 10, fontWeight: 700, color: '#fff', background: colors.progress, borderRadius: 8, padding: '1px 7px', textDecoration: 'none' }}>完了</span>}
+                {stepDelivery && (
+                  <span style={{ fontSize: 13 }} title="納品名（社外視点名ベース／社内視点名ベースを併記）">
+                    納品名:{' '}
+                    <button type="button" onClick={() => copyDelivery(stepDelivery)}
+                      title="クリックでコピー"
+                      style={{ background: 'transparent', border: 'none', padding: 0, margin: 0, font: 'inherit', color: '#9c7b3c', fontWeight: 600, cursor: 'pointer' }}>
+                      {stepDelivery}
+                    </button>
+                    {stepDeliveryInternal && stepDeliveryInternal !== stepDelivery && (
+                      <>
+                        <span style={{ color: colors.textMute }}> ／ </span>
+                        <button type="button" onClick={() => copyDelivery(stepDeliveryInternal)}
+                          title="クリックでコピー（社内視点名ベース）"
+                          style={{ background: 'transparent', border: 'none', padding: 0, margin: 0, font: 'inherit', color: colors.textMute, cursor: 'pointer' }}>
+                          {stepDeliveryInternal}
+                        </button>
+                      </>
+                    )}
+                    {copiedDelivery && (copiedDelivery === stepDelivery || copiedDelivery === stepDeliveryInternal) && (
+                      <span style={{ color: colors.progress, fontWeight: 600, marginLeft: 6 }}>✓ コピーしました</span>
+                    )}
+                  </span>
+                )}
+              </div>
+              {(task.stepRequestDate || cdStr || amt > 0) && (
+                <div style={{ fontSize: 10.5, color: colors.textMute, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 4 }}>
+                  {task.stepRequestDate && <span>依頼 {task.stepRequestDate}</span>}
+                  {cdStr && <span>完了 {cdStr}</span>}
+                  {amt > 0 && <span style={{ color: '#3a7bd5', fontWeight: 600 }}>¥{Math.round(amt).toLocaleString('ja-JP')}</span>}
+                </div>
               )}
-              {task.stepRequestDate && <span>依頼 {task.stepRequestDate}</span>}
-              {cdStr && <span>完了 {cdStr}</span>}
-              {amt > 0 && <span style={{ color: '#3a7bd5', fontWeight: 600 }}>¥{Math.round(amt).toLocaleString('ja-JP')}</span>}
-            </div>
+            </>
           );
         })()}
         <div style={{ fontSize: 11, color: colors.textMute, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 4 }}>
