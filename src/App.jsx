@@ -3,6 +3,7 @@ import { Plus, Trash2, Edit2, Calendar as CalIcon, MessageSquare, Settings as Se
 import { storage, tasksStore, signIn, signOutUser, subscribeAuth } from './firebase.js';
 import BillingView from './billing/BillingView.jsx';
 import SalesView from './sales/SalesView.jsx';
+import WorkLogView from './worklog/WorkLogView.jsx';
 import {
   ROUND_TYPES, roundTypeOf, normalizeHistory, deliveryBaseName,
   deliveryNameForNumber,
@@ -1152,6 +1153,9 @@ export default function App() {
   const [salesLedgerSync, setSalesLedgerSync] = useState(null);
   // タスクメモ（[{ id, title, date, startTime, endTime, allDay, note, color, createdAt, updatedAt }]）
   const [memos, setMemos] = useState([]);
+  // 実績（作業時間）。工程スケジューラとは独立した記録。
+  // [{ id, internalName, externalName, cutName, serverLink, totalH, whiteH, colorH, createdAt }]
+  const [workLogs, setWorkLogs] = useState([]);
   // 完了ダイアログ（終了時間を入力して完了する）の対象
   const [completeTarget, setCompleteTarget] = useState(null);
   // 開始時間が移動する場合の確認モーダル
@@ -1362,6 +1366,13 @@ export default function App() {
       catch (e) { setMemos([]); }
     });
 
+    // 実績（作業時間）を購読
+    const unsubWorkLogs = storage.subscribe('workLogs', (val) => {
+      if (!val) { setWorkLogs([]); return; }
+      try { const arr = JSON.parse(val); setWorkLogs(Array.isArray(arr) ? arr : []); }
+      catch (e) { setWorkLogs([]); }
+    });
+
     // 売上登録表を購読（視点の制作履歴 → 売上行の自動同期に使う）
     const unsubSalesLedger = storage.subscribe('salesLedger', (val) => {
       if (!val) { setSalesLedgerSync({}); return; }
@@ -1380,6 +1391,7 @@ export default function App() {
       unsubCustomer();
       unsubEmployee();
       unsubMemos();
+      unsubWorkLogs();
       unsubSalesLedger();
     };
   }, [auth.allowed]);
@@ -1793,6 +1805,29 @@ export default function App() {
       storage.set('memos', JSON.stringify(next)).catch(e => console.error('タスクメモ削除エラー:', e));
       return next;
     });
+  };
+
+  // 実績（作業時間）の保存。追加・削除・全件削除。
+  const persistWorkLogs = (next) => {
+    storage.set('workLogs', JSON.stringify(next)).catch(e => console.error('実績保存エラー:', e));
+  };
+  const addWorkLogs = (records) => {
+    setWorkLogs(prev => {
+      const next = [...prev, ...records];
+      persistWorkLogs(next);
+      return next;
+    });
+  };
+  const deleteWorkLog = (id) => {
+    setWorkLogs(prev => {
+      const next = prev.filter(r => r.id !== id);
+      persistWorkLogs(next);
+      return next;
+    });
+  };
+  const clearWorkLogs = () => {
+    setWorkLogs([]);
+    persistWorkLogs([]);
   };
 
 
@@ -3002,6 +3037,7 @@ export default function App() {
     { id: 'memo', icon: <StickyNote size={15} />, label: 'タスクメモ' },
     { id: 'billing', icon: <FileText size={15} />, label: '帳票' },
     { id: 'sales', icon: <Table size={15} />, label: '売上登録' },
+    { id: 'worklog', icon: <Clock size={15} />, label: '実績' },
   ];
 
   return (
@@ -3175,6 +3211,11 @@ export default function App() {
         )}
         {view === 'sales' && (
           <SalesView tasks={tasks} customerMaster={customerMaster} now={now}
+            colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
+        )}
+        {view === 'worklog' && (
+          <WorkLogView workLogs={workLogs} addWorkLogs={addWorkLogs}
+            deleteWorkLog={deleteWorkLog} clearWorkLogs={clearWorkLogs}
             colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
         )}
       </main>
