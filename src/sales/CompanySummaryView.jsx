@@ -7,8 +7,9 @@ import { salesStore, storage } from '../firebase.js';
 import {
   COMPANY_METRICS, companyMetricOf, computeCompanyMatrix, formatYen,
 } from './salesUtils.js';
+import { computeEstimateVariance } from '../viewpoint/viewpointUtils.js';
 
-export default function CompanySummaryView({ now, colors, fontJP, fontDisplay }) {
+export default function CompanySummaryView({ tasks, now, colors, fontJP, fontDisplay }) {
   const [ledger, setLedger] = useState({});
   const [loaded, setLoaded] = useState(false);
   const [year, setYear] = useState(now.getFullYear());
@@ -150,6 +151,100 @@ export default function CompanySummaryView({ now, colors, fontJP, fontDisplay })
           {basis === 'delivery' ? ' 納品日が未入力の行は集計対象外です。' : ''}
           オフショア/ラボは行の売上区分から自動分類。実績のない会社は表示されません。
         </div>
+
+        {/* 見積時間と実績の乖離分析（完了ステップの 制作時間 vs 完了時間） */}
+        <VarianceSection tasks={tasks} year={year} colors={colors} fontJP={fontJP} />
+      </div>
+    </div>
+  );
+}
+
+// ===== 見積時間と実績の乖離分析 =====
+// 完了ステップの「制作時間（予定）」と「完了時間（実績）」を会社別・担当者別・制作種類別に集計。
+// 見積もり（制作時間の初期値）の精度改善に使う。期間は上の年切替と連動（全期間にも切替可）。
+const VARIANCE_GROUPS = [
+  { id: 'company', label: '会社別' },
+  { id: 'assignee', label: '担当者別' },
+  { id: 'prodType', label: '制作種類別' },
+];
+function VarianceSection({ tasks, year, colors, fontJP }) {
+  const [groupBy, setGroupBy] = useState('company');
+  const [allPeriod, setAllPeriod] = useState(false);
+  const rows = useMemo(
+    () => computeEstimateVariance(tasks, groupBy, allPeriod ? null : year),
+    [tasks, groupBy, allPeriod, year]
+  );
+  const totals = useMemo(() => rows.reduce((s, r) => ({
+    count: s.count + r.count, plannedH: s.plannedH + r.plannedH, actualH: s.actualH + r.actualH,
+  }), { count: 0, plannedH: 0, actualH: 0 }), [rows]);
+  const totalRatio = totals.plannedH > 0 ? Math.round((totals.actualH / totals.plannedH) * 100) : null;
+  const th = { border: `1px solid ${colors.border}`, padding: '5px 10px', background: '#3a3a3a', color: '#fff', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', WebkitPrintColorAdjust: 'exact' };
+  const td = { border: `1px solid ${colors.border}`, padding: '5px 10px', fontSize: 12, background: '#fff', whiteSpace: 'nowrap' };
+  const tdNum = { ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' };
+  // 実績/予定：110%超は赤系（見積不足）、90%未満は緑系（見積過大）、その間は無色
+  const ratioStyle = (ratio) => ratio == null ? {} : ratio > 110 ? { color: '#c1272d', fontWeight: 700 } : ratio < 90 ? { color: '#3a5a40', fontWeight: 700 } : {};
+  const round1 = (v) => Math.round(v * 10) / 10;
+  return (
+    <div style={{ marginTop: 26 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 14, fontWeight: 700 }}>見積時間と実績の乖離（完了ステップ）</span>
+        <div className="kz-no-print" style={{ display: 'flex', gap: 4 }}>
+          {VARIANCE_GROUPS.map(g => (
+            <button key={g.id} onClick={() => setGroupBy(g.id)}
+              style={{ padding: '4px 10px', background: groupBy === g.id ? '#1a1a1a' : 'transparent', color: groupBy === g.id ? '#fff' : '#1a1a1a', border: `1px solid ${groupBy === g.id ? '#1a1a1a' : colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 11 }}>
+              {g.label}
+            </button>
+          ))}
+        </div>
+        <label className="kz-no-print" style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, cursor: 'pointer' }}>
+          <input type="checkbox" checked={allPeriod} onChange={e => setAllPeriod(e.target.checked)} />
+          全期間（チェックなし＝{year}年の完了分）
+        </label>
+      </div>
+      {rows.length === 0 ? (
+        <div style={{ color: colors.textMute, fontSize: 12, padding: '14px 0' }}>
+          集計対象がありません（完了済みで、制作時間と完了時間の両方が入っているステップが対象です）。
+        </div>
+      ) : (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ borderCollapse: 'collapse', minWidth: 640 }}>
+            <thead>
+              <tr>
+                <th style={{ ...th, minWidth: 180, textAlign: 'left' }}>{VARIANCE_GROUPS.find(g => g.id === groupBy).label.replace('別', '')}</th>
+                <th style={th}>完了ステップ数</th>
+                <th style={th}>予定合計（h）</th>
+                <th style={th}>実績合計（h）</th>
+                <th style={th} title="実績 − 予定。プラス＝見積より時間がかかった">乖離（h）</th>
+                <th style={th} title="実績 ÷ 予定。110%超は見積不足（赤）、90%未満は見積過大（緑）">実績/予定</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.key}>
+                  <td style={td}>{r.key}</td>
+                  <td style={tdNum}>{r.count}</td>
+                  <td style={tdNum}>{r.plannedH}</td>
+                  <td style={tdNum}>{r.actualH}</td>
+                  <td style={{ ...tdNum, fontWeight: 600, color: r.diffH > 0 ? '#c1272d' : r.diffH < 0 ? '#3a5a40' : undefined }}>
+                    {r.diffH > 0 ? `+${r.diffH}` : r.diffH}
+                  </td>
+                  <td style={{ ...tdNum, ...ratioStyle(r.ratio) }}>{r.ratio == null ? '-' : `${r.ratio}%`}</td>
+                </tr>
+              ))}
+              <tr style={{ background: '#f0ede3', WebkitPrintColorAdjust: 'exact' }}>
+                <td style={{ ...td, background: 'transparent', fontWeight: 700, textAlign: 'right' }}>合計</td>
+                <td style={{ ...tdNum, background: 'transparent', fontWeight: 700 }}>{totals.count}</td>
+                <td style={{ ...tdNum, background: 'transparent', fontWeight: 700 }}>{round1(totals.plannedH)}</td>
+                <td style={{ ...tdNum, background: 'transparent', fontWeight: 700 }}>{round1(totals.actualH)}</td>
+                <td style={{ ...tdNum, background: 'transparent', fontWeight: 700 }}>{round1(totals.actualH - totals.plannedH) > 0 ? `+${round1(totals.actualH - totals.plannedH)}` : round1(totals.actualH - totals.plannedH)}</td>
+                <td style={{ ...tdNum, background: 'transparent', ...ratioStyle(totalRatio), fontWeight: 700 }}>{totalRatio == null ? '-' : `${totalRatio}%`}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div style={{ fontSize: 11, color: colors.textMute, marginTop: 6 }}>
+        実績/予定が110%を超えるグループは見積（制作時間の初期値）が不足気味、90%未満は余裕を見過ぎの傾向です。乖離時間の大きい順に表示。
       </div>
     </div>
   );

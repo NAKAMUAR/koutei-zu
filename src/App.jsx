@@ -720,6 +720,68 @@ function scheduleTasks(tasks, settings, projectOrder, now) {
   return { active: scheduled, done, review, doneFinal, suspended };
 }
 
+// 予測遅延の事前検知：終了予定（スケジューラ計算）が実効納期（個別＞全体）を超える見込みの
+// 視点を抽出する。納期が本日以前のものは既存の赤警告（間に合わない恐れ）が担当するため、
+// ここでは「納期はまだ先なのに、このままだと超過する」ものだけを返す（早期警告）。
+function computeLateRisks(activeScheduled, now) {
+  const todayYmd = fmtYMD(now);
+  const map = new Map(); // `${案件}::${視点}` → 集計
+  for (const t of activeScheduled) {
+    const dl = (t.deadline || t.projectDeadline || '').trim();
+    if (!dl || !t.scheduledEnd) continue;
+    const key = `${t.projectName || ''}::${t.viewpointName || ''}`;
+    const endTs = t.scheduledEnd.getTime() + (t.scheduledEndMin || 0) * 60000;
+    const e = map.get(key) || {
+      projectName: t.projectName || '', projectNameInternal: t.projectNameInternal || '',
+      viewpointName: t.viewpointName || '', assignee: t.assignee || '', deadline: dl, endTs: 0,
+    };
+    if (endTs > e.endTs) { e.endTs = endTs; e.assignee = t.assignee || e.assignee; }
+    if (dl < e.deadline) e.deadline = dl;
+    map.set(key, e);
+  }
+  const out = [];
+  for (const e of map.values()) {
+    if (e.deadline <= todayYmd) continue; // 本日・超過分は赤警告側
+    const endYmd = fmtYMD(new Date(e.endTs));
+    if (endYmd <= e.deadline) continue;
+    const lateDays = Math.round((parseYMD(endYmd).getTime() - parseYMD(e.deadline).getTime()) / 86400000);
+    out.push({ ...e, endYmd, lateDays });
+  }
+  return out.sort((a, b) => b.lateDays - a.lateDays || (a.deadline < b.deadline ? -1 : 1));
+}
+
+// 担当者×営業日の空き時間（h）を集計する（カレンダーの空き時間サマリー用）。
+// スケジュール済みスロットを予約として引き、休日・不在・残業枠も考慮する
+// （dayFreeIntervals と同じ規則）。numDays ぶんの営業日を今日から数える。
+function computeFreeHours(activeScheduled, settings, assignees, now, numDays) {
+  const busyMap = {};
+  for (const t of activeScheduled) {
+    for (const slot of (t.slots || [])) {
+      const a = t.assignee || '';
+      if (!busyMap[a]) busyMap[a] = new Map();
+      const ymd = fmtYMD(slot.date);
+      if (!busyMap[a].has(ymd)) busyMap[a].set(ymd, []);
+      busyMap[a].get(ymd).push([slot.startMin, slot.endMin]);
+    }
+  }
+  const days = [];
+  let d = startOfDay(now);
+  let guard = 0;
+  while (days.length < numDays && guard++ < 120) {
+    if (!isNonWorkingDay(d)) days.push(new Date(d));
+    d = addDays(d, 1);
+  }
+  const absences = settings.absences || [];
+  const byAssignee = {};
+  for (const a of assignees) {
+    byAssignee[a] = days.map(day => {
+      const free = dayFreeIntervals(a, day, settings, busyMap, absences);
+      return free.reduce((s, [fs, fe]) => s + (fe - fs), 0) / 60;
+    });
+  }
+  return { days, byAssignee };
+}
+
 // 視点（ステップ群）の完了実績（actualEnd）のうち最も遅い時刻を返す。
 // 編集フォームの「終了時間」を、終了時間指定が無くても完了済みの実終了時刻で埋めるために使う。
 function latestActualEnd(steps) {
@@ -3236,7 +3298,7 @@ export default function App() {
             colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
         )}
         {view === 'companySummary' && (
-          <CompanySummaryView now={now}
+          <CompanySummaryView tasks={tasks} now={now}
             colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
         )}
       </main>
@@ -3987,6 +4049,33 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
     [form, tasks, settings, projectOrder, now]
   );
 
+  // おすすめ担当者の提案（what-if）：担当者候補ごとに「全視点をその人に割り当てたら」で
+  // 実スケジュールと同じ計算を行い、終了予定が早く納期を守れる順に提示する。
+  // 計算が重いためボタンを押した時だけ実行する。
+  const [assigneeSuggestions, setAssigneeSuggestions] = useState(null); // null=非表示
+  useEffect(() => { setAssigneeSuggestions(null); }, [editingId]); // 対象が変わったら閉じる
+  const suggestAssignees = () => {
+    const candidates = [...new Set((assigneeList || []).map(a => (a || '').trim()).filter(Boolean))];
+    if (candidates.length === 0) { alert('担当者の候補がありません。従業員マスタに担当者を登録してください。'); return; }
+    const out = [];
+    for (const a of candidates) {
+      const f2 = { ...form, assignee: a, viewpoints: (form.viewpoints || []).map(vp => ({ ...vp, assignee: a })) };
+      const sim = simulateFormSchedule(f2, tasks, settings, projectOrder, now);
+      if (!sim || !sim.endDate) continue;
+      out.push({
+        assignee: a, endDate: sim.endDate, endMin: sim.endMin,
+        endTs: sim.endDate.getTime() + (sim.endMin || 0) * 60000,
+        violations: (sim.deadlineViolations || []).length,
+      });
+    }
+    out.sort((x, y) => (x.violations > 0 ? 1 : 0) - (y.violations > 0 ? 1 : 0) || x.endTs - y.endTs);
+    setAssigneeSuggestions(out);
+  };
+  const applySuggestedAssignee = (a) => {
+    setForm({ ...form, assignee: a, viewpoints: (form.viewpoints || []).map(vp => ({ ...vp, assignee: a })) });
+    setAssigneeSuggestions(null);
+  };
+
   // 視点ごとの開始時間を「日付」と「時刻」に分けて扱う（datetime-localが入力しづらい環境への対策）
   const setVpManualStart = (vi, datePart, timePart) => {
     let val = '';
@@ -4091,6 +4180,11 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
   const [riskAck, setRiskAck] = useState(false);
   const riskKey = atRiskProjects.map(p => p.projectName).sort().join('|');
   useEffect(() => { setRiskAck(false); }, [riskKey]);
+
+  // 予測遅延（事前警告）：納期はまだ先だが、終了予定がこのままだと納期を超える視点。
+  // 赤警告（納期当日・超過）より前の段階で担当替え・優先順位変更の判断材料にする。
+  const lateRisks = useMemo(() => computeLateRisks(scheduled.active, now), [scheduled.active, now]);
+  const [lateRiskOpen, setLateRiskOpen] = useState(true);
 
   // ===== 過去案件から引用 =====
   const [quoteOpen, setQuoteOpen] = useState(false);
@@ -4207,6 +4301,43 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
               </div>
             </div>
           </div>
+        </div>
+      )}
+      {/* 予測遅延の事前警告（納期はまだ先だが終了予定が超過見込みの視点）。案件編集モード中は隠す */}
+      {!caseEditMode && lateRisks.length > 0 && (
+        <div style={{ background: '#fdf3e7', border: '1px solid #e0b072', borderRadius: 6, padding: '10px 16px', marginBottom: 16, fontFamily: fontJP }}>
+          <button type="button" onClick={() => setLateRiskOpen(o => !o)}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, fontFamily: fontJP, width: '100%', textAlign: 'left' }}>
+            <AlertTriangle size={16} color="#c46a16" />
+            <span style={{ fontSize: 13, fontWeight: 700, color: '#c46a16' }}>
+              納期超過の見込み {lateRisks.length}件（このままだと納期に遅れる予定の視点）
+            </span>
+            <span style={{ marginLeft: 'auto', color: '#c46a16', display: 'flex' }}>{lateRiskOpen ? <ChevronUp size={15} /> : <ChevronDown size={15} />}</span>
+          </button>
+          {lateRiskOpen && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 8 }}>
+              {lateRisks.map((r, i) => {
+                const dl = new Date(r.deadline + 'T00:00:00');
+                const end = new Date(r.endYmd + 'T00:00:00');
+                return (
+                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12.5, background: '#fff', border: '1px solid #ecd9bd', borderRadius: 4, padding: '6px 10px' }}>
+                    <span style={{ fontWeight: 600 }}>
+                      {r.projectNameInternal ? `${r.projectNameInternal}（${r.projectName}）` : r.projectName}
+                      {r.viewpointName ? ` ／ ${r.viewpointName}` : ''}
+                    </span>
+                    {r.assignee && <span style={{ color: colors.textMute, fontSize: 11 }}>担当 {r.assignee}</span>}
+                    <span style={{ marginLeft: 'auto', whiteSpace: 'nowrap', color: '#8a6420' }}>
+                      納期 {fmtMD(dl)}({dayName(dl)}) → 終了予定 {fmtMD(end)}({dayName(end)})
+                    </span>
+                    <span style={{ fontWeight: 700, color: '#c1272d', whiteSpace: 'nowrap' }}>{r.lateDays}日遅れ見込み</span>
+                  </div>
+                );
+              })}
+              <div style={{ fontSize: 11, color: '#8a6420' }}>
+                担当者の変更・案件の並び替え・残業枠の追加などで解消できます（変更するとこの一覧は自動で更新されます）
+              </div>
+            </div>
+          )}
         </div>
       )}
       <section style={{ background: colors.surface, border: `1px solid ${colors.border}`, borderRadius: 6, padding: 24 }}>
@@ -4339,7 +4470,49 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                   全視点へ適用
                 </button>
               )}
+              <button type="button" onClick={suggestAssignees}
+                title="担当者候補ごとに全視点を割り当てた場合の終了予定を試算し、納期を守れて早く終わる順に提案します"
+                style={{
+                  background: 'transparent', border: `1px solid ${colors.border}`,
+                  color: colors.textMute, padding: '0 10px', borderRadius: 4, cursor: 'pointer',
+                  fontFamily: fontJP, fontSize: 11, whiteSpace: 'nowrap',
+                }}>
+                提案
+              </button>
             </div>
+            {assigneeSuggestions && (
+              <div style={{ marginTop: 6, border: `1px solid ${colors.border}`, borderRadius: 5, background: '#fbf9f4', padding: 8 }}>
+                <div style={{ fontSize: 10.5, color: colors.textMute, marginBottom: 5 }}>
+                  終了予定の早い順（全視点をその担当者にした場合の試算）。クリックで適用
+                </div>
+                {assigneeSuggestions.length === 0 ? (
+                  <div style={{ fontSize: 12, color: colors.textMute }}>試算できる候補がありません（視点に制作時間が入っているか確認してください）</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 180, overflowY: 'auto' }}>
+                    {assigneeSuggestions.map((s, i) => (
+                      <button type="button" key={s.assignee} onClick={() => applySuggestedAssignee(s.assignee)}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 8, padding: '5px 9px', borderRadius: 4,
+                          border: `1px solid ${s.violations === 0 ? '#bcd3b0' : '#e6c6a3'}`,
+                          background: '#fff', cursor: 'pointer', fontFamily: fontJP, fontSize: 12, textAlign: 'left',
+                        }}>
+                        <span style={{ fontWeight: 700 }}>{i === 0 ? '★ ' : ''}{s.assignee}</span>
+                        <span style={{ marginLeft: 'auto', whiteSpace: 'nowrap', color: colors.textMute }}>
+                          終了予定 {fmtMD(s.endDate)}({dayName(s.endDate)}) {minToTime(s.endMin)}
+                        </span>
+                        <span style={{ whiteSpace: 'nowrap', fontWeight: 600, fontSize: 11, color: s.violations === 0 ? '#3a5a40' : '#c1272d' }}>
+                          {s.violations === 0 ? '納期内 ✓' : `納期超過 ${s.violations}視点`}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <button type="button" onClick={() => setAssigneeSuggestions(null)}
+                  style={{ marginTop: 6, background: 'transparent', border: 'none', color: colors.textMute, fontSize: 11, cursor: 'pointer', fontFamily: fontJP, padding: 0 }}>
+                  閉じる
+                </button>
+              </div>
+            )}
           </div>
           <div>
             <label style={labelStyle}>依頼日（案件共通・任意）</label>
@@ -6729,6 +6902,8 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
   // 表示モード：1日 / 週間 / 月間 / 全期間（従来のスクロール表示）
   const [viewMode, setViewMode] = useState('scroll');
   const [anchor, setAnchor] = useState(today);
+  // 空き時間サマリー（担当者×営業日の空き h）の開閉
+  const [freeOpen, setFreeOpen] = useState(false);
 
   // モードごとに表示する営業日の列を決める
   const allDates = [];
@@ -6947,7 +7122,68 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
             <span style={{ fontSize: 13, fontWeight: 600, color: colors.text, marginLeft: 6 }}>{rangeLabel}</span>
           </div>
         )}
+        <button type="button" onClick={() => setFreeOpen(o => !o)}
+          title="担当者ごとの空き時間（今後の営業日）を一覧表示します。新しい案件を誰に振れるかの判断に使えます"
+          style={{ ...tabStyle(freeOpen, colors, fontJP), marginLeft: 'auto' }}>
+          空き時間
+        </button>
       </div>
+
+      {/* 空き時間サマリー：担当者×営業日の空き時間（h）。休日・不在・残業枠を考慮 */}
+      {freeOpen && (() => {
+        const dayCount = 10;
+        const fh = computeFreeHours(scheduled.active, settings, assignees, now || new Date(), dayCount);
+        const cellBg = (h, cap) => {
+          if (h <= 0.01) return '#f0ede5';
+          const ratio = Math.min(1, h / Math.max(cap, 1));
+          return `rgba(90, 140, 90, ${0.12 + ratio * 0.38})`;
+        };
+        const fmtH = (h) => h <= 0.01 ? '-' : (Math.round(h * 10) / 10).toString();
+        return (
+          <div style={{ border: `1px solid ${colors.border}`, borderRadius: 6, background: '#fff', padding: 12, marginBottom: 14 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>
+              空き時間（今後{dayCount}営業日・単位 h）
+              <span style={{ fontSize: 10.5, color: colors.textMute, fontWeight: 400, marginLeft: 8 }}>
+                スケジュール済みの予定・休日・不在・残業枠を反映。「-」は空きなし
+              </span>
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead>
+                  <tr>
+                    <th style={{ border: `1px solid ${colors.border}`, padding: '4px 10px', background: '#f7f6f2', textAlign: 'left', minWidth: 90 }}>担当者</th>
+                    {fh.days.map((d, i) => (
+                      <th key={i} style={{ border: `1px solid ${colors.border}`, padding: '4px 8px', background: isSameDay(d, now || new Date()) ? '#fdf3e7' : '#f7f6f2', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                        {fmtMD(d)}({dayName(d)})
+                      </th>
+                    ))}
+                    <th style={{ border: `1px solid ${colors.border}`, padding: '4px 8px', background: '#f7f6f2', fontWeight: 700 }}>合計</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {assignees.map(a => {
+                    const vals = fh.byAssignee[a] || [];
+                    const total = vals.reduce((s, v) => s + v, 0);
+                    return (
+                      <tr key={a}>
+                        <td style={{ border: `1px solid ${colors.border}`, padding: '4px 10px', fontWeight: 600, whiteSpace: 'nowrap' }}>{a}</td>
+                        {vals.map((h, i) => (
+                          <td key={i} style={{ border: `1px solid ${colors.border}`, padding: '4px 8px', textAlign: 'right', background: cellBg(h, hoursPerDay), fontVariantNumeric: 'tabular-nums' }}>
+                            {fmtH(h)}
+                          </td>
+                        ))}
+                        <td style={{ border: `1px solid ${colors.border}`, padding: '4px 8px', textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+                          {fmtH(total)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })()}
 
       {viewMode === 'day' ? (() => {
         // 1日表示：時間が横に流れるタイムライン形式（30分刻みの時間軸 × 担当者行）
