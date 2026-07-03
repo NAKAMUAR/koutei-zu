@@ -1,56 +1,78 @@
 // 帳票ビュー：一覧・編集・お客様/案件からの自動入力・PDF出力（ブラウザ印刷）。
-// データは storage の 'billingDocuments' キーに JSON 配列で保存（他マスタと同じ流儀）。
+// データは 1帳票 = 1 Firestore ドキュメント（billingStore、data/bill_{id}）。
+// 発行元（自社）情報・振込先は storage の 'billingIssuer' キーで編集できる。
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Plus, Trash2, Edit2, Copy, Printer, X, FileText } from 'lucide-react';
-import { storage } from '../firebase.js';
+import { Plus, Trash2, Edit2, Copy, Printer, X, FileText, Search, Building2 } from 'lucide-react';
+import { storage, billingStore } from '../firebase.js';
 import BillingDocument from './BillingDocument.jsx';
 import {
   DOC_TYPES, docTypeOf, blankDoc, blankItem, formatYen, formatJDate, computeTotals,
   CONDITION_SECTIONS, SCHEDULE_TIME_ROWS,
+  INVOICE_STATUSES, invoiceStatusOf, migrateBillingDoc, todayStr,
+  REBEG_ESTIMATE, REBEG_INVOICE, INVOICE_BANK_LINES,
 } from './billingUtils.js';
-
-const STORAGE_KEY = 'billingDocuments';
 
 export default function BillingView({ customerMaster, tasks, now, colors, fontJP, fontDisplay }) {
   const [docs, setDocs] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [editing, setEditing] = useState(null); // 編集中ドキュメント（null=一覧）
   const [filterType, setFilterType] = useState('all');
+  const [filterStatus, setFilterStatus] = useState('all'); // 請求書のステータス絞り込み
+  const [q, setQ] = useState('');                          // 検索（NO・件名・会社名）
+  const [issuer, setIssuer] = useState(null);              // 発行元・振込先の設定
+  const [showIssuer, setShowIssuer] = useState(false);
 
-  // 購読
+  // 購読（1帳票=1ドキュメント。作成日の新しい順に並べる）
   useEffect(() => {
-    const unsub = storage.subscribe(STORAGE_KEY, (val) => {
-      if (!val) { setDocs([]); setLoaded(true); return; }
-      try { const arr = JSON.parse(val); setDocs(Array.isArray(arr) ? arr : []); }
-      catch (e) { setDocs([]); }
+    const unsub = billingStore.subscribe((map) => {
+      const arr = Object.values(map).map(migrateBillingDoc);
+      arr.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      setDocs(arr);
       setLoaded(true);
     });
     return () => unsub && unsub();
   }, []);
 
-  const persist = (next) => {
-    setDocs(next);
-    storage.set(STORAGE_KEY, JSON.stringify(next)).catch(e => console.error('帳票保存エラー:', e));
-  };
+  // 発行元（自社）・振込先の設定を購読
+  useEffect(() => {
+    const unsub = storage.subscribe('billingIssuer', (val) => {
+      if (!val) { setIssuer(null); return; }
+      try { setIssuer(JSON.parse(val)); } catch (e) { setIssuer(null); }
+    });
+    return () => unsub && unsub();
+  }, []);
 
   const saveDoc = (doc) => {
     const stamped = { ...doc, updatedAt: Date.now() };
-    const exists = docs.some(d => d.id === stamped.id);
-    const next = exists ? docs.map(d => d.id === stamped.id ? stamped : d) : [stamped, ...docs];
-    persist(next);
+    setDocs(prev => {
+      const exists = prev.some(d => d.id === stamped.id);
+      return exists ? prev.map(d => d.id === stamped.id ? stamped : d) : [stamped, ...prev];
+    });
+    billingStore.set(stamped.id, stamped).catch(e => console.error('帳票保存エラー:', e));
     return stamped;
   };
   const deleteDoc = (id) => {
     if (!confirm('この帳票を削除しますか？この操作は取り消せません。')) return;
-    persist(docs.filter(d => d.id !== id));
+    setDocs(prev => prev.filter(d => d.id !== id));
+    billingStore.remove(id).catch(e => console.error('帳票削除エラー:', e));
     if (editing && editing.id === id) setEditing(null);
   };
   const duplicateDoc = (doc) => {
     const copy = { ...JSON.parse(JSON.stringify(doc)), id: `doc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, no: doc.no + '-copy', createdAt: Date.now(), updatedAt: Date.now() };
-    persist([copy, ...docs]);
+    if (copy.type === 'invoice') { copy.status = 'draft'; copy.sentDate = ''; copy.paidDate = ''; }
+    saveDoc(copy);
+  };
+  // 一覧から請求書ステータスを直接変更（送付/入金にした時は日付も自動記録）
+  const setDocStatus = (doc, status) => {
+    const today = todayStr(now);
+    const patch = { status };
+    if (status === 'sent' && !(doc.sentDate || '').trim()) patch.sentDate = today;
+    if (status === 'paid' && !(doc.paidDate || '').trim()) patch.paidDate = today;
+    if (status === 'draft') { patch.sentDate = ''; patch.paidDate = ''; }
+    saveDoc({ ...doc, ...patch });
   };
 
-  const createNew = (type) => setEditing(blankDoc(type, docs, now));
+  const createNew = (type) => setEditing(blankDoc(type, docs, now, issuer));
 
   if (editing) {
     return (
@@ -69,7 +91,21 @@ export default function BillingView({ customerMaster, tasks, now, colors, fontJP
     );
   }
 
-  const visible = docs.filter(d => filterType === 'all' || d.type === filterType);
+  // 絞り込み：種別 → 請求書ステータス → キーワード（NO・件名・会社名）
+  const kw = q.trim().toLowerCase();
+  const visible = docs.filter(d => {
+    if (filterType !== 'all' && d.type !== filterType) return false;
+    if (filterStatus !== 'all' && !(d.type === 'invoice' && (d.status || 'draft') === filterStatus)) return false;
+    if (kw) {
+      const hay = `${d.no || ''} ${d.subject || ''} ${d.to?.company || ''} ${d.from?.company || ''}`.toLowerCase();
+      if (!hay.includes(kw)) return false;
+    }
+    return true;
+  });
+
+  // 入金待ち（送付済みで未入金）の請求書サマリー
+  const waiting = docs.filter(d => d.type === 'invoice' && (d.status || 'draft') === 'sent');
+  const waitingTotal = waiting.reduce((s, d) => s + computeTotals(d).total, 0);
 
   return (
     <div>
@@ -82,37 +118,89 @@ export default function BillingView({ customerMaster, tasks, now, colors, fontJP
               <Plus size={14} />{t.label}を新規作成
             </button>
           ))}
+          <button onClick={() => setShowIssuer(v => !v)}
+            title="帳票に印字される自社情報・振込先を編集"
+            style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '8px 12px', background: showIssuer ? '#1a1a1a' : 'transparent', color: showIssuer ? '#fff' : '#1a1a1a', border: `1px solid ${showIssuer ? '#1a1a1a' : colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13 }}>
+            <Building2 size={14} />自社情報・振込先
+          </button>
         </div>
       </div>
 
-      {/* 種別フィルタ */}
-      <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+      {showIssuer && (
+        <IssuerSettings issuer={issuer} onClose={() => setShowIssuer(false)} colors={colors} fontJP={fontJP} />
+      )}
+
+      {/* 入金待ちサマリー */}
+      {waiting.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 14px', marginBottom: 14, background: '#eef4fb', border: '1px solid #c4d8ee', borderRadius: 6, fontSize: 13 }}>
+          <span style={{ fontWeight: 700, color: '#3a7bd5' }}>入金待ちの請求書 {waiting.length}件</span>
+          <span style={{ fontWeight: 700 }}>{formatYen(waitingTotal)}</span>
+          <button onClick={() => { setFilterType('invoice'); setFilterStatus('sent'); }}
+            style={{ marginLeft: 'auto', padding: '4px 10px', background: 'transparent', border: '1px solid #3a7bd5', color: '#3a7bd5', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12 }}>
+            一覧で確認
+          </button>
+        </div>
+      )}
+
+      {/* 種別フィルタ・検索 */}
+      <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' }}>
         {[{ id: 'all', label: 'すべて' }, ...DOC_TYPES].map(t => (
-          <button key={t.id} onClick={() => setFilterType(t.id)}
+          <button key={t.id} onClick={() => { setFilterType(t.id); if (t.id !== 'invoice' && t.id !== 'all') setFilterStatus('all'); }}
             style={{ padding: '5px 12px', background: filterType === t.id ? '#1a1a1a' : 'transparent', color: filterType === t.id ? '#fff' : '#1a1a1a', border: `1px solid ${filterType === t.id ? '#1a1a1a' : colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12 }}>
             {t.label}
           </button>
         ))}
+        {(filterType === 'invoice' || filterType === 'all') && (
+          <div style={{ display: 'flex', gap: 4, marginLeft: 6 }}>
+            {[{ id: 'all', label: '全ステータス' }, ...INVOICE_STATUSES].map(s => (
+              <button key={s.id} onClick={() => setFilterStatus(s.id)}
+                style={{ padding: '4px 10px', background: filterStatus === s.id ? (s.color || '#555') : 'transparent', color: filterStatus === s.id ? '#fff' : (s.color || colors.textMute), border: `1px solid ${s.color || colors.border}`, borderRadius: 10, cursor: 'pointer', fontFamily: fontJP, fontSize: 11 }}>
+                {s.label}
+              </button>
+            ))}
+          </div>
+        )}
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, border: `1px solid ${colors.border}`, borderRadius: 4, padding: '5px 9px', background: '#fff' }}>
+          <Search size={13} color={colors.textMute} />
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="NO・件名・会社名で検索"
+            style={{ border: 'none', outline: 'none', fontFamily: fontJP, fontSize: 12, width: 180, background: 'transparent' }} />
+          {q && <button onClick={() => setQ('')} style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: colors.textMute, padding: 0, display: 'flex' }}><X size={13} /></button>}
+        </div>
       </div>
 
       {!loaded ? (
         <div style={{ color: colors.textMute, fontSize: 13, padding: 24 }}>読み込み中…</div>
       ) : visible.length === 0 ? (
         <div style={{ color: colors.textMute, fontSize: 13, padding: 40, textAlign: 'center', border: `1px dashed ${colors.border}`, borderRadius: 6 }}>
-          <FileText size={24} style={{ opacity: 0.4 }} /><div style={{ marginTop: 8 }}>帳票がまだありません。上のボタンから新規作成してください。</div>
+          <FileText size={24} style={{ opacity: 0.4 }} />
+          <div style={{ marginTop: 8 }}>
+            {docs.length === 0 ? '帳票がまだありません。上のボタンから新規作成してください。' : '条件に一致する帳票がありません。検索や絞り込みを見直してください。'}
+          </div>
         </div>
       ) : (
         <div style={{ border: `1px solid ${colors.border}`, borderRadius: 6, overflow: 'hidden' }}>
           {visible.map((d, i) => {
             const t = computeTotals(d);
             const dt = docTypeOf(d.type);
+            const st = d.type === 'invoice' ? invoiceStatusOf(d.status) : null;
             return (
               <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderTop: i ? `1px solid ${colors.border}` : 'none', background: '#fff' }}>
                 <span style={{ fontSize: 11, fontWeight: 700, color: '#fff', background: dt.accent, padding: '3px 8px', borderRadius: 3, flex: 'none', WebkitPrintColorAdjust: 'exact' }}>{dt.label}</span>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 14, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.subject || '（件名未入力）'} <span style={{ color: colors.textMute, fontSize: 11, fontWeight: 400 }}>{d.to?.company || ''}</span></div>
-                  <div style={{ fontSize: 11, color: colors.textMute, marginTop: 2 }}>NO {d.no} ・ {formatJDate(d.issueDate)}</div>
+                  <div style={{ fontSize: 11, color: colors.textMute, marginTop: 2 }}>
+                    NO {d.no} ・ {formatJDate(d.issueDate)}
+                    {st && st.id === 'sent' && d.sentDate ? ` ・ 送付 ${formatJDate(d.sentDate)}` : ''}
+                    {st && st.id === 'paid' && d.paidDate ? ` ・ 入金 ${formatJDate(d.paidDate)}` : ''}
+                  </div>
                 </div>
+                {st && (
+                  <select value={st.id} onChange={e => setDocStatus(d, e.target.value)}
+                    title="請求書のステータス（送付済み・入金済みにすると日付を自動記録）"
+                    style={{ padding: '4px 6px', border: `1px solid ${st.color}`, color: st.color, fontWeight: 600, borderRadius: 4, fontFamily: fontJP, fontSize: 11, background: '#fff', cursor: 'pointer' }}>
+                    {INVOICE_STATUSES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+                  </select>
+                )}
                 <div style={{ fontSize: 14, fontWeight: 700, marginRight: 8 }}>{formatYen(t.total)}</div>
                 <button onClick={() => setEditing(d)} title="編集" style={iconBtn(colors)}><Edit2 size={15} /></button>
                 <button onClick={() => duplicateDoc(d)} title="複製" style={iconBtn(colors)}><Copy size={15} /></button>
@@ -128,6 +216,70 @@ export default function BillingView({ customerMaster, tasks, now, colors, fontJP
 
 function iconBtn(colors) {
   return { padding: '6px 8px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', color: colors.textMute, display: 'flex', alignItems: 'center' };
+}
+
+// ---- 発行元（自社）情報・振込先の設定 ----
+// storage の 'billingIssuer' キーに { estimate, invoice, bankLines } で保存。
+// 新規作成する帳票に反映される（既存の帳票は変わらない）。
+function IssuerSettings({ issuer, onClose, colors, fontJP }) {
+  const [draft, setDraft] = useState(() => ({
+    estimate: { ...REBEG_ESTIMATE, ...(issuer?.estimate || {}) },
+    invoice: { ...REBEG_INVOICE, ...(issuer?.invoice || {}) },
+    bankLines: (issuer?.bankLines && issuer.bankLines.length) ? [...issuer.bankLines] : [...INVOICE_BANK_LINES],
+  }));
+  const [saving, setSaving] = useState(false);
+  const input = (props) => ({ padding: '6px 8px', border: `1px solid ${colors.border}`, borderRadius: 4, fontFamily: fontJP, fontSize: 12, width: '100%', boxSizing: 'border-box', background: '#fff', ...props });
+  const label = { fontSize: 10, color: colors.textMute, marginBottom: 2, display: 'block' };
+  const setSide = (side, patch) => setDraft(d => ({ ...d, [side]: { ...d[side], ...patch } }));
+  const save = async () => {
+    setSaving(true);
+    try {
+      await storage.set('billingIssuer', JSON.stringify(draft));
+      onClose();
+    } catch (e) {
+      console.error('自社情報の保存エラー:', e);
+      alert('保存に失敗しました');
+    } finally { setSaving(false); }
+  };
+  const sideForm = (side, title) => (
+    <div style={{ flex: '1 1 280px', minWidth: 240 }}>
+      <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>{title}</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+        <div><label style={label}>会社名</label><input value={draft[side].company} onChange={e => setSide(side, { company: e.target.value })} style={input()} /></div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ flex: 1 }}><label style={label}>郵便番号</label><input value={draft[side].zip} onChange={e => setSide(side, { zip: e.target.value })} style={input()} /></div>
+          <div style={{ flex: 1 }}><label style={label}>電話</label><input value={draft[side].tel} onChange={e => setSide(side, { tel: e.target.value })} style={input()} /></div>
+        </div>
+        <div><label style={label}>住所</label><input value={draft[side].address} onChange={e => setSide(side, { address: e.target.value })} style={input()} /></div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ flex: 1 }}><label style={label}>担当者</label><input value={draft[side].person} onChange={e => setSide(side, { person: e.target.value })} style={input()} /></div>
+          {side === 'invoice' && (
+            <div style={{ flex: 1 }}><label style={label}>適格請求書 登録番号</label><input value={draft[side].regNo} onChange={e => setSide(side, { regNo: e.target.value })} style={input()} /></div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+  return (
+    <div style={{ border: `1px solid ${colors.border}`, borderRadius: 6, background: '#fbf9f4', padding: 14, marginBottom: 16 }}>
+      <div style={{ fontSize: 11, color: colors.textMute, marginBottom: 10 }}>
+        帳票に印字される発行元（自社）情報と請求書の振込先。保存すると「これから新規作成する帳票」に反映されます（作成済みの帳票は各帳票の編集画面で直せます）。
+      </div>
+      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
+        {sideForm('estimate', '見積書・発注書用')}
+        {sideForm('invoice', '請求書用')}
+        <div style={{ flex: '1 1 240px', minWidth: 220 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>振込先（請求書・1行ずつ）</div>
+          <textarea value={draft.bankLines.join('\n')} onChange={e => setDraft(d => ({ ...d, bankLines: e.target.value.split('\n') }))}
+            style={input({ minHeight: 110, resize: 'vertical' })} />
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: 'flex-end' }}>
+        <button onClick={onClose} style={{ padding: '7px 12px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12 }}>閉じる</button>
+        <button onClick={save} disabled={saving} style={{ padding: '7px 14px', background: '#1a1a1a', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, fontWeight: 600, opacity: saving ? 0.6 : 1 }}>{saving ? '保存中…' : '保存'}</button>
+      </div>
+    </div>
+  );
 }
 
 // ============ 編集 ============
@@ -295,7 +447,28 @@ function BillingEditor({ initial, customerMaster, tasks, onSave, onSaveClose, on
                 </>
               )}
               {isInvoice && (
-                <div><label style={label}>支払期限</label><input value={doc.paymentDeadline} onChange={e => upd({ paymentDeadline: e.target.value })} style={input()} /></div>
+                <>
+                  <div><label style={label}>支払期限</label><input value={doc.paymentDeadline} onChange={e => upd({ paymentDeadline: e.target.value })} style={input()} /></div>
+                  <Row>
+                    <Col>
+                      <label style={label}>ステータス</label>
+                      <select value={doc.status || 'draft'}
+                        onChange={e => {
+                          const status = e.target.value;
+                          const today = todayStr(new Date());
+                          const patch = { status };
+                          if (status === 'sent' && !(doc.sentDate || '').trim()) patch.sentDate = today;
+                          if (status === 'paid' && !(doc.paidDate || '').trim()) patch.paidDate = today;
+                          upd(patch);
+                        }}
+                        style={input()}>
+                        {INVOICE_STATUSES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+                      </select>
+                    </Col>
+                    <Col><label style={label}>送付日</label><input type="date" value={doc.sentDate || ''} onChange={e => upd({ sentDate: e.target.value })} style={input()} /></Col>
+                    <Col><label style={label}>入金日</label><input type="date" value={doc.paidDate || ''} onChange={e => upd({ paidDate: e.target.value })} style={input()} /></Col>
+                  </Row>
+                </>
               )}
 
               {/* 発行元（自社） */}

@@ -1,17 +1,37 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // 許可された Gmail アドレスのみ読み書き可能
-    match /workspaces/{workspaceId}/data/{document=**} {
-      allow read, write: if request.auth != null
-        && request.auth.token.email in ['kei.n412@gmail.com']
-        && request.auth.token.email_verified == true;
+    // オーナー（アプリ側 firebase.js の OWNER_EMAILS と同じ値を保つこと。
+    // メンバーはアプリの設定画面から data/allowedEmails に登録する）
+    function isOwner() {
+      return request.auth.token.email in ['kei.n412@gmail.com'];
     }
+    // 追加メンバー：workspaces/{wid}/data/allowedEmails の emails 配列で判定
+    function isMember(workspaceId) {
+      return exists(/databases/$(database)/documents/workspaces/$(workspaceId)/data/allowedEmails)
+        && request.auth.token.email in get(/databases/$(database)/documents/workspaces/$(workspaceId)/data/allowedEmails).data.emails;
+    }
+    function isAllowed(workspaceId) {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && (isOwner() || isMember(workspaceId));
+    }
+
+    // 汎用KV・帳票・売上など（data コレクション直下）
+    match /workspaces/{workspaceId}/data/{docKey} {
+      allow read: if isAllowed(workspaceId);
+      // メンバー許可リスト自体の書き換えはオーナーのみ
+      allow write: if isAllowed(workspaceId)
+        && (docKey != 'allowedEmails' || isOwner());
+    }
+    // data ドキュメント配下のサブコレクション（将来の拡張用）
+    match /workspaces/{workspaceId}/data/{docKey}/{rest=**} {
+      allow read, write: if isAllowed(workspaceId);
+    }
+
     // tasks サブコレクション（1タスク=1ドキュメント）
     match /workspaces/{workspaceId}/tasks/{taskId} {
-      allow read, write: if request.auth != null
-        && request.auth.token.email in ['kei.n412@gmail.com']
-        && request.auth.token.email_verified == true;
+      allow read, write: if isAllowed(workspaceId);
     }
   }
 }

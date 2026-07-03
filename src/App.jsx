@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useLayoutEffect } from 'react';
 import { Plus, Trash2, Edit2, Calendar as CalIcon, MessageSquare, Settings as SettingsIcon, Check, X, Clock, Folder, User, ChevronUp, ChevronDown, Users, CheckCircle2, RotateCcw, TrendingUp, ArrowRight, GripVertical, Search, AlertTriangle, StickyNote, Bell, BellOff, Zap, PauseCircle, PlayCircle, FileText, Table } from 'lucide-react';
-import { storage, tasksStore, signIn, signOutUser, subscribeAuth } from './firebase.js';
+import { storage, tasksStore, billingStore, salesStore, memberList, signIn, signOutUser, subscribeAuth } from './firebase.js';
 import BillingView from './billing/BillingView.jsx';
 import SalesView from './sales/SalesView.jsx';
 import {
@@ -1150,6 +1150,8 @@ export default function App() {
   const [employeeMaster, setEmployeeMaster] = useState([]);
   // 売上登録表（自動同期用）。null=未ロード, {}=空。視点の制作履歴から売上行を生成する。
   const [salesLedgerSync, setSalesLedgerSync] = useState(null);
+  // メンバー許可リスト（オーナー以外にアクセスを許可する Gmail。設定画面から編集）
+  const [memberEmails, setMemberEmails] = useState([]);
   // タスクメモ（[{ id, title, date, startTime, endTime, allDay, note, color, createdAt, updatedAt }]）
   const [memos, setMemos] = useState([]);
   // 完了ダイアログ（終了時間を入力して完了する）の対象
@@ -1362,12 +1364,57 @@ export default function App() {
       catch (e) { setMemos([]); }
     });
 
-    // 売上登録表を購読（視点の制作履歴 → 売上行の自動同期に使う）
-    const unsubSalesLedger = storage.subscribe('salesLedger', (val) => {
-      if (!val) { setSalesLedgerSync({}); return; }
-      try { const obj = JSON.parse(val); setSalesLedgerSync(obj && typeof obj === 'object' ? obj : {}); }
-      catch (e) { setSalesLedgerSync({}); }
+    // 売上登録表を購読（視点の制作履歴 → 売上行の自動同期に使う）。1か月=1ドキュメント。
+    const unsubSalesLedger = salesStore.subscribe((map) => {
+      setSalesLedgerSync(map || {});
     });
+
+    // メンバー許可リスト（設定画面のメンバー管理用）
+    const unsubMembers = memberList.subscribe(setMemberEmails);
+
+    // レガシー：帳票（billingDocuments）・売上（salesLedger）の1ドキュメント集中保存から
+    //          1件1ドキュメント（bill_*/sales_*）へ一度だけ移行する。
+    //          旧データは *_backup キーに退避してから元キーを削除（再移行ループを防ぐ）。
+    (async () => {
+      try {
+        const legacyBilling = await storage.get('billingDocuments');
+        if (cancelled) return;
+        if (legacyBilling && legacyBilling.value) {
+          let arr = [];
+          try { arr = JSON.parse(legacyBilling.value); } catch (e) {}
+          if (Array.isArray(arr) && arr.length > 0) {
+            const existing = await billingStore.listAll();
+            if (cancelled) return;
+            if (Object.keys(existing).length === 0) {
+              await billingStore.setMany(arr.filter(d => d && d.id).map(d => [d.id, d]));
+            }
+            if (cancelled) return;
+            await storage.set('billingDocuments_backup', legacyBilling.value);
+          }
+          await storage.delete('billingDocuments');
+        }
+      } catch (e) { console.error('帳票データ移行エラー:', e); }
+    })();
+    (async () => {
+      try {
+        const legacySales = await storage.get('salesLedger');
+        if (cancelled) return;
+        if (legacySales && legacySales.value) {
+          let obj = null;
+          try { obj = JSON.parse(legacySales.value); } catch (e) {}
+          if (obj && typeof obj === 'object' && Object.keys(obj).length > 0) {
+            const existing = await salesStore.listAll();
+            if (cancelled) return;
+            if (Object.keys(existing).length === 0) {
+              await salesStore.setMany(Object.entries(obj).filter(([ym]) => /^\d{4}-\d{2}$/.test(ym)));
+            }
+            if (cancelled) return;
+            await storage.set('salesLedger_backup', legacySales.value);
+          }
+          await storage.delete('salesLedger');
+        }
+      } catch (e) { console.error('売上データ移行エラー:', e); }
+    })();
 
     return () => {
       cancelled = true;
@@ -1381,6 +1428,7 @@ export default function App() {
       unsubEmployee();
       unsubMemos();
       unsubSalesLedger();
+      unsubMembers();
     };
   }, [auth.allowed]);
 
@@ -1398,10 +1446,13 @@ export default function App() {
       try {
         const syncRows = collectSalesSyncRows(tasksRef.current, customerMaster);
         const fallbackMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-        const { ledger, changed } = reconcileLedger(salesLedgerSync, syncRows, fallbackMonth);
+        const { ledger, changed, changedMonths } = reconcileLedger(salesLedgerSync, syncRows, fallbackMonth);
         if (changed) {
           setSalesLedgerSync(ledger);
-          storage.set('salesLedger', JSON.stringify(ledger)).catch(e => console.error('売上自動同期エラー:', e));
+          // 変更のあった月のドキュメントだけ書き込む（他の月を巻き込まない）
+          for (const ymKey of changedMonths) {
+            salesStore.set(ymKey, ledger[ymKey]).catch(e => console.error('売上自動同期エラー:', e));
+          }
         }
       } catch (e) { console.error('売上自動同期に失敗:', e); }
     }, 800);
@@ -2394,9 +2445,14 @@ export default function App() {
   // 見積書／発注書を視点のステップ（請求の元データ）から自動作成して帳票へ保存し、帳票ビューへ遷移する。
   const createBillingFromViewpoint = async (group, docType) => {
     try {
-      const cur = await storage.get('billingDocuments');
-      const docs = (cur && cur.value) ? (JSON.parse(cur.value) || []) : [];
-      const doc = blankDoc(docType, docs, new Date());
+      const docs = Object.values(await billingStore.listAll());
+      // 発行元（自社）情報・振込先の設定を反映
+      let issuer = null;
+      try {
+        const raw = await storage.get('billingIssuer');
+        if (raw && raw.value) issuer = JSON.parse(raw.value);
+      } catch (e) {}
+      const doc = blankDoc(docType, docs, new Date(), issuer);
       // 宛先（御中）：見積はお客様、発注は発注先（既定リーベグのまま）。お客様情報を反映。
       const cm = (customerMaster || []).find(c => (c.company || '').trim() === (group.companyName || '').trim());
       if (docType === 'estimate') {
@@ -2417,8 +2473,7 @@ export default function App() {
       });
       while (items.length < 3) items.push(blankItem(docType));
       doc.items = items;
-      const next = [doc, ...docs];
-      await storage.set('billingDocuments', JSON.stringify(next));
+      await billingStore.set(doc.id, doc);
       setView('billing');
     } catch (e) {
       console.error('帳票の自動作成に失敗:', e);
@@ -3079,6 +3134,7 @@ export default function App() {
               </div>
               <span style={{ fontSize: 11, color: colors.textMute, marginLeft: 'auto' }}>1日 {hoursPerDay}時間 ・ 土日除外</span>
             </div>
+            <MemberSettings memberEmails={memberEmails} isOwner={!!auth.user?.isOwner} colors={colors} fontJP={fontJP} />
             <div style={{ maxWidth: 1600, margin: '16px auto 0', borderTop: `1px solid ${colors.border}`, paddingTop: 12, fontSize: 11, color: colors.textMute }}>
               残業・欠勤（休日・不在）の登録は「マスタ」タブに移動しました。
             </div>
@@ -3741,6 +3797,66 @@ function MemoView({ memos, upsertMemo, deleteMemo, now, colors, fontJP, fontDisp
 }
 
 // ============ 入力ビュー ============
+// メンバー管理（設定パネル内）。オーナー以外のアクセス許可 Gmail を data/allowedEmails で管理する。
+// Firestore ルールがこのリストを直接参照するため、追加・削除は即時に反映される。
+// リスト自体の書き換えはルール上オーナーのみ可能。
+function MemberSettings({ memberEmails, isOwner, colors, fontJP }) {
+  const [input, setInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const save = async (emails) => {
+    setBusy(true);
+    try { await memberList.set(emails); }
+    catch (e) {
+      console.error('メンバーリスト保存エラー:', e);
+      alert('メンバーリストの保存に失敗しました。変更できるのはオーナーのみです。');
+    }
+    finally { setBusy(false); }
+  };
+  const add = () => {
+    const email = input.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { alert('メールアドレスの形式が正しくありません'); return; }
+    if (!memberEmails.includes(email)) save([...memberEmails, email]);
+    setInput('');
+  };
+  const remove = (email) => {
+    if (!confirm(`${email} のアクセス許可を解除しますか？`)) return;
+    save(memberEmails.filter(e => e !== email));
+  };
+  return (
+    <div style={{ maxWidth: 1600, margin: '16px auto 0', borderTop: `1px solid ${colors.border}`, paddingTop: 12 }}>
+      <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>メンバー管理（アクセスを許可する Google アカウント）</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        {memberEmails.length === 0 && (
+          <span style={{ fontSize: 12, color: colors.textMute }}>追加メンバーはいません（オーナーのみアクセス可能）</span>
+        )}
+        {memberEmails.map(email => (
+          <span key={email} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 8px 4px 10px', background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 12, fontSize: 12 }}>
+            {email}
+            {isOwner && (
+              <button onClick={() => remove(email)} disabled={busy} title="アクセス許可を解除"
+                style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#c0392b', padding: 0, fontSize: 13, lineHeight: 1 }}>×</button>
+            )}
+          </span>
+        ))}
+        {isOwner && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <input value={input} onChange={e => setInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') add(); }}
+              placeholder="追加する Gmail アドレス"
+              style={{ padding: '5px 8px', border: `1px solid ${colors.border}`, borderRadius: 4, fontFamily: fontJP, fontSize: 12, width: 210 }} />
+            <button onClick={add} disabled={busy || !input.trim()}
+              style={{ padding: '5px 12px', background: '#1a1a1a', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12 }}>追加</button>
+          </span>
+        )}
+      </div>
+      <div style={{ fontSize: 10.5, color: colors.textMute, marginTop: 6 }}>
+        ここに追加した Google アカウントはサインインしてアプリの全データを読み書きできます。オーナー（firestore.rules に記載）は常にアクセス可能。
+        ※この機能を有効にするには、最新の firestore.rules を Firebase コンソールへデプロイしてください。
+      </div>
+    </div>
+  );
+}
+
 function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit, editingId, editMode, caseEditMode, cancelEdit, tasks, scheduled, vpDeliveryCount, projectOrder, saveProjectOrder, companyList, customerMaster, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, setTaskAssignee, completeProject, cancelProject, suspendProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, setViewpointMeta, setStepMeta, createBillingFromViewpoint, saveProjectInfo, setProjectDeadline, finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, resumeProject, projectList, projectInternalList, viewpointList, assigneeList, assigneeOrder, settings, now, selectedAssignee, setSelectedAssignee, companyOrder, onReorderAssignee, onReorderProject, onReassignViewpoint, colors, fontJP, fontDisplay }) {
   // お客様担当者の候補：会社名を選んでいればその会社に所属する担当者を表示
   // （会社名はひらがな/カタカナ/全半角の違いを無視して照合）

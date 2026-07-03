@@ -1,5 +1,5 @@
 // 帳票（見積書・発注書・請求書）の純粋ロジック・テンプレート定義
-// UI を持たない関数・定数のみ。保存は storage（key: 'billingDocuments'）に JSON 配列で。
+// UI を持たない関数・定数のみ。保存は billingStore（1帳票 = 1 Firestore ドキュメント、data/bill_{id}）。
 
 // ---- 種別 ----
 export const DOC_TYPES = [
@@ -28,6 +28,24 @@ export const INVOICE_BANK_LINES = [
   '・口座番号（7244383）',
   '・口座名義（株式会社 リーベグ CG事業部）',
 ];
+
+// ---- 請求書ステータス ----
+export const INVOICE_STATUSES = [
+  { id: 'draft', label: '下書き', color: '#8a8a8a' },
+  { id: 'sent', label: '送付済み', color: '#3a7bd5' },
+  { id: 'paid', label: '入金済み', color: '#4a8b3a' },
+];
+export function invoiceStatusOf(id) {
+  return INVOICE_STATUSES.find(s => s.id === id) || INVOICE_STATUSES[0];
+}
+
+// 旧データの補完（読み込み時に適用し、次の保存で書き戻される）
+export function migrateBillingDoc(d) {
+  if (d && d.type === 'invoice' && !d.status) {
+    return { ...d, status: 'draft', sentDate: d.sentDate || '', paidDate: d.paidDate || '' };
+  }
+  return d;
+}
 
 export const NOTE_DEFAULTS = {
   estimate: 'お支払いに係る振込手数料などの諸費用は、全てお客様負担となりますのでご留意下さい。\nその他、弊社制作不備は無償対応となりますが、お客様要望の修正・変更は別途追加費用の対象となります。',
@@ -164,7 +182,9 @@ export function blankItem(type) {
   return it;
 }
 
-export function blankDoc(type, docs, now) {
+// issuer: 設定画面で編集した発行元・振込先（storage キー 'billingIssuer'）。
+// { estimate: {...}, invoice: {...}, bankLines: [...] } の部分指定でよく、無ければ既定値を使う。
+export function blankDoc(type, docs, now, issuer) {
   const base = {
     id: genDocId(),
     type,
@@ -174,7 +194,9 @@ export function blankDoc(type, docs, now) {
     // 御中（宛先）側
     to: { company: '', honorific: '御中', zip: '', address: '', tel: '', rep: '' },
     // 発行元（自社）側
-    from: type === 'invoice' ? { ...REBEG_INVOICE } : { ...REBEG_ESTIMATE },
+    from: type === 'invoice'
+      ? { ...REBEG_INVOICE, ...((issuer && issuer.invoice) || {}) }
+      : { ...REBEG_ESTIMATE, ...((issuer && issuer.estimate) || {}) },
     items: [blankItem(type), blankItem(type), blankItem(type)],
     note: NOTE_DEFAULTS[type] || '',
     createdAt: Date.now(),
@@ -195,7 +217,10 @@ export function blankDoc(type, docs, now) {
   }
   if (type === 'invoice') {
     base.paymentDeadline = '';
-    base.bankLines = [...INVOICE_BANK_LINES];
+    base.bankLines = [...((issuer && Array.isArray(issuer.bankLines) && issuer.bankLines.length) ? issuer.bankLines : INVOICE_BANK_LINES)];
+    base.status = 'draft';   // 下書き → 送付済み → 入金済み
+    base.sentDate = '';
+    base.paidDate = '';
   }
   return base;
 }

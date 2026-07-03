@@ -8,6 +8,7 @@ import {
   memoryLocalCache,
   doc, setDoc, deleteDoc, onSnapshot,
   collection, writeBatch, getDocs,
+  query, orderBy, startAt, endAt, documentId,
 } from 'firebase/firestore';
 import {
   getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged,
@@ -28,8 +29,10 @@ const firebaseConfig = {
 // 用途や所属に応じて自由に変更してください（例: "liebe-asia-team", "tokyo-office" など）
 export const WORKSPACE_ID = "liebe-asia-team";
 
-// 許可する Gmail アドレス（ここに無い人はサインインしてもサインアウトされる）
-const ALLOWED_EMAILS = ['kei.n412@gmail.com'];
+// オーナーの Gmail アドレス（ロックアウト防止のため、firestore.rules と同じ値をコードにも残す）。
+// 追加メンバーはアプリの設定画面（メンバー管理）から登録する（data/allowedEmails に保存され、
+// Firestore ルールが直接参照する）。
+const OWNER_EMAILS = ['kei.n412@gmail.com'];
 // =============================================
 
 const app = initializeApp(firebaseConfig);
@@ -51,9 +54,20 @@ export async function signOutUser() {
   return signOut(auth);
 }
 
+// メンバー許可リストの読み取りプローブ。
+// Firestore ルール側が data/allowedEmails の emails 配列で許可判定するため、
+// 「このドキュメントを読めた」＝「ルールを通過できるメンバー」になる。
+// （読めない＝permission-denied なら非メンバー）
+function probeMemberAccess() {
+  return new Promise((resolve) => {
+    const ref = doc(db, 'workspaces', WORKSPACE_ID, 'data', 'allowedEmails');
+    const unsub = onSnapshot(ref, (snap) => { unsub(); resolve(snap.exists()); }, () => resolve(false));
+  });
+}
+
 // 認証状態の購読。callback({ user, allowed, deniedEmail, ready })
 // - 未サインイン: { user: null, allowed: false, ready: true }
-// - 許可ユーザー: { user: {...}, allowed: true, ready: true }
+// - 許可ユーザー（オーナー or メンバー）: { user: {...}, allowed: true, ready: true }
 // - 非許可ユーザー: 自動サインアウト後 { user: null, allowed: false, deniedEmail, ready: true }
 export function subscribeAuth(callback) {
   return onAuthStateChanged(auth, async (user) => {
@@ -62,9 +76,11 @@ export function subscribeAuth(callback) {
       return;
     }
     const email = user.email || '';
-    if (ALLOWED_EMAILS.includes(email)) {
+    let allowed = OWNER_EMAILS.includes(email);
+    if (!allowed) allowed = await probeMemberAccess();
+    if (allowed) {
       callback({
-        user: { email, displayName: user.displayName, photoURL: user.photoURL },
+        user: { email, displayName: user.displayName, photoURL: user.photoURL, isOwner: OWNER_EMAILS.includes(email) },
         allowed: true,
         ready: true,
       });
@@ -74,6 +90,23 @@ export function subscribeAuth(callback) {
     }
   });
 }
+
+// メンバー許可リスト（オーナー以外の追加メンバー）。
+// Firestore ルールが emails 配列を直接参照するため、他の data キーと違い
+// value(JSON文字列) ではなく emails フィールドにそのまま保存する。
+export const memberList = {
+  subscribe(callback) {
+    const ref = doc(db, 'workspaces', WORKSPACE_ID, 'data', 'allowedEmails');
+    return onSnapshot(ref, (snap) => {
+      const d = snap.exists() ? snap.data() : null;
+      callback(Array.isArray(d?.emails) ? d.emails : []);
+    }, (err) => console.error('メンバーリスト購読エラー:', err));
+  },
+  async set(emails) {
+    const ref = doc(db, 'workspaces', WORKSPACE_ID, 'data', 'allowedEmails');
+    await setDoc(ref, { emails, updatedAt: Date.now() });
+  },
+};
 
 // タスク：1件 = 1 Firestore ドキュメント（複数端末での同時編集に強い）
 export const tasksStore = {
@@ -159,3 +192,58 @@ export const storage = {
     });
   },
 };
+
+// data コレクション内で「プレフィックス付きキー = 1件1ドキュメント」を扱う汎用ストア。
+// 1ドキュメント集中型（配列を丸ごとJSON保存）の弱点（1MB上限・後勝ちで他端末の変更が消える）を
+// 避けるため、帳票・売上月次はこの形で保存する。既存ルール（data/{document=**}）の範囲内。
+function prefixStore(prefix) {
+  const colRef = () => collection(db, 'workspaces', WORKSPACE_ID, 'data');
+  const rangeQuery = () => query(colRef(), orderBy(documentId()), startAt(prefix), endAt(prefix + '\uf8ff'));
+  const parse = (snap, out) => {
+    const raw = snap.data().value;
+    try { out[snap.id.slice(prefix.length)] = JSON.parse(raw); }
+    catch (e) { console.error(`${snap.id} の読み取りに失敗:`, e); }
+  };
+  return {
+    // callback({ [キー（プレフィックス無し）]: パース済みオブジェクト })
+    subscribe(callback, onError) {
+      return onSnapshot(rangeQuery(), (qs) => {
+        const out = {};
+        qs.forEach(d => parse(d, out));
+        callback(out);
+      }, (err) => {
+        console.error(`${prefix}* 購読エラー:`, err);
+        if (onError) onError(err);
+      });
+    },
+    async set(key, obj) {
+      const ref = doc(db, 'workspaces', WORKSPACE_ID, 'data', prefix + key);
+      await setDoc(ref, { value: JSON.stringify(obj), updatedAt: Date.now() });
+    },
+    async remove(key) {
+      await deleteDoc(doc(db, 'workspaces', WORKSPACE_ID, 'data', prefix + key));
+    },
+    async listAll() {
+      const qs = await getDocs(rangeQuery());
+      const out = {};
+      qs.forEach(d => parse(d, out));
+      return out;
+    },
+    // entries: [key, obj] の配列。旧形式からの一括移行に使う
+    async setMany(entries) {
+      const chunkSize = 400;
+      for (let i = 0; i < entries.length; i += chunkSize) {
+        const batch = writeBatch(db);
+        for (const [k, v] of entries.slice(i, i + chunkSize)) {
+          batch.set(doc(db, 'workspaces', WORKSPACE_ID, 'data', prefix + k), { value: JSON.stringify(v), updatedAt: Date.now() });
+        }
+        await batch.commit();
+      }
+    },
+  };
+}
+
+// 帳票：1帳票 = 1ドキュメント（キー = 帳票id）
+export const billingStore = prefixStore('bill_');
+// 売上登録表：1か月 = 1ドキュメント（キー = 'YYYY-MM'）
+export const salesStore = prefixStore('sales_');

@@ -1,15 +1,14 @@
 // 売上登録表ビュー：月切替・総合サマリー・区分タブ・編集テーブル・案件連携・印刷。
-// データは storage の 'salesLedger' キー（{ 'YYYY-MM': { rows, settings, updatedAt } }）。
+// データは 1か月 = 1 Firestore ドキュメント（salesStore、data/sales_{YYYY-MM}）。
+// 月をまたいだ後勝ち上書きが起きない（保存はその月のドキュメントだけ）。
 import React, { useState, useEffect, useMemo } from 'react';
 import { Plus, Trash2, ChevronLeft, ChevronRight, Printer, Download } from 'lucide-react';
-import { storage } from '../firebase.js';
+import { salesStore } from '../firebase.js';
 import {
   SALES_CATEGORIES, catOf, OUTSOURCERS, DEFAULT_SETTINGS,
   blankRow, computeRow, computeSummary, computeCategoryTotal,
   currentMonth, monthLabel, shiftMonth, num, formatYen, formatVND,
 } from './salesUtils.js';
-
-const STORAGE_KEY = 'salesLedger';
 
 export default function SalesView({ tasks, customerMaster, now, colors, fontJP, fontDisplay }) {
   const [ledger, setLedger] = useState({});      // { ym: { rows, settings, updatedAt } }
@@ -18,10 +17,8 @@ export default function SalesView({ tasks, customerMaster, now, colors, fontJP, 
   const [activeCat, setActiveCat] = useState(SALES_CATEGORIES[0].id);
 
   useEffect(() => {
-    const unsub = storage.subscribe(STORAGE_KEY, (val) => {
-      if (!val) { setLedger({}); setLoaded(true); return; }
-      try { const obj = JSON.parse(val); setLedger(obj && typeof obj === 'object' ? obj : {}); }
-      catch (e) { setLedger({}); }
+    const unsub = salesStore.subscribe((map) => {
+      setLedger(map || {});
       setLoaded(true);
     });
     return () => unsub && unsub();
@@ -33,9 +30,8 @@ export default function SalesView({ tasks, customerMaster, now, colors, fontJP, 
 
   const persistMonth = (patch) => {
     const nextMonth = { rows: month.rows || [], settings, ...month, ...patch, updatedAt: Date.now() };
-    const next = { ...ledger, [ym]: nextMonth };
-    setLedger(next);
-    storage.set(STORAGE_KEY, JSON.stringify(next)).catch(e => console.error('売上登録表 保存エラー:', e));
+    setLedger(prev => ({ ...prev, [ym]: nextMonth }));
+    salesStore.set(ym, nextMonth).catch(e => console.error('売上登録表 保存エラー:', e));
   };
   const setRows = (newRows) => persistMonth({ rows: newRows });
   const setSettings = (patch) => persistMonth({ settings: { ...settings, ...patch } });
@@ -45,6 +41,21 @@ export default function SalesView({ tasks, customerMaster, now, colors, fontJP, 
   const removeRow = (id) => setRows(rows.filter(r => r.id !== id));
 
   const summary = useMemo(() => computeSummary(rows, settings), [rows, settings]);
+
+  // 請求・入金の漏れ検知（この月の行）：
+  //  - 完了済みなのに請求書送付日が空 → 請求漏れの疑い
+  //  - 請求書送付済みなのに入金確認日が空 → 入金待ち
+  const billAlerts = useMemo(() => {
+    const a = { noInvoice: 0, noInvoiceAmt: 0, waitingPay: 0, waitingPayAmt: 0 };
+    for (const r of rows) {
+      const c = computeRow(r, settings);
+      const sent = String(r.invoiceSentDate || '').trim();
+      const paid = String(r.paymentConfirmedDate || '').trim();
+      if (r.completed && !sent) { a.noInvoice++; a.noInvoiceAmt += c.taxIncl; }
+      if (sent && !paid) { a.waitingPay++; a.waitingPayAmt += c.taxIncl; }
+    }
+    return a;
+  }, [rows, settings]);
 
   // 案件候補（tasksから）
   const projectOptions = useMemo(() => {
@@ -87,7 +98,7 @@ export default function SalesView({ tasks, customerMaster, now, colors, fontJP, 
         <div className="kz-print-only" style={{ display: 'none', fontSize: 16, fontWeight: 700, marginBottom: 8 }}>{monthLabel(ym)} 売上総合</div>
 
         {/* 総合サマリーパネル */}
-        <SummaryPanel summary={summary} settings={settings} setSettings={setSettings} updatedAt={month.updatedAt} colors={colors} fontJP={fontJP} />
+        <SummaryPanel summary={summary} billAlerts={billAlerts} settings={settings} setSettings={setSettings} updatedAt={month.updatedAt} colors={colors} fontJP={fontJP} />
 
         {/* 区分タブ */}
         <div className="kz-no-print" style={{ display: 'flex', gap: 6, margin: '16px 0 10px', flexWrap: 'wrap' }}>
@@ -140,7 +151,7 @@ export default function SalesView({ tasks, customerMaster, now, colors, fontJP, 
 function navBtn(colors) { return { padding: '6px 7px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', color: colors.text, display: 'flex', alignItems: 'center' }; }
 
 // ===== 総合サマリーパネル =====
-function SummaryPanel({ summary, settings, setSettings, updatedAt, colors, fontJP }) {
+function SummaryPanel({ summary, billAlerts, settings, setSettings, updatedAt, colors, fontJP }) {
   const card = { border: `1px solid ${colors.border}`, borderRadius: 6, padding: '10px 12px', background: '#fff' };
   const head = { fontSize: 11, color: colors.textMute, marginBottom: 6, fontWeight: 600 };
   const kv = (label, val, strong) => (
@@ -193,6 +204,19 @@ function SummaryPanel({ summary, settings, setSettings, updatedAt, colors, fontJ
         </div>
         {kv('枚数', summary.hqSheets)}
         {kv('手数料合計金額', formatYen(summary.hqShareTotal), true)}
+      </div>
+      {/* 請求・入金の漏れ検知 */}
+      <div style={{ ...card, background: (billAlerts.noInvoice || billAlerts.waitingPay) ? '#fdf3ee' : '#f5f8f3' }}>
+        <div style={head}>請求・入金チェック（この月）</div>
+        {billAlerts.noInvoice > 0
+          ? kv('請求書未送付（完了済み）', `${billAlerts.noInvoice}件 ${formatYen(billAlerts.noInvoiceAmt)}`, true)
+          : kv('請求書未送付（完了済み）', 'なし')}
+        {billAlerts.waitingPay > 0
+          ? kv('入金待ち（送付済み）', `${billAlerts.waitingPay}件 ${formatYen(billAlerts.waitingPayAmt)}`, true)
+          : kv('入金待ち（送付済み）', 'なし')}
+        <div style={{ fontSize: 10, color: colors.textMute, marginTop: 4 }}>
+          11.完了・12.請求書送付日・13.入金確認日から自動判定
+        </div>
       </div>
       {/* 佐渡最終チェック／最終更新 */}
       <div style={{ ...card, background: '#fffbe6' }}>

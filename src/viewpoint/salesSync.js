@@ -100,7 +100,9 @@ export function collectSalesSyncRows(tasks, customerMaster) {
 
 // 既存 ledger に同期行をマージ。
 // ledger: { 'YYYY-MM': { rows, settings, updatedAt } }
-// 返り値：{ ledger, changed }
+// 返り値：{ ledger, changed, changedMonths }
+// changedMonths は差分のあった月のリスト。保存は月別ドキュメントのため、
+// 呼び出し側は変更のあった月だけ書き込めばよい（他の月を巻き込まない）。
 export function reconcileLedger(ledger, syncRows, fallbackMonth) {
   // ディープコピー
   const next = {};
@@ -117,7 +119,7 @@ export function reconcileLedger(ledger, syncRows, fallbackMonth) {
   }
 
   const wanted = new Set();
-  let changed = false;
+  const changedMonths = new Set();
 
   for (const sr of syncRows) {
     wanted.add(sr.srcRound);
@@ -127,26 +129,24 @@ export function reconcileLedger(ledger, syncRows, fallbackMonth) {
       if (!row) continue;
       for (const k of (sr.ownFields || SOURCE_FIELDS)) {
         const v = sr.fields[k] ?? '';
-        if ((row[k] ?? '') !== v) { row[k] = v; changed = true; }
+        if ((row[k] ?? '') !== v) { row[k] = v; changedMonths.add(existing.ym); }
       }
-      if (row.srcVp !== sr.srcVp) { row.srcVp = sr.srcVp; changed = true; }
+      if (row.srcVp !== sr.srcVp) { row.srcVp = sr.srcVp; changedMonths.add(existing.ym); }
     } else {
       const ym = sr.month || fallbackMonth;
       if (!next[ym]) next[ym] = { rows: [], settings: null, updatedAt: Date.now() };
       next[ym].rows.push({ ...blankRow(sr.category), ...sr.fields, srcVp: sr.srcVp, srcRound: sr.srcRound });
-      changed = true;
+      changedMonths.add(ym);
     }
   }
 
   // 不要になった生成行を削除
-  for (const m of Object.values(next)) {
+  for (const [ym, m] of Object.entries(next)) {
     const before = (m.rows || []).length;
     m.rows = (m.rows || []).filter(r => !r.srcRound || wanted.has(r.srcRound));
-    if (m.rows.length !== before) changed = true;
+    if (m.rows.length !== before) changedMonths.add(ym);
   }
 
-  if (changed) {
-    for (const ym of Object.keys(next)) next[ym].updatedAt = Date.now();
-  }
-  return { ledger: next, changed };
+  for (const ym of changedMonths) next[ym].updatedAt = Date.now();
+  return { ledger: next, changed: changedMonths.size > 0, changedMonths: [...changedMonths] };
 }

@@ -1,5 +1,5 @@
 // 売上登録表の純粋ロジック・定義。
-// 保存：storage キー 'salesLedger' に { 'YYYY-MM': MonthData } を JSON で。
+// 保存：salesStore（1か月 = 1 Firestore ドキュメント、data/sales_{YYYY-MM}）。
 //   MonthData = { rows: Row[], settings: { exchangeRate, hqRate, finalCheck }, updatedAt }
 
 // ---- 区分（売上カテゴリ）----
