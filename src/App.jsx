@@ -4357,7 +4357,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                     display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap',
                     padding: '8px 12px', background: '#faf7ef', borderBottom: `1px solid ${colors.border}`,
                   }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }} title="任意・この視点の最初の未完了ステップに適用・差し込み優先">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap' }} title="任意・この視点の最初の未完了ステップに適用・差し込み優先">
                       <span style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', fontWeight: 600 }}>開始時間</span>
                       <input type="date" value={vp.manualStart ? vp.manualStart.split('T')[0] : ''}
                         onChange={(e) => setVpManualStart(vi, e.target.value, vp.manualStart ? (vp.manualStart.split('T')[1] || '') : '')}
@@ -4370,7 +4370,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                           style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '5px 8px', borderRadius: 3, fontSize: 10, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP, whiteSpace: 'nowrap', flexShrink: 0 }}>クリア</button>
                       )}
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }} title="任意・作業終了予定。この視点の最後の未完了ステップに適用・次のタスクはこの時刻以降に開始">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap' }} title="任意・作業終了予定。この視点の最後の未完了ステップに適用・次のタスクはこの時刻以降に開始">
                       <span style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', fontWeight: 600 }}>終了時間</span>
                       <input type="date" value={vp.manualEnd ? vp.manualEnd.split('T')[0] : ''}
                         onChange={(e) => setVpManualEnd(vi, e.target.value, vp.manualEnd ? (vp.manualEnd.split('T')[1] || '') : '')}
@@ -4383,7 +4383,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                           style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '5px 8px', borderRadius: 3, fontSize: 10, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP, whiteSpace: 'nowrap', flexShrink: 0 }}>クリア</button>
                       )}
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }} title={`任意・この視点の個別納期。未設定なら全体納期${form.projectDeadline ? `（${form.projectDeadline}）` : ''}を使用`}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap' }} title={`任意・この視点の個別納期。未設定なら全体納期${form.projectDeadline ? `（${form.projectDeadline}）` : ''}を使用`}>
                       <span style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', fontWeight: 600 }}>個別納期</span>
                       <input type="date" value={vp.deadline || ''}
                         onChange={(e) => setVpDeadline(vi, e.target.value)}

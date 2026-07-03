@@ -108,18 +108,19 @@ export function formatJDate(dateStr) {
   return `${y}/${pad2(m)}/${pad2(d)}（${WD[dt.getDay()]}）`;
 }
 
-// 連番採番：同種別の既存番号から数値の最大＋1（数字以外混在でも数字部分で判定）
+// 連番採番：同種別・同年月（no が「プレフィックス-YYYYMM-」で始まるもの）の最大連番＋1。
+// 月が変わると 01 に戻る。複製で付く「-copy」は末尾が数字でないため連番に影響しない。
 export function nextDocNo(docs, type, now) {
-  const ymd = todayStr(now).replace(/-/g, '');
-  const ym = ymd.slice(0, 6);
-  const sameType = (docs || []).filter(d => d.type === type);
+  const ym = todayStr(now).replace(/-/g, '').slice(0, 6);
+  const prefix = { estimate: 'E', order: 'O', invoice: 'I' }[type] || 'D';
+  const head = `${prefix}-${ym}-`;
   let maxSeq = 0;
-  for (const d of sameType) {
-    const m = String(d.no || '').match(/(\d+)\s*$/);
+  for (const d of (docs || [])) {
+    if (d.type !== type || !String(d.no || '').startsWith(head)) continue;
+    const m = String(d.no).slice(head.length).match(/^(\d+)$/);
     if (m) maxSeq = Math.max(maxSeq, parseInt(m[1], 10));
   }
-  const prefix = { estimate: 'E', order: 'O', invoice: 'I' }[type] || 'D';
-  return `${prefix}-${ym}-${pad2(maxSeq + 1)}`;
+  return `${head}${pad2(maxSeq + 1)}`;
 }
 
 // ---- 金額 ----

@@ -64,8 +64,6 @@ export default function SalesView({ tasks, customerMaster, now, colors, fontJP, 
     return [...s];
   }, [customerMaster, tasks]);
 
-  const catRows = rows.filter(r => r.category === activeCat);
-  const catTotal = useMemo(() => computeCategoryTotal(rows, activeCat, settings), [rows, activeCat, settings]);
 
   return (
     <div>
@@ -104,11 +102,22 @@ export default function SalesView({ tasks, customerMaster, now, colors, fontJP, 
           })}
         </div>
 
-        {/* 区分の見出し（印刷時は全区分を出す） */}
-        <CategoryTable
-          category={catOf(activeCat)} rows={catRows} settings={settings} total={catTotal}
-          updRow={updRow} removeRow={removeRow} companyList={companyList}
-          colors={colors} fontJP={fontJP} />
+        {/* 区分テーブル：画面は選択中の区分のみ、印刷時は行のある全区分を出す */}
+        {SALES_CATEGORIES.map(c => {
+          const isActive = c.id === activeCat;
+          const cRows = rows.filter(r => r.category === c.id);
+          if (!isActive && cRows.length === 0) return null;
+          return (
+            <div key={c.id} className={isActive ? undefined : 'kz-print-only'}
+              style={isActive ? undefined : { display: 'none', marginTop: 14 }}>
+              <CategoryTable
+                category={catOf(c.id)} rows={cRows} settings={settings}
+                total={computeCategoryTotal(rows, c.id, settings)}
+                updRow={updRow} removeRow={removeRow} companyList={companyList}
+                colors={colors} fontJP={fontJP} />
+            </div>
+          );
+        })}
 
         {/* 案件から追加 / 行追加 */}
         <div className="kz-no-print" style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -302,6 +311,12 @@ function CategoryTable({ category, rows, settings, total, updRow, removeRow, com
 }
 
 // CSV 出力
+// Excel での数式実行（CSVインジェクション）対策：
+// 先頭が = + - @ の「数値でない」文字列には ' を付けて数式として解釈されないようにする
+function csvSafe(v) {
+  const s = String(v ?? '');
+  return /^[=+\-@]/.test(s) && isNaN(Number(s)) ? `'${s}` : s;
+}
 function exportCsv(ym, rows, settings) {
   const headers = ['区分', '番号', '会社名', '担当者名', '案件名', '制作種類', '制作名', '社内外注者', '社外外注者', '外注金額VND', '制作金額', '消費税', '税込合計', '制作枚数', '発注着手日', '納品予定日', '納品日', '完了', '請求書送付日', '入金確認日', '請求対象回', '請求金額', '消費税納付', '本社受取', '本社請求状態', '備考'];
   const lines = [headers.join(',')];
@@ -310,7 +325,7 @@ function exportCsv(ym, rows, settings) {
     const c = computeRow(r, settings);
     idx[r.category] = (idx[r.category] || 0) + 1;
     const vals = [catOf(r.category).label, idx[r.category], r.company, r.person, r.projectName, r.prodType, r.prodName, r.inHouseOutsourcer, r.externalOutsourcer, num(r.outsourceVND), num(r.prodAmount), c.tax, c.taxIncl, num(r.sheets), r.orderDate, r.dueDate, r.deliveryDate, r.completed ? '完了' : '', r.invoiceSentDate, r.paymentConfirmedDate, r.billRound, num(r.billAmount), num(r.taxPayAmount), c.hqReceive, r.hqStatus, r.note];
-    lines.push(vals.map(v => `"${String(v ?? '').replace(/"/g, '""')}"`).join(','));
+    lines.push(vals.map(v => `"${csvSafe(v).replace(/"/g, '""')}"`).join(','));
   }
   const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
   const url = URL.createObjectURL(blob);

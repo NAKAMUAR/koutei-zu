@@ -134,6 +134,9 @@ function iconBtn(colors) {
 function BillingEditor({ initial, customerMaster, tasks, onSave, onSaveClose, onClose, onDelete, existing, colors, fontJP, fontDisplay }) {
   const [doc, setDoc] = useState(initial);
   const [tab, setTab] = useState('basic');
+  // 未保存変更の検知（保存済みスナップショットとの比較）
+  const savedJson = useRef(JSON.stringify(initial));
+  const dirty = JSON.stringify(doc) !== savedJson.current;
   const isEstimate = doc.type === 'estimate';
   const isInvoice = doc.type === 'invoice';
   const isOrder = doc.type === 'order';
@@ -180,8 +183,34 @@ function BillingEditor({ initial, customerMaster, tasks, onSave, onSaveClose, on
     upd(patch);
   };
 
-  // 印刷（PDF出力）
-  const handlePrint = () => { onSave(doc); window.print(); };
+  const markSaved = (d) => { savedJson.current = JSON.stringify(d); };
+  const handleSave = () => { onSave(doc); markSaved(doc); };
+  const handleClose = () => {
+    if (dirty && !confirm('保存されていない変更があります。破棄して一覧へ戻りますか？')) return;
+    onClose();
+  };
+
+  // ブラウザのタブを閉じる・リロード時にも未保存変更を警告
+  useEffect(() => {
+    if (!dirty) return;
+    const h = (e) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', h);
+    return () => window.removeEventListener('beforeunload', h);
+  }, [dirty]);
+
+  // 印刷（PDF出力）。主要項目が空なら確認してから進む
+  const handlePrint = () => {
+    const missing = [];
+    if (!(doc.subject || '').trim()) missing.push('件名');
+    if (isOrder) {
+      if (!(doc.from?.company || '').trim()) missing.push('発注者（お客様）会社名');
+    } else if (!(doc.to?.company || '').trim()) {
+      missing.push('宛先 会社名');
+    }
+    if (isInvoice && !(doc.paymentDeadline || '').trim()) missing.push('支払期限');
+    if (missing.length && !confirm(`「${missing.join('」「')}」が未入力です。このまま印刷しますか？`)) return;
+    onSave(doc); markSaved(doc); window.print();
+  };
 
   const input = (props) => ({ padding: '7px 9px', border: `1px solid ${colors.border}`, borderRadius: 4, fontFamily: fontJP, fontSize: 13, color: colors.text, background: '#fff', boxSizing: 'border-box', width: '100%', ...props });
   const label = { fontSize: 11, color: colors.textMute, marginBottom: 3, display: 'block' };
@@ -195,9 +224,11 @@ function BillingEditor({ initial, customerMaster, tasks, onSave, onSaveClose, on
       <PrintStyles />
       {/* ヘッダー操作 */}
       <div className="kz-no-print" style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
-        <button onClick={onClose} style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '8px 12px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13 }}><X size={15} />一覧へ戻る</button>
+        <button onClick={handleClose} style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '8px 12px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13 }}><X size={15} />一覧へ戻る</button>
         <span style={{ fontSize: 11, fontWeight: 700, color: '#fff', background: dt.accent, padding: '4px 10px', borderRadius: 3, WebkitPrintColorAdjust: 'exact' }}>{dt.label}</span>
+        {dirty && <span style={{ fontSize: 11, color: '#c0392b', fontWeight: 600, whiteSpace: 'nowrap' }}>● 未保存の変更あり</span>}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+          <button onClick={handleSave} disabled={!dirty} style={{ padding: '8px 14px', background: 'transparent', border: `1px solid ${dirty ? '#1a1a1a' : colors.border}`, color: dirty ? '#1a1a1a' : colors.textMute, borderRadius: 4, cursor: dirty ? 'pointer' : 'default', fontFamily: fontJP, fontSize: 13, fontWeight: 500 }}>保存</button>
           <button onClick={() => onSaveClose(doc)} style={{ padding: '8px 14px', background: '#1a1a1a', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13, fontWeight: 500 }}>保存して閉じる</button>
           <button onClick={handlePrint} style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '8px 14px', background: dt.accent, color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13, fontWeight: 600, WebkitPrintColorAdjust: 'exact' }}><Printer size={15} />PDF出力 / 印刷</button>
           {existing && <button onClick={onDelete} style={{ padding: '8px 12px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', color: '#c0392b', fontFamily: fontJP, fontSize: 13 }}><Trash2 size={15} /></button>}
