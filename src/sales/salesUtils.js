@@ -172,6 +172,73 @@ export function computeDeliverySummary(ledger, ym, cutoffDay) {
   return { groups, groupTotals, grand, missingDate };
 }
 
+// ---- 会社別集計（会社×月のマトリクス。会社別集計タブ用）----
+// 集計できる指標。money=金額表示、defaultBasis=推奨の月割り当て基準
+//   basis 'delivery' … 納品日を締め日方式で納品月に割り当て（納品日の無い行は対象外）
+//   basis 'ledger'   … 行が属する台帳（売上登録表）の月
+export const COMPANY_METRICS = [
+  { id: 'count', label: '納品枚数（納品名ベース）', money: false, defaultBasis: 'delivery' },
+  { id: 'sheets', label: '制作枚数（入力値）', money: false, defaultBasis: 'delivery' },
+  { id: 'prod', label: '制作金額（税抜）', money: true, defaultBasis: 'ledger' },
+  { id: 'taxIncl', label: '税込合計', money: true, defaultBasis: 'ledger' },
+  { id: 'bill', label: '請求金額', money: true, defaultBasis: 'ledger' },
+  { id: 'outsourceJPY', label: '外注費（円換算）', money: true, defaultBasis: 'ledger' },
+];
+export function companyMetricOf(id) { return COMPANY_METRICS.find(m => m.id === id) || COMPANY_METRICS[0]; }
+
+// 指定年の 会社×月 マトリクスを集計する。
+// 返り値：{ months: ['YYYY-01'…'YYYY-12'], groups: { offshore: Row[], lab: Row[] }, groupTotals, grand }
+//   Row = { company, values: number[12], total }
+// 納品枚数（count）は納品名のユニーク数ベース（月内で同じ納品名は1枚。納品名が空の行は1行=1枚）。
+// 金額系は各行の属する台帳月の settings（為替レート等）で換算する。
+export function computeCompanyMatrix(ledger, year, metricId, basis, cutoffDay) {
+  const months = Array.from({ length: 12 }, (_, i) => `${year}-${pad2(i + 1)}`);
+  const mIndex = new Map(months.map((m, i) => [m, i]));
+  const byCompany = new Map(); // company → { group, names: Set[12], vals: number[12] }
+  for (const [ledgerYm, monthData] of Object.entries(ledger || {})) {
+    const settings = { ...DEFAULT_SETTINGS, ...(monthData?.settings || {}) };
+    for (const r of (monthData?.rows || [])) {
+      const ym = basis === 'delivery' ? deliveryMonthOf(r.deliveryDate, cutoffDay) : ledgerYm;
+      if (!ym || !mIndex.has(ym)) continue;
+      const mi = mIndex.get(ym);
+      const company = (r.company || '').trim() || '（会社名未入力）';
+      const group = catOf(r.category).group; // 'offshore' | 'lab'
+      if (!byCompany.has(company)) {
+        byCompany.set(company, { group, names: months.map(() => new Set()), vals: months.map(() => 0) });
+      }
+      const e = byCompany.get(company);
+      if (metricId === 'count') {
+        const name = (r.prodName || '').trim();
+        if (name) e.names[mi].add(name); else e.vals[mi] += 1;
+      } else if (metricId === 'sheets') {
+        e.vals[mi] += num(r.sheets);
+      } else if (metricId === 'bill') {
+        e.vals[mi] += num(r.billAmount);
+      } else {
+        const c = computeRow(r, settings);
+        if (metricId === 'prod') e.vals[mi] += c.prod;
+        else if (metricId === 'taxIncl') e.vals[mi] += c.taxIncl;
+        else if (metricId === 'outsourceJPY') e.vals[mi] += c.outsourceJPY;
+      }
+    }
+  }
+  const groups = { offshore: [], lab: [] };
+  for (const [company, e] of byCompany) {
+    const values = e.vals.map((v, i) => v + (metricId === 'count' ? e.names[i].size : 0));
+    const total = values.reduce((s, v) => s + v, 0);
+    if (total === 0) continue; // 選択年に実績の無い会社は出さない
+    (groups[e.group] || groups.lab).push({ company, values, total });
+  }
+  for (const g of Object.values(groups)) g.sort((a, b) => b.total - a.total || a.company.localeCompare(b.company, 'ja'));
+  const sumRows = (rows) => {
+    const values = months.map((_, i) => rows.reduce((s, r) => s + r.values[i], 0));
+    return { values, total: values.reduce((s, v) => s + v, 0) };
+  };
+  const groupTotals = { offshore: sumRows(groups.offshore), lab: sumRows(groups.lab) };
+  const grand = sumRows([...groups.offshore, ...groups.lab]);
+  return { months, groups, groupTotals, grand };
+}
+
 // 区分ごとの合計（区分タブ下の合計行用）
 export function computeCategoryTotal(rows, categoryId, settings) {
   const filtered = (rows || []).filter(r => r.category === categoryId);
