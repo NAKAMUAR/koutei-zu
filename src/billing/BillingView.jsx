@@ -432,6 +432,7 @@ function BillingEditor({ initial, customerMaster, tasks, onSave, onSaveClose, on
                   </Row>
                   <div><label style={label}>住所</label><input value={doc.from.address} onChange={e => upd({ from: { ...doc.from, address: e.target.value } })} style={input()} /></div>
                   <div><label style={label}>代表者名</label><input value={doc.from.rep} onChange={e => upd({ from: { ...doc.from, rep: e.target.value } })} style={input()} /></div>
+                  <div><label style={label}>支払条件</label><input value={doc.paymentTerms || ''} onChange={e => upd({ paymentTerms: e.target.value })} style={input()} /></div>
                 </>
               ) : (
                 <div><label style={label}>宛先 会社名（御中）</label><input value={doc.to.company} onChange={e => upd({ to: { ...doc.to, company: e.target.value } })} style={input()} /></div>

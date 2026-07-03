@@ -3,7 +3,7 @@
 // デザインは元のExcel/PDF帳票に準拠（上下の色帯・字間広めの大見出し・白地＋色アンダーラインの明細・細罫線の集計）。
 import React from 'react';
 import {
-  DOC_TYPES, docTypeOf, formatYen, formatJDate, lineAmount, computeTotals,
+  DOC_TYPES, formatYen, formatJDate, lineAmount, computeTotals,
   CONDITION_SECTIONS, SCHEDULE_TIME_ROWS,
 } from './billingUtils.js';
 import rebegLogo from './rebeg-logo.png';
@@ -91,23 +91,22 @@ function ToLine({ company, centered }) {
   );
 }
 
-// ===== 明細テーブル：白地ヘッダー＋色付き太アンダーライン =====
+// 帳票共通の帯・アンダーライン色（アップロードされた見積書フォームに合わせ、全種別で統一）
+const DOC_DARK = '#3a3a3a';
+
+// ===== 明細テーブル：白地ヘッダー＋太アンダーライン（項目・数量・単価・金額。全種別共通） =====
 function ItemsTable({ doc }) {
-  const isInvoice = doc.type === 'invoice';
-  const isOrder = doc.type === 'order';
   const rows = doc.items || [];
-  const minRows = isInvoice ? 10 : isOrder ? 10 : 13;
+  const minRows = 14; // アップロードされた見積書フォームと同じ行数
   const filled = rows.slice();
   while (filled.length < minRows) filled.push({ id: 'pad' + filled.length, _pad: true });
-  const accent = docTypeOf(doc.type).accent;
-  const head = { padding: '7px 8px', fontSize: 11.5, fontWeight: 600, color: '#333', borderBottom: `2.5px solid ${accent}`, textAlign: 'center', whiteSpace: 'nowrap' };
+  const head = { padding: '7px 8px', fontSize: 11.5, fontWeight: 600, color: '#333', borderBottom: `2.5px solid ${DOC_DARK}`, textAlign: 'center', whiteSpace: 'nowrap' };
   const cell = { borderBottom: `1px solid #ececec`, padding: '7px 8px', fontSize: 11.5, height: 24 };
   const sep = { borderLeft: '1px solid #f0eee8' };
   return (
     <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
       <thead>
         <tr>
-          {isInvoice && <th style={{ ...head, width: '13%' }}>日付</th>}
           <th style={{ ...head, textAlign: 'left' }}>項目</th>
           <th style={{ ...head, width: '11%' }}>数量</th>
           <th style={{ ...head, width: '16%' }}>単価</th>
@@ -117,7 +116,6 @@ function ItemsTable({ doc }) {
       <tbody>
         {filled.map((it, i) => (
           <tr key={it.id || i}>
-            {isInvoice && <td style={{ ...cell, textAlign: 'center', color: '#444' }}>{it._pad ? '' : (it.date ? formatJDate(it.date).slice(5, 10) : '')}</td>}
             <td style={{ ...cell, textAlign: 'left' }}>
               {it._pad ? '' : <>{it.reduced ? <span style={{ marginRight: 4 }}>*</span> : null}{it.name}</>}
             </td>
@@ -131,52 +129,33 @@ function ItemsTable({ doc }) {
   );
 }
 
-// 見積・発注の合計ブロック（右寄せ・白地・細罫線）
+// 合計ブロック（右寄せ・白地・細罫線）。アップロードされた見積書フォームと同じ
+// 「小計／消費税（TAX/10%）／合計金額（消費税込）」構成で全種別共通。
+// 請求書で軽減税率（8%）の項目がある場合のみ、税率別の行を差し込む（適格請求書の税率別記載）。
 function SimpleTotals({ doc }) {
   const t = computeTotals(doc);
   const row = (label, val, strong, last) => (
-    <div style={{ display: 'flex', borderBottom: last ? 'none' : `1px solid ${LINE}` }}>
+    <div key={label} style={{ display: 'flex', borderBottom: last ? 'none' : `1px solid ${LINE}` }}>
       <div style={{ flex: 1, padding: '10px 12px', fontSize: 12, textAlign: 'center', color: '#444', borderRight: `1px solid ${LINE}` }}>{label}</div>
       <div style={{ width: 150, padding: '10px 14px', fontSize: strong ? 14 : 12, fontWeight: strong ? 700 : 400, textAlign: 'right' }}>{formatYen(val)}</div>
     </div>
   );
+  const isInvoice = doc.type === 'invoice';
+  const hasReduced = isInvoice && t.base8 > 0;
   return (
     <div style={{ width: 330, marginLeft: 'auto', marginTop: 18, border: `1px solid ${LINE}` }}>
       {row('小計', t.subtotal)}
-      {row('消費税（TAX/10%）', t.tax)}
+      {hasReduced ? (
+        <>
+          {row('8％対象（*） 小計', t.base8)}
+          {row('消費税（8％）', t.tax8)}
+          {row('10％対象 小計', t.base10)}
+          {row('消費税（10％）', t.tax10)}
+        </>
+      ) : (
+        row('消費税（TAX/10%）', isInvoice ? t.taxTotal : t.tax)
+      )}
       {row('合計金額（消費税込）', t.total, true, true)}
-    </div>
-  );
-}
-
-// 請求書の税額サマリー（軽減税率対応）
-function InvoiceTotals({ doc }) {
-  const t = computeTotals(doc);
-  const pair = (label, val, head, lastCol) => (
-    <div style={{ flex: 1, display: 'flex', borderRight: lastCol ? 'none' : `1px solid ${LINE}` }}>
-      <div style={{ flex: 1, padding: '9px 8px', fontSize: 11, color: '#444', textAlign: 'center' }}>{label}</div>
-      <div style={{ width: 78, padding: '9px 8px', fontSize: 11, textAlign: 'right', borderLeft: `1px solid ${LINE}` }}>{formatYen(val)}</div>
-    </div>
-  );
-  return (
-    <div style={{ marginTop: 12, border: `1px solid ${LINE}` }}>
-      <div style={{ display: 'flex', borderBottom: `1px solid ${LINE}` }}>
-        {pair('8％対象項目', t.base8)}
-        {pair('10％対象項目', t.base10)}
-        {pair('小計', t.subtotal, false, true)}
-      </div>
-      <div style={{ display: 'flex', borderBottom: `1px solid ${LINE}` }}>
-        {pair('消費税（8％）', t.tax8)}
-        {pair('消費税（10％）', t.tax10)}
-        {pair('消費税（合計）', t.taxTotal, false, true)}
-      </div>
-      <div style={{ display: 'flex' }}>
-        <div style={{ flex: 2, borderRight: `1px solid ${LINE}` }} />
-        <div style={{ flex: 1, display: 'flex', background: '#eef3e8', ...exact }}>
-          <div style={{ flex: 1, padding: '11px 10px', fontSize: 12.5, fontWeight: 700, textAlign: 'center' }}>合計金額(消費税込)</div>
-          <div style={{ width: 78, padding: '11px 8px', fontSize: 14, fontWeight: 700, textAlign: 'right', borderLeft: `1px solid ${LINE}` }}>{formatYen(t.total)}</div>
-        </div>
-      </div>
     </div>
   );
 }
@@ -224,27 +203,29 @@ function EstimatePage1({ doc }) {
   );
 }
 
+// 発注書：見積書と同じフォーム。宛先（御中）＝発注先（リーベグ）、右側＝発注者（お客様・署名捺印側）
 function OrderPage1({ doc }) {
   const t = computeTotals(doc);
   const f = doc.from || {};
   return (
-    <Page first accentBar="#3a7bd5">
+    <Page first accentBar={DOC_DARK}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <Title text="発 注 書" />
         <NoBlock doc={doc} dateLabel="発効日" />
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 26, gap: 24 }}>
-        <div style={{ flex: 1, maxWidth: 340 }}>
-          <ToLine company={doc.to.company || '株式会社リーベグ'} centered />
+        <div style={{ flex: 1, maxWidth: 330 }}>
+          <ToLine company={doc.to.company || '株式会社リーベグ'} />
           <div style={{ fontSize: 11, margin: '12px 0 6px', color: '#444' }}>下記のとおり、御発注申し上げます。</div>
           <Field label="件名">{doc.subject}</Field>
+          <Field label="支払条件">{doc.paymentTerms}</Field>
           <TotalLine total={t.total} />
         </div>
-        <div style={{ width: 240, flex: 'none', fontSize: 11.5, lineHeight: 1.95 }}>
-          <div style={{ fontSize: 14, fontWeight: 700 }}>{f.company || '※お客様会社名'}</div>
-          <div>{f.zip ? `〒${f.zip}` : '※〒000-000-000（郵便番号）'}</div>
+        <div style={{ width: 240, flex: 'none', fontSize: 11, lineHeight: 1.75 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 3 }}>{f.company || '※お客様会社名'}</div>
+          <div>{f.zip ? `〒${f.zip}` : '※〒000-0000（郵便番号）'}</div>
           <div>{f.address || '※住所'}</div>
-          <div>{f.tel ? `電話：${f.tel}` : '※電話番号'}</div>
+          <div style={{ marginTop: 5 }}>{f.tel ? `電話：${f.tel}` : '※電話番号'}</div>
           <div>{f.rep || '※代表者名'}</div>
           <div style={{ color: '#c0392b', marginTop: 10 }}>署名と捺印をお願いします。</div>
         </div>
@@ -258,10 +239,12 @@ function OrderPage1({ doc }) {
   );
 }
 
+// 請求書：見積書と同じフォーム（件名・支払期限の情報欄＋共通明細表＋共通合計欄＋備考に振込先）
 function InvoicePage1({ doc }) {
   const t = computeTotals(doc);
+  const hasReduced = (doc.items || []).some(it => it.reduced || Number(it.taxRate) === 8);
   return (
-    <Page first accentBar="#8bc34a">
+    <Page first accentBar={DOC_DARK}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <Title text="御 請 求 書" />
         <NoBlock doc={doc} />
@@ -278,10 +261,10 @@ function InvoicePage1({ doc }) {
           <FromBlock from={doc.from} showReg />
         </div>
       </div>
-      <div style={{ marginTop: 22 }}>
+      <div style={{ marginTop: 24 }}>
         <ItemsTable doc={doc} />
-        <div style={{ fontSize: 10, color: '#666', marginTop: 5 }}>* 軽減税率対象</div>
-        <InvoiceTotals doc={doc} />
+        {hasReduced && <div style={{ fontSize: 10, color: '#666', marginTop: 5 }}>* 軽減税率対象</div>}
+        <SimpleTotals doc={doc} />
       </div>
       <NoteBlock lines={[...(doc.note ? [doc.note] : []), ...(doc.bankLines || [])]} />
     </Page>

@@ -44,6 +44,9 @@ export function migrateBillingDoc(d) {
   if (d && d.type === 'invoice' && !d.status) {
     return { ...d, status: 'draft', sentDate: d.sentDate || '', paidDate: d.paidDate || '' };
   }
+  if (d && d.type === 'order' && d.paymentTerms == null) {
+    return { ...d, paymentTerms: ESTIMATE_FIXED.paymentTerms };
+  }
   return d;
 }
 
@@ -214,6 +217,7 @@ export function blankDoc(type, docs, now, issuer) {
     // 発注書は「御中」=発注先（既定: リーベグ）、発行元=発注者（お客様, 署名捺印欄あり）
     base.to = { company: '株式会社リーベグ', honorific: '御中', zip: '', address: '', tel: '', rep: '' };
     base.from = { company: '', zip: '', address: '', tel: '', person: '', regNo: '', rep: '' };
+    base.paymentTerms = ESTIMATE_FIXED.paymentTerms; // 見積書と同じフォームの「支払条件」欄
   }
   if (type === 'invoice') {
     base.paymentDeadline = '';
