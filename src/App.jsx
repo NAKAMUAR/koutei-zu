@@ -4227,7 +4227,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                 style={{ ...inputStyle, flex: '0 0 160px', width: 'auto' }} />
               {form.projectRequestDate && (
                 <button type="button" onClick={() => setForm({ ...form, projectRequestDate: '' })}
-                  style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '6px 10px', borderRadius: 3, fontSize: 11, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP }}>
+                  style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '6px 10px', borderRadius: 3, fontSize: 11, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP, whiteSpace: 'nowrap', flexShrink: 0 }}>
                   クリア
                 </button>
               )}
@@ -4241,7 +4241,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                 style={{ ...inputStyle, flex: '0 0 160px', width: 'auto' }} />
               {form.projectDeadline && (
                 <button type="button" onClick={() => setForm({ ...form, projectDeadline: '' })}
-                  style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '6px 10px', borderRadius: 3, fontSize: 11, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP }}>
+                  style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '6px 10px', borderRadius: 3, fontSize: 11, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP, whiteSpace: 'nowrap', flexShrink: 0 }}>
                   クリア
                 </button>
               )}
@@ -4367,7 +4367,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                         colors={colors} fontJP={fontJP} allowEmpty />
                       {vp.manualStart && (
                         <button type="button" onClick={() => setVpManualStart(vi, '', '')}
-                          style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '5px 8px', borderRadius: 3, fontSize: 10, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP }}>クリア</button>
+                          style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '5px 8px', borderRadius: 3, fontSize: 10, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP, whiteSpace: 'nowrap', flexShrink: 0 }}>クリア</button>
                       )}
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }} title="任意・作業終了予定。この視点の最後の未完了ステップに適用・次のタスクはこの時刻以降に開始">
@@ -4380,7 +4380,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                         colors={colors} fontJP={fontJP} allowEmpty />
                       {vp.manualEnd && (
                         <button type="button" onClick={() => setVpManualEnd(vi, '', '')}
-                          style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '5px 8px', borderRadius: 3, fontSize: 10, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP }}>クリア</button>
+                          style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '5px 8px', borderRadius: 3, fontSize: 10, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP, whiteSpace: 'nowrap', flexShrink: 0 }}>クリア</button>
                       )}
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }} title={`任意・この視点の個別納期。未設定なら全体納期${form.projectDeadline ? `（${form.projectDeadline}）` : ''}を使用`}>
@@ -4390,7 +4390,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                         style={{ ...inputStyle, width: 'auto', flex: '0 0 140px', padding: '6px 8px', fontSize: 12 }} />
                       {vp.deadline && (
                         <button type="button" onClick={() => setVpDeadline(vi, '')}
-                          style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '5px 8px', borderRadius: 3, fontSize: 10, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP }}>クリア</button>
+                          style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '5px 8px', borderRadius: 3, fontSize: 10, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP, whiteSpace: 'nowrap', flexShrink: 0 }}>クリア</button>
                       )}
                     </div>
                   </div>
