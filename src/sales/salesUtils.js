@@ -122,6 +122,56 @@ export function computeSummary(rows, settings) {
   return sum;
 }
 
+// ---- 月間 制作枚数集計（会社別・納品名ベース）----
+// 納品月は締め日方式：納品日が締め日（cutoffDay）以前ならその月、締め日より後なら翌月。
+// 例）締め日25 → 5/26〜6/25 が「6月分」、6/26〜7/25 が「7月分」。
+export function deliveryMonthOf(dateStr, cutoffDay) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(dateStr || '').trim());
+  if (!m) return null;
+  let y = Number(m[1]), mo = Number(m[2]);
+  const d = Number(m[3]);
+  const cd = Math.min(Math.max(parseInt(cutoffDay, 10) || 25, 1), 31);
+  if (d > cd) { mo += 1; if (mo > 12) { mo = 1; y += 1; } }
+  return `${y}-${pad2(mo)}`;
+}
+
+// 全月の売上行を横断して、指定した納品月（ym）の会社別枚数を集計する。
+// 枚数は「納品名（制作名）のユニーク数」ベース。同じ納品名の行（例：同一パースの修正）は1枚に数える。
+// 納品名が空の行は判別できないため1行=1枚で数える。制作枚数（入力値）の合計も併記する。
+// 返り値：{ groups: { offshore: Item[], lab: Item[] }, groupTotals, grand, missingDate }
+//   Item = { company, count, sheets, rows }
+export function computeDeliverySummary(ledger, ym, cutoffDay) {
+  const byCompany = new Map(); // company → { group, names:Set, unnamed, sheets, rows }
+  let missingDate = 0; // その月の台帳にあるのに納品日が未入力の行（集計対象外の注意喚起用）
+  for (const [ledgerYm, monthData] of Object.entries(ledger || {})) {
+    for (const r of (monthData?.rows || [])) {
+      const dm = deliveryMonthOf(r.deliveryDate, cutoffDay);
+      if (!dm) {
+        if (ledgerYm === ym) missingDate++;
+        continue;
+      }
+      if (dm !== ym) continue;
+      const company = (r.company || '').trim() || '（会社名未入力）';
+      const group = catOf(r.category).group; // 'offshore' | 'lab'
+      if (!byCompany.has(company)) byCompany.set(company, { group, names: new Set(), unnamed: 0, sheets: 0, rows: 0 });
+      const e = byCompany.get(company);
+      e.rows++;
+      e.sheets += num(r.sheets);
+      const name = (r.prodName || '').trim();
+      if (name) e.names.add(name); else e.unnamed++;
+    }
+  }
+  const groups = { offshore: [], lab: [] };
+  for (const [company, e] of byCompany) {
+    (groups[e.group] || groups.lab).push({ company, count: e.names.size + e.unnamed, sheets: e.sheets, rows: e.rows });
+  }
+  for (const g of Object.values(groups)) g.sort((a, b) => b.count - a.count || a.company.localeCompare(b.company, 'ja'));
+  const totalOf = (arr) => arr.reduce((s, x) => ({ count: s.count + x.count, sheets: s.sheets + x.sheets, rows: s.rows + x.rows }), { count: 0, sheets: 0, rows: 0 });
+  const groupTotals = { offshore: totalOf(groups.offshore), lab: totalOf(groups.lab) };
+  const grand = totalOf([groupTotals.offshore, groupTotals.lab]);
+  return { groups, groupTotals, grand, missingDate };
+}
+
 // 区分ごとの合計（区分タブ下の合計行用）
 export function computeCategoryTotal(rows, categoryId, settings) {
   const filtered = (rows || []).filter(r => r.category === categoryId);

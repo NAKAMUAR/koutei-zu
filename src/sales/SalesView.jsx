@@ -3,10 +3,11 @@
 // 月をまたいだ後勝ち上書きが起きない（保存はその月のドキュメントだけ）。
 import React, { useState, useEffect, useMemo } from 'react';
 import { Plus, Trash2, ChevronLeft, ChevronRight, Printer, Download } from 'lucide-react';
-import { salesStore } from '../firebase.js';
+import { salesStore, storage } from '../firebase.js';
 import {
   SALES_CATEGORIES, catOf, OUTSOURCERS, DEFAULT_SETTINGS,
   blankRow, computeRow, computeSummary, computeCategoryTotal,
+  computeDeliverySummary,
   currentMonth, monthLabel, shiftMonth, num, formatYen, formatVND,
 } from './salesUtils.js';
 
@@ -23,6 +24,30 @@ export default function SalesView({ tasks, customerMaster, now, colors, fontJP, 
     });
     return () => unsub && unsub();
   }, []);
+
+  // 月間 制作枚数集計：集計月（台帳の表示月とは独立）と締め日（変更可・チーム共有で保存）
+  const [deliveryYm, setDeliveryYm] = useState(currentMonth(now));
+  const [cutoffDay, setCutoffDay] = useState(25);
+  useEffect(() => {
+    const unsub = storage.subscribe('deliveryCountSettings', (val) => {
+      if (!val) return;
+      try {
+        const o = JSON.parse(val);
+        const d = parseInt(o.cutoffDay, 10);
+        if (d >= 1 && d <= 31) setCutoffDay(d);
+      } catch (e) {}
+    });
+    return () => unsub && unsub();
+  }, []);
+  const saveCutoffDay = (d) => {
+    const v = Math.min(Math.max(parseInt(d, 10) || 25, 1), 31);
+    setCutoffDay(v);
+    storage.set('deliveryCountSettings', JSON.stringify({ cutoffDay: v })).catch(e => console.error('締め日の保存エラー:', e));
+  };
+  const deliverySummary = useMemo(
+    () => computeDeliverySummary(ledger, deliveryYm, cutoffDay),
+    [ledger, deliveryYm, cutoffDay]
+  );
 
   const month = ledger[ym] || { rows: [], settings: { ...DEFAULT_SETTINGS }, updatedAt: null };
   const settings = { ...DEFAULT_SETTINGS, ...(month.settings || {}) };
@@ -140,6 +165,12 @@ export default function SalesView({ tasks, customerMaster, now, colors, fontJP, 
           </select>
           {!loaded && <span style={{ fontSize: 12, color: colors.textMute }}>読み込み中…</span>}
         </div>
+
+        {/* 月間 制作枚数集計（会社別・納品名ベース） */}
+        <DeliveryCountPanel
+          summary={deliverySummary} ym={deliveryYm} setYm={setDeliveryYm}
+          cutoffDay={cutoffDay} saveCutoffDay={saveCutoffDay}
+          colors={colors} fontJP={fontJP} />
       </div>
 
       {/* 会社名サジェスト用 datalist */}
@@ -329,6 +360,99 @@ function CategoryTable({ category, rows, settings, total, updRow, removeRow, com
             </tfoot>
           )}
         </table>
+      </div>
+    </div>
+  );
+}
+
+// ===== 月間 制作枚数集計（会社別・納品名ベース） =====
+// 全月の売上行から、納品日を締め日方式で納品月に割り当てて会社別に枚数を数える。
+// 集計月・締め日はこのパネル内で変更できる（締め日はチーム共有で保存）。
+function DeliveryCountPanel({ summary, ym, setYm, cutoffDay, saveCutoffDay, colors, fontJP }) {
+  const th = { border: `1px solid ${colors.border}`, padding: '5px 10px', background: '#3a3a3a', color: '#fff', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', WebkitPrintColorAdjust: 'exact' };
+  const td = { border: `1px solid ${colors.border}`, padding: '5px 10px', fontSize: 12, background: '#fff' };
+  const tdNum = { ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' };
+  const groupLabel = { offshore: 'オフショア', lab: 'ラボ' };
+  // 集計期間の説明（例：締め日25 → 前月26日〜当月25日）
+  const periodText = cutoffDay >= 31
+    ? '当月1日〜末日'
+    : `前月${cutoffDay + 1}日〜当月${cutoffDay}日`;
+  const groupRows = (gid) => {
+    const items = summary.groups[gid] || [];
+    const gt = summary.groupTotals[gid];
+    return (
+      <React.Fragment key={gid}>
+        <tr>
+          <td colSpan={4} style={{ ...td, background: '#eef3e8', fontWeight: 700, fontSize: 12, WebkitPrintColorAdjust: 'exact' }}>{groupLabel[gid]}</td>
+        </tr>
+        {items.length === 0 ? (
+          <tr><td colSpan={4} style={{ ...td, color: colors.textMute, textAlign: 'center' }}>この月の納品はありません</td></tr>
+        ) : items.map(it => (
+          <tr key={it.company}>
+            <td style={td}>{it.company}</td>
+            <td style={tdNum}>{it.count}</td>
+            <td style={tdNum}>{it.sheets || ''}</td>
+            <td style={tdNum}>{it.rows}</td>
+          </tr>
+        ))}
+        {items.length > 0 && (
+          <tr>
+            <td style={{ ...td, fontWeight: 700, textAlign: 'right' }}>{groupLabel[gid]} 合計</td>
+            <td style={{ ...tdNum, fontWeight: 700 }}>{gt.count}</td>
+            <td style={{ ...tdNum, fontWeight: 700 }}>{gt.sheets || ''}</td>
+            <td style={{ ...tdNum, fontWeight: 700 }}>{gt.rows}</td>
+          </tr>
+        )}
+      </React.Fragment>
+    );
+  };
+  return (
+    <div style={{ marginTop: 26 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 15, fontWeight: 700 }}>月間 制作枚数（会社別・納品名ベース）</span>
+        <div className="kz-no-print" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <button onClick={() => setYm(shiftMonth(ym, -1))} style={navBtn(colors)}><ChevronLeft size={14} /></button>
+          <input type="month" value={ym} onChange={e => e.target.value && setYm(e.target.value)}
+            style={{ padding: '5px 7px', border: `1px solid ${colors.border}`, borderRadius: 4, fontFamily: fontJP, fontSize: 13, fontWeight: 600 }} />
+          <button onClick={() => setYm(shiftMonth(ym, 1))} style={navBtn(colors)}><ChevronRight size={14} /></button>
+        </div>
+        <div className="kz-no-print" style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#555' }}>
+          締め日
+          <input value={cutoffDay} onChange={e => saveCutoffDay(e.target.value)} inputMode="numeric"
+            style={{ width: 36, padding: '4px 5px', border: `1px solid ${colors.border}`, borderRadius: 3, fontSize: 12, textAlign: 'center' }} />
+          日（{periodText} を {monthLabel(ym)} として集計）
+        </div>
+        <span className="kz-print-only" style={{ display: 'none', fontSize: 12 }}>
+          {monthLabel(ym)}（{periodText}・締め日{cutoffDay}日）
+        </span>
+      </div>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ borderCollapse: 'collapse', minWidth: 560 }}>
+          <thead>
+            <tr>
+              <th style={{ ...th, minWidth: 220, textAlign: 'left' }}>会社名</th>
+              <th style={th} title="納品名（制作名）のユニーク数。同じ納品名の行（修正など）は1枚に数える">納品枚数（納品名）</th>
+              <th style={th} title="行に入力された「制作枚数」の合計">制作枚数（入力値）</th>
+              <th style={th} title="集計対象になった売上行の数">対象行数</th>
+            </tr>
+          </thead>
+          <tbody>
+            {groupRows('offshore')}
+            {groupRows('lab')}
+            <tr style={{ background: '#f0ede3', WebkitPrintColorAdjust: 'exact' }}>
+              <td style={{ ...td, background: 'transparent', fontWeight: 700, textAlign: 'right' }}>総合計</td>
+              <td style={{ ...tdNum, background: 'transparent', fontWeight: 700 }}>{summary.grand.count}</td>
+              <td style={{ ...tdNum, background: 'transparent', fontWeight: 700 }}>{summary.grand.sheets || ''}</td>
+              <td style={{ ...tdNum, background: 'transparent', fontWeight: 700 }}>{summary.grand.rows}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div style={{ fontSize: 11, color: colors.textMute, marginTop: 6 }}>
+        納品日（10.納品日）が入力された行のみ集計します。区分（オフショア/ラボ）は行の売上区分から判定。
+        {summary.missingDate > 0 && (
+          <span style={{ color: '#c0392b', fontWeight: 600 }}> ※{monthLabel(ym)}の台帳に納品日未入力の行が{summary.missingDate}件あります（集計対象外）。</span>
+        )}
       </div>
     </div>
   );
