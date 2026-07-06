@@ -269,7 +269,9 @@ function ProjectQuoteModal({ projects, existingSrcRounds, ym, onAdd, onClose, co
                   <span style={{ fontSize: 13.5, fontWeight: 600 }}>{p.projectNameInternal || p.projectName}</span>
                   {p.projectNameInternal && <span style={{ fontSize: 11, color: colors.textMute }}>{p.projectName}</span>}
                   {p.companyName && <span style={{ fontSize: 11, color: colors.textMute }}>{p.companyName}</span>}
-                  <span style={{ marginLeft: 'auto', fontSize: 11, color: colors.textMute }}>{p.steps.length}ステップ</span>
+                  <span style={{ marginLeft: 'auto', fontSize: 11, color: colors.textMute }}>
+                    {p.registeredDate ? `登録 ${p.registeredDate.slice(5).replace('-', '/')} ・ ` : ''}{p.steps.length}ステップ
+                  </span>
                 </button>
               ))}
             </div>

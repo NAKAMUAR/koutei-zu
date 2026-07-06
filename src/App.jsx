@@ -2019,6 +2019,8 @@ export default function App() {
             status,
             completedAt: status === 'done' ? (existing?.completedAt || (baseTime + seq)) : null,
             createdAt: existing?.createdAt || (baseTime + seq),
+            // 登録日（自動記録・編集しても最初の登録日を維持）。案件の登録日はタスクの最早値
+            registeredDate: existing?.registeredDate || fmtYMD(new Date(baseTime)),
             // ステップごとの金額・依頼日・完了日（ステップ＝納品単位。売上へ1ステップ1行で連携）
             stepAmount: (step.amount === undefined || step.amount === null) ? '' : String(step.amount).trim(),
             stepRequestDate: (step.requestDate || '').trim(),
@@ -2822,6 +2824,7 @@ export default function App() {
       priority: ref.priority,
       hours: h, completedHours: 0,
       manualStart: null, status: 'pending', completedAt: null, createdAt: base,
+      registeredDate: fmtYMD(new Date(base)),
     };
     saveTasks(prev => normalizePriorities([...prev, rec]));
   };
@@ -4189,15 +4192,17 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
 
   // ===== 過去案件から引用 =====
   const [quoteOpen, setQuoteOpen] = useState(false);
-  // 完了済みタスクを含む案件を、案件単位（社外案件名）でまとめる
-  const pastProjects = useMemo(() => {
+  // 全案件（進行中・完了とも）を案件単位（社外案件名）でまとめる。
+  // 「過去案件から引用」モーダルは完了済みのみ、同名案件の呼び出しパネルは進行中も対象。
+  const allProjects = useMemo(() => {
     const map = new Map();
     for (const t of tasks) {
       const p = t.projectName;
       if (!p) continue;
       if (!map.has(p)) map.set(p, {
         projectName: p, projectNameInternal: '', companyName: '', customerContact: '',
-        lastCompletedAt: 0, hasDone: false, hasActive: false, viewpoints: new Set(), lastAssignee: '', lastAssigneeStamp: -Infinity,
+        lastCompletedAt: 0, hasDone: false, hasActive: false, registeredDate: '',
+        viewpoints: new Set(), lastAssignee: '', lastAssigneeStamp: -Infinity,
       });
       const e = map.get(p);
       if (t.status === 'done') e.hasDone = true;
@@ -4207,13 +4212,16 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
       if (t.customerContact && !e.customerContact) e.customerContact = t.customerContact;
       if (t.viewpointName) e.viewpoints.add(t.viewpointName);
       if (t.completedAt && t.completedAt > e.lastCompletedAt) e.lastCompletedAt = t.completedAt;
+      const rd = t.registeredDate || (t.createdAt ? fmtYMD(new Date(t.createdAt)) : '');
+      if (rd && (!e.registeredDate || rd < e.registeredDate)) e.registeredDate = rd;
       const stamp = t.completedAt || t.createdAt || 0;
       if (t.assignee && stamp >= e.lastAssigneeStamp) { e.lastAssigneeStamp = stamp; e.lastAssignee = t.assignee; }
     }
-    return [...map.values()].filter(e => e.hasDone)
+    return [...map.values()]
       .map(e => ({ ...e, viewpointCount: e.viewpoints.size }))
       .sort((a, b) => b.lastCompletedAt - a.lastCompletedAt);
   }, [tasks]);
+  const pastProjects = useMemo(() => allProjects.filter(e => e.hasDone), [allProjects]);
 
   const isFormDirty = () => {
     const f = form;
@@ -4263,14 +4271,14 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
     if (editMode) return null;
     const name = (form.projectName || '').trim();
     if (!name) return null;
-    // 進行中タスクが残っている案件は対象外（そちらは一覧の「視点追加」で扱う）
-    const proj = pastProjects.find(p => p.projectName === name && !p.hasActive);
+    // 完了・進行中を問わず同名案件を検出する（登録漏れ・二重登録の防止）
+    const proj = allProjects.find(p => p.projectName === name);
     if (!proj) return null;
     // 社内案件名まで入力されている場合は一致するものだけ（同名の別案件を誤検出しない）
     const internal = (form.projectNameInternal || '').trim();
     if (internal && proj.projectNameInternal && internal !== proj.projectNameInternal) return null;
     return proj;
-  }, [pastProjects, form.projectName, form.projectNameInternal, editMode]);
+  }, [allProjects, form.projectName, form.projectNameInternal, editMode]);
   // 過去案件の視点別 修正実績（案内パネルの表示用）
   const recallStats = useMemo(() => {
     if (!recallMatch) return [];
@@ -4648,17 +4656,23 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
         {recallMatch && recallState.name === recallMatch.projectName && recallState.status === 'applied' && (
           <div style={{ border: '1px solid #bcd3b0', background: '#f3f8f0', borderRadius: 6, padding: '10px 14px', marginBottom: 16, fontSize: 12.5, color: '#3a5a40', display: 'flex', alignItems: 'center', gap: 8 }}>
             <CheckCircle2 size={15} style={{ flexShrink: 0 }} />
-            過去案件「{recallMatch.projectName}」の視点を「修正」ステップ付きで展開しました。不要な視点は削除し、修正の制作時間を入力して登録してください。
+            {recallMatch.hasActive ? '進行中案件' : '過去案件'}「{recallMatch.projectName}」の視点を「修正」ステップ付きで展開しました。不要な視点は削除し、修正の制作時間を入力して登録してください。
           </div>
         )}
         {recallMatch && recallState.name !== recallMatch.projectName && (
           <div style={{ border: '1px solid #d9c78a', background: '#fdf8e7', borderRadius: 6, padding: '12px 14px', marginBottom: 16 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
               <RotateCcw size={15} color="#9a7b1f" style={{ flexShrink: 0 }} />
-              <span style={{ fontSize: 13, fontWeight: 700, color: '#7a5f14' }}>同じ案件名の完了案件があります</span>
+              <span style={{ fontSize: 13, fontWeight: 700, color: '#7a5f14' }}>
+                同じ案件名の{recallMatch.hasActive ? '進行中案件' : '完了案件'}があります
+              </span>
+              {recallMatch.hasActive && (
+                <span style={{ fontSize: 10, fontWeight: 700, color: '#fff', background: '#3a7bd5', borderRadius: 8, padding: '1px 8px' }}>進行中</span>
+              )}
               <span style={{ fontSize: 11, color: colors.textMute }}>
                 {recallMatch.projectNameInternal ? `社内: ${recallMatch.projectNameInternal} ・ ` : ''}
                 {recallMatch.companyName ? `${recallMatch.companyName} ・ ` : ''}
+                {recallMatch.registeredDate ? `登録 ${recallMatch.registeredDate.slice(5).replace('-', '/')} ・ ` : ''}
                 {recallMatch.lastCompletedAt > 0 ? `最終完了 ${fmtMD(new Date(recallMatch.lastCompletedAt))}` : ''}
               </span>
               <button type="button" title="この案内を閉じる（別案件として新規登録する）"
@@ -4686,10 +4700,12 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                   padding: '7px 14px', cursor: 'pointer', fontFamily: fontJP, fontSize: 12, fontWeight: 600,
                   display: 'flex', alignItems: 'center', gap: 6,
                 }}>
-                <RotateCcw size={13} /> 過去案件を呼び出す（視点を修正として展開）
+                <RotateCcw size={13} /> {recallMatch.hasActive ? 'この案件へ追加・修正を登録（視点を展開）' : '過去案件を呼び出す（視点を修正として展開）'}
               </button>
               <span style={{ fontSize: 11, color: colors.textMute }}>
-                過去の視点に種類「修正」のステップを付けて展開します。案件・視点名が過去と揃うため、完了タブの「視点別 修正集計」に自動で乗ります。
+                {recallMatch.hasActive
+                  ? '既存の視点に種類「修正」のステップを付けて展開し、進行中案件への追加の登録として登録できます（別案件として二重登録されるのを防ぎます）。'
+                  : '過去の視点に種類「修正」のステップを付けて展開します。案件・視点名が過去と揃うため、完了タブの「視点別 修正集計」に自動で乗ります。'}
               </span>
             </div>
           </div>
@@ -5714,6 +5730,7 @@ function ViewpointGroupList({ groups, allActive, now, caseEditMode, companyOrder
           deadline: g.deadline || '',           // 表示・納期順ソート用＝視点ごと実効納期の最早
           projectDeadline: g.projectDeadline || '', // 全体納期（案件共通）
           viewpointGroups: [],
+          registeredDate: '', // 登録日（自動記録・タスクの最早値。旧データは createdAt から導出）
           totalHours: 0,
           completedHours: 0,
           taskCount: 0,
@@ -5728,6 +5745,10 @@ function ViewpointGroupList({ groups, allActive, now, caseEditMode, companyOrder
       pg.totalHours += g.totalHours;
       pg.completedHours += g.completedHours;
       pg.taskCount += g.tasks.length;
+      for (const t of g.tasks) {
+        const rd = t.registeredDate || (t.createdAt ? fmtYMD(new Date(t.createdAt)) : '');
+        if (rd && (!pg.registeredDate || rd < pg.registeredDate)) pg.registeredDate = rd;
+      }
       if (!pg.projectNameInternal && g.projectNameInternal) pg.projectNameInternal = g.projectNameInternal;
       if (!pg.companyName && g.companyName) pg.companyName = g.companyName;
       if (!pg.customerContact && g.customerContact) pg.customerContact = g.customerContact;
@@ -6028,6 +6049,12 @@ function ViewpointGroupList({ groups, allActive, now, caseEditMode, companyOrder
               {pg.customerContact && (
                 <span title={`お客様: ${pg.customerContact}`} style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', flexShrink: 0, maxWidth: 130, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   お客様: {pg.customerContact}
+                </span>
+              )}
+              {pg.registeredDate && (
+                <span title={`登録日 ${pg.registeredDate}（新規登録した日・自動記録）`}
+                  style={{ fontSize: 10.5, color: colors.textMute, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                  登録 {pg.registeredDate.slice(5).replace('-', '/')}
                 </span>
               )}
               {setProjectDeadline ? (() => {
@@ -9437,6 +9464,7 @@ function QuoteModal({ projects, onSelect, onClose, colors, fontJP, fontDisplay }
                 {p.customerContact && <span>お客様: {p.customerContact}</span>}
                 {p.lastAssignee && <span>担当: {p.lastAssignee}</span>}
                 <span>{p.viewpointCount}視点</span>
+                {p.registeredDate && <span title="案件の登録日（自動記録）">登録: {p.registeredDate.slice(5).replace('-', '/')}</span>}
                 {p.lastCompletedAt > 0 && <span>最終完了: {fmtMD(new Date(p.lastCompletedAt))}</span>}
               </div>
             </button>

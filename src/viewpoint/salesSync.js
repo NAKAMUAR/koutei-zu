@@ -132,7 +132,7 @@ export function collectQuoteCandidates(tasks, customerMaster) {
     const p = (t.projectName || '').trim();
     if (!p) continue;
     if (!projMap.has(p)) {
-      projMap.set(p, { projectName: p, projectNameInternal: '', companyName: '', customerContact: '', lastAt: 0, steps: [] });
+      projMap.set(p, { projectName: p, projectNameInternal: '', companyName: '', customerContact: '', lastAt: 0, registeredDate: '', steps: [] });
     }
     const e = projMap.get(p);
     if (!e.projectNameInternal && t.projectNameInternal) e.projectNameInternal = t.projectNameInternal;
@@ -140,6 +140,9 @@ export function collectQuoteCandidates(tasks, customerMaster) {
     if (!e.customerContact && t.customerContact) e.customerContact = t.customerContact;
     const stamp = t.completedAt || t.createdAt || 0;
     if (stamp > e.lastAt) e.lastAt = stamp;
+    // 案件の登録日（自動記録の registeredDate。旧データは createdAt から導出）
+    const rd = t.registeredDate || (t.createdAt ? `${new Date(t.createdAt).getFullYear()}-${String(new Date(t.createdAt).getMonth() + 1).padStart(2, '0')}-${String(new Date(t.createdAt).getDate()).padStart(2, '0')}` : '');
+    if (rd && (!e.registeredDate || rd < e.registeredDate)) e.registeredDate = rd;
 
     const vp = vpMap.get(viewpointKey(t.projectName, t.viewpointName)) || {};
     const extName = vp.viewpointNameExternal || t.viewpointNameExternal || t.viewpointName || '';
