@@ -10,6 +10,7 @@ import {
   computeDeliverySummary,
   currentMonth, monthLabel, shiftMonth, num, formatYen, formatVND,
 } from './salesUtils.js';
+import { computeRevisionStats } from '../viewpoint/viewpointUtils.js';
 
 export default function SalesView({ tasks, customerMaster, now, colors, fontJP, fontDisplay }) {
   const [ledger, setLedger] = useState({});      // { ym: { rows, settings, updatedAt } }
@@ -47,6 +48,14 @@ export default function SalesView({ tasks, customerMaster, now, colors, fontJP, 
   const deliverySummary = useMemo(
     () => computeDeliverySummary(ledger, deliveryYm, cutoffDay),
     [ledger, deliveryYm, cutoffDay]
+  );
+
+  // 視点別 修正集計（月間）：完了タブと同じ集計ロジック（computeRevisionStats）を
+  // 月指定で流用し、その月に発生した修正ラウンドの回数・時間・金額を売上と並べて見る。
+  const [revYm, setRevYm] = useState(currentMonth(now));
+  const revStats = useMemo(
+    () => computeRevisionStats(tasks || [], { month: revYm }).filter(s => s.fixCount > 0),
+    [tasks, revYm]
   );
 
   const month = ledger[ym] || { rows: [], settings: { ...DEFAULT_SETTINGS }, updatedAt: null };
@@ -171,6 +180,9 @@ export default function SalesView({ tasks, customerMaster, now, colors, fontJP, 
           summary={deliverySummary} ym={deliveryYm} setYm={setDeliveryYm}
           cutoffDay={cutoffDay} saveCutoffDay={saveCutoffDay}
           colors={colors} fontJP={fontJP} />
+
+        {/* 視点別 修正集計（月間・完了タブの集計と連携） */}
+        <MonthlyRevisionPanel stats={revStats} ym={revYm} setYm={setRevYm} colors={colors} fontJP={fontJP} />
       </div>
 
       {/* 会社名サジェスト用 datalist */}
@@ -453,6 +465,110 @@ function DeliveryCountPanel({ summary, ym, setYm, cutoffDay, saveCutoffDay, colo
         {summary.missingDate > 0 && (
           <span style={{ color: '#c0392b', fontWeight: 600 }}> ※{monthLabel(ym)}の台帳に納品日未入力の行が{summary.missingDate}件あります（集計対象外）。</span>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ===== 視点別 修正集計（月間） =====
+// 完了タブの「視点別 修正集計」と同じ元データ（computeRevisionStats）を月指定で表示する。
+// 「①新規→②完成→③追加の変更・修正→④完成」の③がこの月に何回・何時間・いくら
+// （0円＝無償修正）発生したかを、会社ごとの小計付きで売上と突き合わせる。
+function MonthlyRevisionPanel({ stats, ym, setYm, colors, fontJP }) {
+  const th = { border: `1px solid ${colors.border}`, padding: '5px 10px', background: '#3a3a3a', color: '#fff', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', WebkitPrintColorAdjust: 'exact' };
+  const td = { border: `1px solid ${colors.border}`, padding: '5px 10px', fontSize: 12, background: '#fff' };
+  const tdNum = { ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' };
+
+  // 会社ごとにまとめる（会社内は修正回数の多い順のまま）
+  const byCompany = new Map();
+  for (const s of stats) {
+    const c = s.companyName || '（会社名未入力）';
+    if (!byCompany.has(c)) byCompany.set(c, []);
+    byCompany.get(c).push(s);
+  }
+  const grand = stats.reduce((a, s) => ({
+    fix: a.fix + s.fixCount,
+    h: a.h + s.fixSpentH,
+    amt: a.amt + s.fixAmount,
+    add: a.add + s.addCount,
+  }), { fix: 0, h: 0, amt: 0, add: 0 });
+  const r1 = (n) => Math.round(n * 10) / 10;
+
+  return (
+    <div style={{ marginTop: 26 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 15, fontWeight: 700 }}>視点別 修正集計（月間）</span>
+        <div className="kz-no-print" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <button onClick={() => setYm(shiftMonth(ym, -1))} style={navBtn(colors)}><ChevronLeft size={14} /></button>
+          <input type="month" value={ym} onChange={e => e.target.value && setYm(e.target.value)}
+            style={{ padding: '5px 7px', border: `1px solid ${colors.border}`, borderRadius: 4, fontFamily: fontJP, fontSize: 13, fontWeight: 600 }} />
+          <button onClick={() => setYm(shiftMonth(ym, 1))} style={navBtn(colors)}><ChevronRight size={14} /></button>
+        </div>
+        <span className="kz-print-only" style={{ display: 'none', fontSize: 12 }}>{monthLabel(ym)}</span>
+        <span style={{ fontSize: 12, color: '#555' }}>
+          {monthLabel(ym)}：修正 {grand.fix}回 ・ {r1(grand.h)}h ・ {formatYen(grand.amt)}
+        </span>
+      </div>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ borderCollapse: 'collapse', minWidth: 720 }}>
+          <thead>
+            <tr>
+              <th style={{ ...th, minWidth: 160, textAlign: 'left' }}>案件名</th>
+              <th style={{ ...th, minWidth: 120, textAlign: 'left' }}>視点</th>
+              <th style={th}>修正回数</th>
+              <th style={th} title="修正ステップの時間合計。実績（完了時間）があれば実績、無ければ予定（制作時間）">修正時間</th>
+              <th style={th} title="修正ステップの制作金額（税抜）の合計。0円＝無償修正">修正金額（税抜）</th>
+              <th style={th}>追加回数</th>
+            </tr>
+          </thead>
+          <tbody>
+            {stats.length === 0 ? (
+              <tr><td colSpan={6} style={{ ...td, color: colors.textMute, textAlign: 'center' }}>{monthLabel(ym)}に修正ラウンドはありません</td></tr>
+            ) : [...byCompany.entries()].map(([company, items]) => {
+              const sub = items.reduce((a, s) => ({ fix: a.fix + s.fixCount, h: a.h + s.fixSpentH, amt: a.amt + s.fixAmount, add: a.add + s.addCount }), { fix: 0, h: 0, amt: 0, add: 0 });
+              return (
+                <React.Fragment key={company}>
+                  <tr>
+                    <td colSpan={6} style={{ ...td, background: '#eef3e8', fontWeight: 700, fontSize: 12, WebkitPrintColorAdjust: 'exact' }}>{company}</td>
+                  </tr>
+                  {items.map(s => (
+                    <tr key={s.key}>
+                      <td style={td}>
+                        {s.projectNameInternal || s.projectName}
+                        {s.projectNameInternal ? <span style={{ fontSize: 10, color: colors.textMute, marginLeft: 6 }}>{s.projectName}</span> : null}
+                      </td>
+                      <td style={td}>{s.viewpointName}</td>
+                      <td style={{ ...tdNum, fontWeight: 700, color: '#c46a16' }}>{s.fixCount}回</td>
+                      <td style={tdNum}>{s.fixSpentH > 0 ? `${s.fixSpentH}h` : '—'}</td>
+                      <td style={{ ...tdNum, color: s.fixAmount > 0 ? '#1a1a1a' : colors.textMute }}>{s.fixAmount > 0 ? formatYen(s.fixAmount) : '¥0（無償）'}</td>
+                      <td style={tdNum}>{s.addCount > 0 ? `${s.addCount}回` : ''}</td>
+                    </tr>
+                  ))}
+                  <tr>
+                    <td style={{ ...td, fontWeight: 700, textAlign: 'right' }} colSpan={2}>{company} 小計</td>
+                    <td style={{ ...tdNum, fontWeight: 700 }}>{sub.fix}回</td>
+                    <td style={{ ...tdNum, fontWeight: 700 }}>{r1(sub.h)}h</td>
+                    <td style={{ ...tdNum, fontWeight: 700 }}>{formatYen(sub.amt)}</td>
+                    <td style={{ ...tdNum, fontWeight: 700 }}>{sub.add > 0 ? `${sub.add}回` : ''}</td>
+                  </tr>
+                </React.Fragment>
+              );
+            })}
+            {stats.length > 0 && (
+              <tr style={{ background: '#f0ede3', WebkitPrintColorAdjust: 'exact' }}>
+                <td style={{ ...td, background: 'transparent', fontWeight: 700, textAlign: 'right' }} colSpan={2}>総合計</td>
+                <td style={{ ...tdNum, background: 'transparent', fontWeight: 700 }}>{grand.fix}回</td>
+                <td style={{ ...tdNum, background: 'transparent', fontWeight: 700 }}>{r1(grand.h)}h</td>
+                <td style={{ ...tdNum, background: 'transparent', fontWeight: 700 }}>{formatYen(grand.amt)}</td>
+                <td style={{ ...tdNum, background: 'transparent', fontWeight: 700 }}>{grand.add > 0 ? `${grand.add}回` : ''}</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ fontSize: 11, color: colors.textMute, marginTop: 6 }}>
+        進行中案件のステップから自動集計（完了タブの「視点別 修正集計」と同じ判定）。月の帰属は 完了日 → 依頼日 → 登録日 の順。
+        金額入りの修正ステップは上の売上台帳へも1行ずつ自動連携されます（無償修正は台帳に出ないためここで把握できます）。
       </div>
     </div>
   );
