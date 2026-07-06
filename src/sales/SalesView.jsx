@@ -2,7 +2,7 @@
 // データは 1か月 = 1 Firestore ドキュメント（salesStore、data/sales_{YYYY-MM}）。
 // 月をまたいだ後勝ち上書きが起きない（保存はその月のドキュメントだけ）。
 import React, { useState, useEffect, useMemo } from 'react';
-import { Plus, Trash2, ChevronLeft, ChevronRight, Printer, Download } from 'lucide-react';
+import { Plus, Trash2, ChevronLeft, ChevronRight, Printer, Download, FolderOpen, Search, X } from 'lucide-react';
 import { salesStore, storage } from '../firebase.js';
 import {
   SALES_CATEGORIES, catOf, OUTSOURCERS, DEFAULT_SETTINGS,
@@ -11,6 +11,7 @@ import {
   currentMonth, monthLabel, shiftMonth, num, formatYen, formatVND,
 } from './salesUtils.js';
 import { computeRevisionStats } from '../viewpoint/viewpointUtils.js';
+import { collectQuoteCandidates } from '../viewpoint/salesSync.js';
 
 export default function SalesView({ tasks, customerMaster, now, colors, fontJP, fontDisplay }) {
   const [ledger, setLedger] = useState({});      // { ym: { rows, settings, updatedAt } }
@@ -91,16 +92,23 @@ export default function SalesView({ tasks, customerMaster, now, colors, fontJP, 
     return a;
   }, [rows, settings]);
 
-  // 案件候補（tasksから）
-  const projectOptions = useMemo(() => {
-    const map = new Map();
-    for (const t of (tasks || [])) {
-      const p = (t.projectName || '').trim();
-      if (!p || map.has(p)) continue;
-      map.set(p, { projectName: p, company: t.companyName || '', person: t.customerContact || '', deliveryDate: '' });
+  // 案件から引用：これまで登録した案件（タスク）のステップを売上行の候補にする
+  const [quoteOpen, setQuoteOpen] = useState(false);
+  const quoteProjects = useMemo(() => collectQuoteCandidates(tasks, customerMaster), [tasks, customerMaster]);
+  // 既に自動連携済みの行（全月横断）。引用モーダルで「連携済み」と表示して二重登録を防ぐ
+  const existingSrcRounds = useMemo(() => {
+    const set = new Set();
+    for (const m of Object.values(ledger || {})) {
+      for (const r of (m.rows || [])) if (r.srcRound) set.add(r.srcRound);
     }
-    return [...map.values()];
-  }, [tasks]);
+    return set;
+  }, [ledger]);
+  // 引用の確定：選んだステップを表示中の月へ手動行として追加
+  const addQuotedRows = (steps) => {
+    if (!steps.length) return;
+    setRows([...rows, ...steps.map(st => ({ ...blankRow(st.category), ...st.fields }))]);
+    setQuoteOpen(false);
+  };
 
   const companyList = useMemo(() => {
     const s = new Set();
@@ -113,6 +121,10 @@ export default function SalesView({ tasks, customerMaster, now, colors, fontJP, 
   return (
     <div>
       <PrintStyles />
+      {quoteOpen && (
+        <ProjectQuoteModal projects={quoteProjects} existingSrcRounds={existingSrcRounds} ym={ym}
+          onAdd={addQuotedRows} onClose={() => setQuoteOpen(false)} colors={colors} fontJP={fontJP} />
+      )}
       {/* ヘッダー：月切替＋操作 */}
       <div className="kz-no-print" style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
         <h2 style={{ fontFamily: fontDisplay, fontSize: 20, fontWeight: 700, margin: 0 }}>売上登録表</h2>
@@ -122,6 +134,9 @@ export default function SalesView({ tasks, customerMaster, now, colors, fontJP, 
           <button onClick={() => setYm(shiftMonth(ym, 1))} style={navBtn(colors)}><ChevronRight size={16} /></button>
           <span style={{ fontSize: 15, fontWeight: 700, marginLeft: 8 }}>{monthLabel(ym)} 売上総合</span>
         </div>
+        {month.updatedAt && (
+          <span style={{ fontSize: 11, color: colors.textMute }}>最終更新 {new Date(month.updatedAt).toLocaleString('ja-JP')}</span>
+        )}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
           <button onClick={() => window.print()} style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '8px 12px', background: '#1a1a1a', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13 }}><Printer size={14} />印刷 / PDF</button>
           <button onClick={() => exportCsv(ym, rows, settings)} style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '8px 12px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13 }}><Download size={14} />CSV</button>
@@ -132,7 +147,7 @@ export default function SalesView({ tasks, customerMaster, now, colors, fontJP, 
         <div className="kz-print-only" style={{ display: 'none', fontSize: 16, fontWeight: 700, marginBottom: 8 }}>{monthLabel(ym)} 売上総合</div>
 
         {/* 総合サマリーパネル */}
-        <SummaryPanel summary={summary} billAlerts={billAlerts} settings={settings} setSettings={setSettings} updatedAt={month.updatedAt} colors={colors} fontJP={fontJP} />
+        <SummaryPanel summary={summary} billAlerts={billAlerts} settings={settings} setSettings={setSettings} colors={colors} fontJP={fontJP} />
 
         {/* 区分タブ */}
         <div className="kz-no-print" style={{ display: 'flex', gap: 6, margin: '16px 0 10px', flexWrap: 'wrap' }}>
@@ -167,11 +182,11 @@ export default function SalesView({ tasks, customerMaster, now, colors, fontJP, 
         {/* 案件から追加 / 行追加 */}
         <div className="kz-no-print" style={{ display: 'flex', gap: 10, marginTop: 10, flexWrap: 'wrap', alignItems: 'center' }}>
           <button onClick={() => addRow(activeCat)} style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '8px 12px', background: 'transparent', border: `1px dashed ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13 }}><Plus size={14} />行を追加</button>
-          <select defaultValue="" onChange={e => { const o = projectOptions.find(p => p.projectName === e.target.value); if (o) addRow(activeCat, { company: o.company, projectName: o.projectName, person: o.person }); e.target.value = ''; }}
-            style={{ padding: '8px 10px', border: `1px solid ${colors.border}`, borderRadius: 4, fontFamily: fontJP, fontSize: 13 }}>
-            <option value="">案件から行を追加（会社名・案件名・担当者）</option>
-            {projectOptions.map(o => <option key={o.projectName} value={o.projectName}>{o.projectName}{o.company ? `（${o.company}）` : ''}</option>)}
-          </select>
+          <button onClick={() => setQuoteOpen(true)}
+            title="登録済みの案件からステップ（納品名・金額・日付・外注）を選んで、この月の売上行として引用します"
+            style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '8px 12px', background: '#fff', border: `1px solid #1a1a1a`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13, fontWeight: 600 }}>
+            <FolderOpen size={14} />案件から引用
+          </button>
           {!loaded && <span style={{ fontSize: 12, color: colors.textMute }}>読み込み中…</span>}
         </div>
 
@@ -193,8 +208,129 @@ export default function SalesView({ tasks, customerMaster, now, colors, fontJP, 
 
 function navBtn(colors) { return { padding: '6px 7px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', color: colors.text, display: 'flex', alignItems: 'center' }; }
 
+// ===== 案件から引用モーダル =====
+// これまで登録した案件（進行中・完了とも）を検索して選び、そのステップ
+// （納品名・金額・外注・日付つき）をチェックして売上行として追加する。
+// 金額入りで既に自動連携済みのステップは「連携済み」と表示し、既定でチェックを外す。
+function ProjectQuoteModal({ projects, existingSrcRounds, ym, onAdd, onClose, colors, fontJP }) {
+  const [query, setQuery] = useState('');
+  const [sel, setSel] = useState(null);        // 選択中の案件
+  const [checked, setChecked] = useState({});  // taskId → bool
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? projects.filter(p => [p.projectName, p.projectNameInternal, p.companyName, p.customerContact].some(v => (v || '').toLowerCase().includes(q)))
+    : projects;
+  const openProject = (p) => {
+    setSel(p);
+    const c = {};
+    for (const st of p.steps) c[st.taskId] = !existingSrcRounds.has(st.srcRound);
+    setChecked(c);
+  };
+  const selectedSteps = sel ? sel.steps.filter(st => checked[st.taskId]) : [];
+  const roundLabel = { initial: '初回', add: '追加', fix: '修正' };
+  return (
+    <div onClick={onClose}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}>
+      <div onClick={(e) => e.stopPropagation()}
+        style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 8, width: '100%', maxWidth: 720, maxHeight: '85vh', display: 'flex', flexDirection: 'column', fontFamily: fontJP, boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
+        <div style={{ padding: '16px 20px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+          <h3 style={{ fontSize: 16, margin: 0, fontWeight: 700 }}>
+            案件から引用{sel ? `：${sel.projectNameInternal || sel.projectName}` : ''}
+          </h3>
+          <button type="button" onClick={onClose} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: colors.textMute, display: 'flex' }}><X size={18} /></button>
+        </div>
+        {!sel ? (
+          <>
+            <div style={{ padding: '12px 20px 8px' }}>
+              <p style={{ fontSize: 11, color: colors.textMute, margin: '0 0 8px 0' }}>
+                登録済みの案件（進行中・完了とも）から選ぶと、ステップ（納品名・金額・日付・外注）を売上行として引用できます。
+              </p>
+              <div style={{ position: 'relative' }}>
+                <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: colors.textMute, display: 'flex', pointerEvents: 'none' }}><Search size={15} /></span>
+                <input type="text" value={query} onChange={(e) => setQuery(e.target.value)} autoFocus
+                  placeholder="案件名・社内案件名・会社名・お客様担当者で検索"
+                  style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px 9px 32px', border: `1px solid ${colors.border}`, borderRadius: 4, fontFamily: fontJP, fontSize: 13, outline: 'none' }} />
+              </div>
+            </div>
+            <div style={{ overflowY: 'auto', padding: '6px 14px 16px', flex: 1 }}>
+              {filtered.length === 0 ? (
+                <div style={{ textAlign: 'center', color: colors.textMute, fontSize: 13, padding: 32 }}>
+                  {projects.length === 0 ? '登録済みの案件がまだありません。' : '一致する案件がありません。'}
+                </div>
+              ) : filtered.map(p => (
+                <button key={p.projectName} type="button" onClick={() => openProject(p)}
+                  style={{
+                    width: '100%', textAlign: 'left', background: '#fff', border: `1px solid ${colors.border}`,
+                    borderRadius: 5, padding: '9px 12px', marginBottom: 7, cursor: 'pointer', fontFamily: fontJP,
+                    display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap',
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = '#fbf9f4'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = '#fff'; }}>
+                  <span style={{ fontSize: 13.5, fontWeight: 600 }}>{p.projectNameInternal || p.projectName}</span>
+                  {p.projectNameInternal && <span style={{ fontSize: 11, color: colors.textMute }}>{p.projectName}</span>}
+                  {p.companyName && <span style={{ fontSize: 11, color: colors.textMute }}>{p.companyName}</span>}
+                  <span style={{ marginLeft: 'auto', fontSize: 11, color: colors.textMute }}>{p.steps.length}ステップ</span>
+                </button>
+              ))}
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{ padding: '10px 20px 6px', fontSize: 11, color: colors.textMute }}>
+              追加するステップにチェックしてください。金額入りで既に自動連携済みの行は「連携済み」（既定でチェック外）です。
+            </div>
+            <div style={{ overflowY: 'auto', padding: '4px 14px 12px', flex: 1 }}>
+              {sel.steps.map(st => {
+                const linked = existingSrcRounds.has(st.srcRound);
+                return (
+                  <label key={st.taskId} style={{
+                    display: 'flex', alignItems: 'center', gap: 10, padding: '7px 10px', marginBottom: 5,
+                    border: `1px solid ${colors.border}`, borderRadius: 5, cursor: 'pointer', fontSize: 12.5,
+                    background: checked[st.taskId] ? '#f5f8f3' : '#fff',
+                  }}>
+                    <input type="checkbox" checked={!!checked[st.taskId]}
+                      onChange={(e) => setChecked(prev => ({ ...prev, [st.taskId]: e.target.checked }))} />
+                    <span style={{ flex: 1, minWidth: 160 }}>
+                      {st.prodName || `${st.viewpointName} ${st.stepName}`}
+                      {st.roundType && (
+                        <span style={{ fontSize: 10, fontWeight: 700, color: '#fff', background: st.roundType === 'fix' ? '#7a8471' : st.roundType === 'add' ? '#b07d3c' : '#3a7bd5', borderRadius: 8, padding: '1px 7px', marginLeft: 6 }}>
+                          {roundLabel[st.roundType] || st.roundType}
+                        </span>
+                      )}
+                    </span>
+                    <span style={{ whiteSpace: 'nowrap', fontSize: 12, color: st.hasAmount ? colors.text : colors.textMute }}>
+                      {st.fields.prodAmount ? formatYen(st.fields.prodAmount) : (st.fields.outsourceVND ? `${st.fields.outsourceVND} VND` : '金額なし')}
+                    </span>
+                    <span style={{ whiteSpace: 'nowrap', fontSize: 11, color: colors.textMute, minWidth: 70, textAlign: 'right' }}>
+                      {st.fields.deliveryDate || (st.done ? '完了' : '進行中')}
+                    </span>
+                    {linked && <span style={{ fontSize: 10, fontWeight: 700, color: '#5a7a4a', background: '#eef3e8', borderRadius: 8, padding: '2px 7px', whiteSpace: 'nowrap' }}>連携済み</span>}
+                  </label>
+                );
+              })}
+            </div>
+            <div style={{ padding: '12px 20px', borderTop: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: 10 }}>
+              <button type="button" onClick={() => setSel(null)}
+                style={{ padding: '8px 14px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13, color: colors.textMute }}>
+                ← 案件一覧へ戻る
+              </button>
+              <button type="button" disabled={selectedSteps.length === 0} onClick={() => onAdd(selectedSteps)}
+                style={{
+                  marginLeft: 'auto', padding: '8px 18px', background: selectedSteps.length ? '#1a1a1a' : '#ccc', color: '#fff',
+                  border: 'none', borderRadius: 4, cursor: selectedSteps.length ? 'pointer' : 'default', fontFamily: fontJP, fontSize: 13, fontWeight: 600,
+                }}>
+                選択した{selectedSteps.length}件を {monthLabel(ym)} に追加
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ===== 総合サマリーパネル =====
-function SummaryPanel({ summary, billAlerts, settings, setSettings, updatedAt, colors, fontJP }) {
+function SummaryPanel({ summary, billAlerts, settings, setSettings, colors, fontJP }) {
   const card = { border: `1px solid ${colors.border}`, borderRadius: 6, padding: '10px 12px', background: '#fff' };
   const head = { fontSize: 11, color: colors.textMute, marginBottom: 6, fontWeight: 600 };
   const kv = (label, val, strong) => (
@@ -202,7 +338,6 @@ function SummaryPanel({ summary, billAlerts, settings, setSettings, updatedAt, c
       <span style={{ color: '#555' }}>{label}</span><span>{val}</span>
     </div>
   );
-  const lastStr = updatedAt ? new Date(updatedAt).toLocaleString('ja-JP') : '—';
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
       {/* 合計売上 */}
@@ -260,17 +395,6 @@ function SummaryPanel({ summary, billAlerts, settings, setSettings, updatedAt, c
         <div style={{ fontSize: 10, color: colors.textMute, marginTop: 4 }}>
           11.完了・12.請求書送付日・13.入金確認日から自動判定
         </div>
-      </div>
-      {/* 佐渡最終チェック／最終更新 */}
-      <div style={{ ...card, background: '#fffbe6' }}>
-        <div style={head}>佐渡 最終チェック</div>
-        <label className="kz-no-print" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, cursor: 'pointer' }}>
-          <input type="checkbox" checked={!!settings.finalCheck} onChange={e => setSettings({ finalCheck: e.target.checked })} />
-          チェック済み
-        </label>
-        <div className="kz-print-only" style={{ display: 'none', fontSize: 13 }}>{settings.finalCheck ? '☑ チェック済み' : '☐ 未チェック'}</div>
-        <div style={{ fontSize: 11, color: colors.textMute, marginTop: 8 }}>最終更新日時</div>
-        <div style={{ fontSize: 12 }}>{lastStr}</div>
       </div>
     </div>
   );

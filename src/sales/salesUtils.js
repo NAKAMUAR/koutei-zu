@@ -1,6 +1,6 @@
 // 売上登録表の純粋ロジック・定義。
 // 保存：salesStore（1か月 = 1 Firestore ドキュメント、data/sales_{YYYY-MM}）。
-//   MonthData = { rows: Row[], settings: { exchangeRate, hqRate, finalCheck }, updatedAt }
+//   MonthData = { rows: Row[], settings: { exchangeRate, hqRate }, updatedAt }
 
 // ---- 区分（売上カテゴリ）----
 // tax: 消費税の有無 / hqShare: 本社取り分の有無（国内取引のみ） / intl: 国際売上か
@@ -18,7 +18,6 @@ export const OUTSOURCERS = ['Quynh', 'ĐẶNG THỊ TÚ MĨ', '中村'];
 export const DEFAULT_SETTINGS = {
   exchangeRate: 165, // 1円 = 165VND（外注金額VND ÷ レート = 円）。実態に合わせて編集可。
   hqRate: 200,       // 本社取り分（1枚あたり円）
-  finalCheck: false, // 佐渡 最終チェック
 };
 
 // ---- ID・日付 ----

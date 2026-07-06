@@ -98,6 +98,82 @@ export function collectSalesSyncRows(tasks, customerMaster) {
   return out;
 }
 
+// tasks → 「案件から引用」の候補一覧（売上登録表のモーダル用）。
+// collectSalesSyncRows と同じ名寄せ・納品名の組み立てで、金額の有無に関わらず
+// 全ステップを候補にする（金額なし＝自動連携されないステップも引用できる）。
+// 返り値（最終更新の新しい案件順）：
+//   [{ projectName, projectNameInternal, companyName, customerContact, lastAt,
+//      steps: [{ taskId, srcRound, viewpointName, stepName, prodName, category,
+//                hasAmount, done, fields }] }]
+// fields は blankRow に被せる売上行の下書き（company/person/projectName/prodType/
+// prodName/prodAmount/外注/orderDate/deliveryDate）。
+export function collectQuoteCandidates(tasks, customerMaster) {
+  const vpMap = new Map();
+  for (const t of (tasks || [])) {
+    if (t.cancelled) continue;
+    const key = viewpointKey(t.projectName, t.viewpointName);
+    if (!vpMap.has(key)) {
+      vpMap.set(key, {
+        viewpointNameExternal: t.viewpointNameExternal || '',
+        viewpointCategory: t.viewpointCategory || '',
+        deliveryNameOverride: t.deliveryNameOverride || '',
+      });
+    } else {
+      const e = vpMap.get(key);
+      if (!e.viewpointNameExternal && t.viewpointNameExternal) e.viewpointNameExternal = t.viewpointNameExternal;
+      if (!e.viewpointCategory && t.viewpointCategory) e.viewpointCategory = t.viewpointCategory;
+      if (!e.deliveryNameOverride && t.deliveryNameOverride) e.deliveryNameOverride = t.deliveryNameOverride;
+    }
+  }
+  const projMap = new Map();
+  const sorted = [...(tasks || [])].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0) || (a.stepOrder ?? 0) - (b.stepOrder ?? 0));
+  for (const t of sorted) {
+    if (t.cancelled) continue;
+    const p = (t.projectName || '').trim();
+    if (!p) continue;
+    if (!projMap.has(p)) {
+      projMap.set(p, { projectName: p, projectNameInternal: '', companyName: '', customerContact: '', lastAt: 0, steps: [] });
+    }
+    const e = projMap.get(p);
+    if (!e.projectNameInternal && t.projectNameInternal) e.projectNameInternal = t.projectNameInternal;
+    if (!e.companyName && t.companyName) e.companyName = t.companyName;
+    if (!e.customerContact && t.customerContact) e.customerContact = t.customerContact;
+    const stamp = t.completedAt || t.createdAt || 0;
+    if (stamp > e.lastAt) e.lastAt = stamp;
+
+    const vp = vpMap.get(viewpointKey(t.projectName, t.viewpointName)) || {};
+    const extName = vp.viewpointNameExternal || t.viewpointNameExternal || t.viewpointName || '';
+    const base = deliveryBaseName(t.projectName, extName, vp.deliveryNameOverride || t.deliveryNameOverride || '');
+    const date = t.stepRequestDate || t.projectRequestDate || '';
+    const deliveryDate = /^\d{4}-\d{2}-\d{2}/.test(t.stepCompletedDate || '') ? t.stepCompletedDate.slice(0, 10) : '';
+    e.steps.push({
+      taskId: t.id,
+      srcRound: `step:${t.id}`,
+      viewpointName: t.viewpointName || '',
+      stepName: t.stepName || '',
+      prodName: (t.stepDeliveryNameOverride || '').trim() || stepDeliveryName(base, t.stepName),
+      category: categoryForCompany(t.companyName, customerMaster),
+      hasAmount: num(t.stepAmount) > 0 || num(t.stepOutVND) > 0,
+      done: t.status === 'done',
+      roundType: (t.stepRoundType || '').trim(),
+      fields: {
+        company: t.companyName || '',
+        person: t.customerContact || '',
+        projectName: t.projectName || '',
+        prodType: t.viewpointCategory || classifyProdType(t.viewpointName),
+        prodName: (t.stepDeliveryNameOverride || '').trim() || stepDeliveryName(base, t.stepName),
+        prodAmount: (t.stepAmount === '' || t.stepAmount == null) ? '' : String(t.stepAmount),
+        inHouseOutsourcer: t.stepOutInHouse || '',
+        externalOutsourcer: t.stepOutExternal || '',
+        outsourceVND: (t.stepOutVND === '' || t.stepOutVND == null) ? '' : String(t.stepOutVND),
+        orderDate: date,
+        deliveryDate,
+      },
+    });
+  }
+  return [...projMap.values()].sort((a, b) => b.lastAt - a.lastAt);
+}
+
 // 既存 ledger に同期行をマージ。
 // ledger: { 'YYYY-MM': { rows, settings, updatedAt } }
 // 返り値：{ ledger, changed, changedMonths }
