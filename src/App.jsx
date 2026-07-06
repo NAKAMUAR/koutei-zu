@@ -8,6 +8,7 @@ import {
   ROUND_TYPES, roundTypeOf, normalizeHistory, deliveryBaseName,
   deliveryNameForNumber,
   metaFromGroup, num as vpNum, stepDeliveryName,
+  computeRevisionStats,
 } from './viewpoint/viewpointUtils.js';
 import { collectSalesSyncRows, reconcileLedger } from './viewpoint/salesSync.js';
 import { blankDoc, blankItem } from './billing/billingUtils.js';
@@ -3269,7 +3270,7 @@ export default function App() {
           <MessageView scheduled={scheduled} settings={settings} colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} assigneeOrder={assigneeOrder} vpDeliveryCount={vpDeliveryCount} />
         )}
         {view === 'done' && (
-          <DoneView scheduled={scheduled} toggleStatus={toggleStatus} handleDelete={handleDelete}
+          <DoneView scheduled={scheduled} tasks={tasks} toggleStatus={toggleStatus} handleDelete={handleDelete}
             setActualEnd={setActualEnd} handleEditProject={handleEditProject}
             colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
         )}
@@ -4196,10 +4197,11 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
       if (!p) continue;
       if (!map.has(p)) map.set(p, {
         projectName: p, projectNameInternal: '', companyName: '', customerContact: '',
-        lastCompletedAt: 0, hasDone: false, viewpoints: new Set(), lastAssignee: '', lastAssigneeStamp: -Infinity,
+        lastCompletedAt: 0, hasDone: false, hasActive: false, viewpoints: new Set(), lastAssignee: '', lastAssigneeStamp: -Infinity,
       });
       const e = map.get(p);
       if (t.status === 'done') e.hasDone = true;
+      else e.hasActive = true;
       if (t.projectNameInternal && !e.projectNameInternal) e.projectNameInternal = t.projectNameInternal;
       if (t.companyName && !e.companyName) e.companyName = t.companyName;
       if (t.customerContact && !e.customerContact) e.customerContact = t.customerContact;
@@ -4250,6 +4252,70 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
       if (!window.confirm('入力中の内容を破棄して引用しますか？')) return;
     }
     applyQuote(proj);
+  };
+
+  // ===== 過去案件の呼び出し（同名の完了案件を「追加の変更・修正」として再開） =====
+  // 新規登録で社外案件名（＋社内案件名）が完了済みの過去案件と一致したら案内を出し、
+  // ワンクリックで過去の視点を「修正」ステップ（種類=修正）付きでフォームへ展開する。
+  // 案件名・視点名が過去と同一になるため、視点別の修正回数・修正時間の集計（完了タブ）に自動で乗る。
+  const [recallState, setRecallState] = useState({ name: '', status: '' }); // status: 'applied' | 'dismissed'
+  const recallMatch = useMemo(() => {
+    if (editMode) return null;
+    const name = (form.projectName || '').trim();
+    if (!name) return null;
+    // 進行中タスクが残っている案件は対象外（そちらは一覧の「視点追加」で扱う）
+    const proj = pastProjects.find(p => p.projectName === name && !p.hasActive);
+    if (!proj) return null;
+    // 社内案件名まで入力されている場合は一致するものだけ（同名の別案件を誤検出しない）
+    const internal = (form.projectNameInternal || '').trim();
+    if (internal && proj.projectNameInternal && internal !== proj.projectNameInternal) return null;
+    return proj;
+  }, [pastProjects, form.projectName, form.projectNameInternal, editMode]);
+  // 過去案件の視点別 修正実績（案内パネルの表示用）
+  const recallStats = useMemo(() => {
+    if (!recallMatch) return [];
+    return computeRevisionStats(tasks.filter(t => (t.projectName || '') === recallMatch.projectName));
+  }, [recallMatch, tasks]);
+  const applyRecall = () => {
+    const proj = recallMatch;
+    if (!proj) return;
+    const vpDirty = (form.viewpoints || []).some(vp =>
+      (vp.viewpointNameExternal || '').trim() || (vp.deadline || '').trim() || (vp.assignee || '').trim() ||
+      (vp.steps || []).some(s => String(s.hours ?? '').trim() || String(s.completedHours ?? '').trim()));
+    if (vpDirty && !window.confirm('入力中の視点の内容を、過去案件の視点（修正）で置き換えます。よろしいですか？')) return;
+    // 過去タスクから視点ごとの最新情報（社外視点名・内観/外観・担当者）を拾う
+    const projTasks = tasks.filter(t => (t.projectName || '') === proj.projectName)
+      .slice().sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+    const byVp = new Map();
+    for (const t of projTasks) {
+      const v = (t.viewpointName || '').trim();
+      if (!v) continue;
+      if (!byVp.has(v)) byVp.set(v, { viewpointName: v, viewpointNameExternal: '', viewpointCategory: '', assignee: '' });
+      const e = byVp.get(v);
+      if (t.viewpointNameExternal) e.viewpointNameExternal = t.viewpointNameExternal;
+      if (t.viewpointCategory) e.viewpointCategory = t.viewpointCategory;
+      if (t.assignee) e.assignee = t.assignee;
+    }
+    if (byVp.size === 0) { alert('過去案件に視点が見つかりませんでした'); return; }
+    const viewpoints = [...byVp.values()].map(v => ({
+      viewpointName: v.viewpointName,
+      viewpointNameExternal: v.viewpointNameExternal,
+      viewpointCategory: v.viewpointCategory,
+      assignee: v.assignee,
+      manualStart: '', manualEnd: '', deadline: '', deliveryName: '',
+      // 種類=修正（fix）を最初から付ける。修正集計・請求（納品に数えない）の元データになる
+      steps: [{ ...makeEmptyStep('修正'), roundType: 'fix' }],
+    }));
+    setForm(prev => ({
+      ...prev,
+      projectName: proj.projectName,
+      projectNameInternal: (prev.projectNameInternal || '').trim() || proj.projectNameInternal || '',
+      companyName: (prev.companyName || '').trim() || proj.companyName || '',
+      customerContact: (prev.customerContact || '').trim() || proj.customerContact || '',
+      assignee: (prev.assignee || '').trim() || proj.lastAssignee || '',
+      viewpoints,
+    }));
+    setRecallState({ name: proj.projectName, status: 'applied' });
   };
 
   return (
@@ -4577,6 +4643,57 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
               style={{ ...inputStyle, resize: 'vertical', minHeight: 40 }} />
           </div>
         </div>
+
+        {/* 過去案件の呼び出し：同名の完了案件があれば「追加の変更・修正」として視点ごと再開できる */}
+        {recallMatch && recallState.name === recallMatch.projectName && recallState.status === 'applied' && (
+          <div style={{ border: '1px solid #bcd3b0', background: '#f3f8f0', borderRadius: 6, padding: '10px 14px', marginBottom: 16, fontSize: 12.5, color: '#3a5a40', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <CheckCircle2 size={15} style={{ flexShrink: 0 }} />
+            過去案件「{recallMatch.projectName}」の視点を「修正」ステップ付きで展開しました。不要な視点は削除し、修正の制作時間を入力して登録してください。
+          </div>
+        )}
+        {recallMatch && recallState.name !== recallMatch.projectName && (
+          <div style={{ border: '1px solid #d9c78a', background: '#fdf8e7', borderRadius: 6, padding: '12px 14px', marginBottom: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <RotateCcw size={15} color="#9a7b1f" style={{ flexShrink: 0 }} />
+              <span style={{ fontSize: 13, fontWeight: 700, color: '#7a5f14' }}>同じ案件名の完了案件があります</span>
+              <span style={{ fontSize: 11, color: colors.textMute }}>
+                {recallMatch.projectNameInternal ? `社内: ${recallMatch.projectNameInternal} ・ ` : ''}
+                {recallMatch.companyName ? `${recallMatch.companyName} ・ ` : ''}
+                {recallMatch.lastCompletedAt > 0 ? `最終完了 ${fmtMD(new Date(recallMatch.lastCompletedAt))}` : ''}
+              </span>
+              <button type="button" title="この案内を閉じる（別案件として新規登録する）"
+                onClick={() => setRecallState({ name: recallMatch.projectName, status: 'dismissed' })}
+                style={{ marginLeft: 'auto', background: 'transparent', border: 'none', cursor: 'pointer', color: colors.textMute, display: 'flex', padding: 2 }}>
+                <X size={15} />
+              </button>
+            </div>
+            {recallStats.length > 0 && (
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                {recallStats.map(s => (
+                  <span key={s.key} style={{ fontSize: 11, background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 10, padding: '2px 9px', color: colors.text }}>
+                    {s.viewpointName}
+                    <span style={{ color: s.fixCount > 0 ? '#c46a16' : colors.textMute, marginLeft: 5 }}>
+                      修正{s.fixCount}回{s.fixSpentH > 0 ? `・${s.fixSpentH}h` : ''}
+                    </span>
+                  </span>
+                ))}
+              </div>
+            )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
+              <button type="button" onClick={applyRecall}
+                style={{
+                  background: colors.text, color: '#fff', border: 'none', borderRadius: 4,
+                  padding: '7px 14px', cursor: 'pointer', fontFamily: fontJP, fontSize: 12, fontWeight: 600,
+                  display: 'flex', alignItems: 'center', gap: 6,
+                }}>
+                <RotateCcw size={13} /> 過去案件を呼び出す（視点を修正として展開）
+              </button>
+              <span style={{ fontSize: 11, color: colors.textMute }}>
+                過去の視点に種類「修正」のステップを付けて展開します。案件・視点名が過去と揃うため、完了タブの「視点別 修正集計」に自動で乗ります。
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* 視点（担当タスク）の動的リスト。各視点の中にステップ */}
         <div>
@@ -8209,7 +8326,98 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
 }
 
 // ============ 完了タスクビュー ============
-function DoneView({ scheduled, toggleStatus, handleDelete, setActualEnd, handleEditProject, colors, fontJP, fontDisplay }) {
+// ============ 視点別 修正集計（完了タブ） ============
+// 「①新規 → ②完成 → ③追加の変更・修正 → ④完成」の③が、視点ごとに何回・
+// どれだけ時間がかかっているかを自動集計して表示する。元データは computeRevisionStats。
+function RevisionStatsSection({ tasks, colors, fontJP, fontDisplay }) {
+  const [open, setOpen] = useState(true);
+  const [showAll, setShowAll] = useState(false);
+  const [query, setQuery] = useState('');
+  const stats = useMemo(() => computeRevisionStats(tasks), [tasks]);
+  const withFix = useMemo(() => stats.filter(s => s.fixCount > 0), [stats]);
+  const totalFix = withFix.reduce((s, e) => s + e.fixCount, 0);
+  const totalFixH = Math.round(withFix.reduce((s, e) => s + e.fixSpentH, 0) * 10) / 10;
+  const q = query.trim().toLowerCase();
+  const base = showAll ? stats : withFix;
+  const rows = q
+    ? base.filter(s => [s.projectName, s.projectNameInternal, s.companyName, s.viewpointName].some(v => (v || '').toLowerCase().includes(q)))
+    : base;
+  if (stats.length === 0) return null;
+
+  const th = { textAlign: 'left', padding: '7px 10px', fontSize: 11, color: colors.textMute, fontWeight: 600, whiteSpace: 'nowrap', borderBottom: `1px solid ${colors.border}` };
+  const td = { padding: '7px 10px', fontSize: 12.5, borderBottom: `1px solid #f0ece0`, whiteSpace: 'nowrap' };
+  return (
+    <section style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 6, marginBottom: 24, overflow: 'hidden' }}>
+      <button type="button" onClick={() => setOpen(!open)}
+        style={{
+          width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '12px 16px',
+          background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: fontJP, textAlign: 'left',
+        }}>
+        {open ? <ChevronUp size={15} color={colors.textMute} /> : <ChevronDown size={15} color={colors.textMute} />}
+        <span style={{ fontFamily: fontDisplay, fontSize: 15, fontWeight: 600, color: colors.text }}>視点別 修正集計</span>
+        <span style={{ fontSize: 11, color: colors.textMute }}>
+          全{stats.length}視点中 修正あり{withFix.length}視点 ・ 修正合計 {totalFix}回 / {totalFixH}h
+          {stats.length > 0 ? ` ・ 平均 ${(Math.round((totalFix / stats.length) * 10) / 10)}回/視点` : ''}
+        </span>
+      </button>
+      {open && (
+        <div style={{ padding: '0 16px 14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10, flexWrap: 'wrap' }}>
+            <div style={{ position: 'relative', flex: '1 1 220px', maxWidth: 340 }}>
+              <span style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', color: colors.textMute, display: 'flex', pointerEvents: 'none' }}><Search size={13} /></span>
+              <input type="text" value={query} onChange={(e) => setQuery(e.target.value)}
+                placeholder="案件名・会社名・視点名で絞り込み"
+                style={{ width: '100%', boxSizing: 'border-box', padding: '6px 10px 6px 28px', border: `1px solid ${colors.border}`, borderRadius: 4, fontFamily: fontJP, fontSize: 12, outline: 'none' }} />
+            </div>
+            <label style={{ fontSize: 11.5, color: colors.textMute, display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
+              <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} />
+              修正のない視点も表示
+            </label>
+          </div>
+          {rows.length === 0 ? (
+            <div style={{ fontSize: 12, color: colors.textMute, padding: '10px 2px' }}>
+              {withFix.length === 0 && !showAll ? '修正ラウンドのある視点はまだありません。' : '一致する視点がありません。'}
+            </div>
+          ) : (
+            <div style={{ overflowX: 'auto', maxHeight: 420, overflowY: 'auto', border: `1px solid ${colors.border}`, borderRadius: 5 }}>
+              <table style={{ borderCollapse: 'collapse', width: '100%', fontFamily: fontJP }}>
+                <thead style={{ position: 'sticky', top: 0, background: '#fbf9f4' }}>
+                  <tr>
+                    <th style={th}>会社</th>
+                    <th style={th}>案件</th>
+                    <th style={th}>視点</th>
+                    <th style={{ ...th, textAlign: 'right' }}>修正回数</th>
+                    <th style={{ ...th, textAlign: 'right' }} title="修正ステップの時間合計。実績（完了時間）があれば実績、無ければ予定（制作時間）">修正時間</th>
+                    <th style={{ ...th, textAlign: 'right' }}>追加回数</th>
+                    <th style={th}>直近修正</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map(s => (
+                    <tr key={s.key}>
+                      <td style={{ ...td, color: colors.textMute, fontSize: 11.5 }}>{s.companyName || '—'}</td>
+                      <td style={td}>
+                        <span style={{ fontWeight: 600 }}>{s.projectNameInternal || s.projectName}</span>
+                        {s.projectNameInternal && <span style={{ fontSize: 10.5, color: colors.textMute, marginLeft: 6 }}>{s.projectName}</span>}
+                      </td>
+                      <td style={td}>{s.viewpointName}</td>
+                      <td style={{ ...td, textAlign: 'right', fontWeight: 700, color: s.fixCount > 0 ? '#c46a16' : colors.textMute }}>{s.fixCount}回</td>
+                      <td style={{ ...td, textAlign: 'right' }}>{s.fixSpentH > 0 ? `${s.fixSpentH}h` : '—'}</td>
+                      <td style={{ ...td, textAlign: 'right', color: s.addCount > 0 ? colors.text : colors.textMute }}>{s.addCount}回</td>
+                      <td style={{ ...td, fontSize: 11.5, color: colors.textMute }}>{s.lastFixAt > 0 ? fmtYMDJP(new Date(s.lastFixAt)) : '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function DoneView({ scheduled, tasks, toggleStatus, handleDelete, setActualEnd, handleEditProject, colors, fontJP, fontDisplay }) {
   const doneTasks = [...scheduled.doneFinal].sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
 
   // 検索：案件名・社内案件名・会社名・お客様担当者・制作担当者・視点名・ステップ名・メモで絞り込み
@@ -8311,6 +8519,9 @@ function DoneView({ scheduled, toggleStatus, handleDelete, setActualEnd, handleE
           </div>
         ))}
       </div>
+
+      {/* 視点別 修正集計（③追加の変更・修正が何回・何時間かかっているか） */}
+      <RevisionStatsSection tasks={tasks || []} colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
 
       {Object.entries(grouped).map(([dateKey, dayTasks]) => {
         const d = dateKey !== '日時不明' ? new Date(dateKey + 'T00:00:00') : null;
