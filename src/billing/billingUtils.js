@@ -10,6 +10,22 @@ export const DOC_TYPES = [
 ];
 export function docTypeOf(id) { return DOC_TYPES.find(t => t.id === id) || DOC_TYPES[0]; }
 
+// ---- 帳票フォント ----
+// doc.font に id を保存（帳票ごとに変更可能）。未設定の既定は
+// Excel帳票に合わせて 見積書=BIZ UDPゴシック／発注書・請求書=M PLUS 1p。
+export const DOC_FONTS = [
+  { id: 'biz', label: 'BIZ UDPゴシック', css: "'BIZ UDPGothic', 'Noto Sans JP', sans-serif" },
+  { id: 'mplus', label: 'M PLUS 1p', css: "'M PLUS 1p', 'Noto Sans JP', sans-serif" },
+  { id: 'noto', label: 'Noto Sans JP', css: "'Noto Sans JP', sans-serif" },
+  { id: 'mincho', label: 'しっぽり明朝', css: "'Shippori Mincho', 'Noto Sans JP', serif" },
+];
+export function defaultFontId(type) { return type === 'estimate' ? 'biz' : 'mplus'; }
+export function docFontCss(doc) {
+  const id = (doc && doc.font) || defaultFontId(doc && doc.type);
+  const f = DOC_FONTS.find(x => x.id === id) || DOC_FONTS[0];
+  return f.css;
+}
+
 // ---- 発行元（自社）の既定値。帳票種別ごとにテンプレ値が異なるため分けて保持 ----
 export const REBEG_ESTIMATE = {
   company: '株式会社リーベグ', zip: '657-0831',
@@ -202,6 +218,7 @@ export function blankDoc(type, docs, now, issuer) {
       ? { ...REBEG_INVOICE, ...((issuer && issuer.invoice) || {}) }
       : { ...REBEG_ESTIMATE, ...((issuer && issuer.estimate) || {}) },
     items: [blankItem(type), blankItem(type), blankItem(type)],
+    font: defaultFontId(type), // 帳票フォント（DOC_FONTS の id。編集画面で変更可）
     note: NOTE_DEFAULTS[type] || '',
     createdAt: Date.now(),
     updatedAt: Date.now(),

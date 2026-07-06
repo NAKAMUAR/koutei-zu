@@ -10,6 +10,7 @@ import {
   CONDITION_SECTIONS, SCHEDULE_TIME_ROWS,
   INVOICE_STATUSES, invoiceStatusOf, migrateBillingDoc, todayStr,
   REBEG_ESTIMATE, REBEG_INVOICE, INVOICE_BANK_LINES,
+  DOC_FONTS, defaultFontId,
 } from './billingUtils.js';
 
 export default function BillingView({ customerMaster, tasks, now, colors, fontJP, fontDisplay }) {
@@ -417,6 +418,13 @@ function BillingEditor({ initial, customerMaster, tasks, onSave, onSaveClose, on
               <Row>
                 <Col><label style={label}>NO</label><input value={doc.no} onChange={e => upd({ no: e.target.value })} style={input()} /></Col>
                 <Col><label style={label}>{isOrder ? '発効日' : '発行日'}</label><input type="date" value={doc.issueDate} onChange={e => upd({ issueDate: e.target.value })} style={input()} /></Col>
+                <Col>
+                  <label style={label}>帳票フォント</label>
+                  <select value={doc.font || defaultFontId(doc.type)} onChange={e => upd({ font: e.target.value })} style={input()}
+                    title="この帳票の印刷フォント。右のプレビューに即時反映されます">
+                    {DOC_FONTS.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
+                  </select>
+                </Col>
               </Row>
               <div><label style={label}>件名</label><input value={doc.subject} onChange={e => upd({ subject: e.target.value })} style={input()} /></div>
 
