@@ -3299,6 +3299,7 @@ export default function App() {
         )}
         {view === 'sales' && (
           <SalesView tasks={tasks} customerMaster={customerMaster} now={now}
+            onEditProject={handleEditProject}
             colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
         )}
         {view === 'companySummary' && (

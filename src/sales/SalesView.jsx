@@ -2,7 +2,7 @@
 // データは 1か月 = 1 Firestore ドキュメント（salesStore、data/sales_{YYYY-MM}）。
 // 月をまたいだ後勝ち上書きが起きない（保存はその月のドキュメントだけ）。
 import React, { useState, useEffect, useMemo } from 'react';
-import { Plus, Trash2, ChevronLeft, ChevronRight, Printer, Download, FolderOpen, Search, X } from 'lucide-react';
+import { Plus, Trash2, Edit2, ChevronLeft, ChevronRight, Printer, Download, FolderOpen, Search, X } from 'lucide-react';
 import { salesStore, storage } from '../firebase.js';
 import {
   SALES_CATEGORIES, catOf, OUTSOURCERS, DEFAULT_SETTINGS,
@@ -13,7 +13,7 @@ import {
 import { computeRevisionStats } from '../viewpoint/viewpointUtils.js';
 import { collectQuoteCandidates } from '../viewpoint/salesSync.js';
 
-export default function SalesView({ tasks, customerMaster, now, colors, fontJP, fontDisplay }) {
+export default function SalesView({ tasks, customerMaster, now, onEditProject, colors, fontJP, fontDisplay }) {
   const [ledger, setLedger] = useState({});      // { ym: { rows, settings, updatedAt } }
   const [loaded, setLoaded] = useState(false);
   const [ym, setYm] = useState(currentMonth(now));
@@ -92,6 +92,20 @@ export default function SalesView({ tasks, customerMaster, now, colors, fontJP, 
     return a;
   }, [rows, settings]);
 
+  // 売上行の編集（区分の変更・全項目の編集。自動連携行は解除も可能）
+  const [editRow, setEditRow] = useState(null); // 編集中の行オブジェクト
+  const saveEditRow = (patch) => {
+    if (!editRow) return;
+    updRow(editRow.id, patch);
+    setEditRow(null);
+  };
+  const deleteEditRow = () => {
+    if (!editRow) return;
+    if (!window.confirm('この売上行を削除しますか？')) return;
+    removeRow(editRow.id);
+    setEditRow(null);
+  };
+
   // 案件から引用：これまで登録した案件（タスク）のステップを売上行の候補にする
   const [quoteOpen, setQuoteOpen] = useState(false);
   const quoteProjects = useMemo(() => collectQuoteCandidates(tasks, customerMaster), [tasks, customerMaster]);
@@ -124,6 +138,13 @@ export default function SalesView({ tasks, customerMaster, now, colors, fontJP, 
       {quoteOpen && (
         <ProjectQuoteModal projects={quoteProjects} existingSrcRounds={existingSrcRounds} ym={ym}
           onAdd={addQuotedRows} onClose={() => setQuoteOpen(false)} colors={colors} fontJP={fontJP} />
+      )}
+      {editRow && (
+        <RowEditModal row={editRow} settings={settings} ym={ym} companyList={companyList}
+          hasProject={(tasks || []).some(t => (t.projectName || '') === (editRow.projectName || '') && editRow.projectName)}
+          onSave={saveEditRow} onDelete={deleteEditRow}
+          onEditProject={onEditProject ? ((name) => { setEditRow(null); onEditProject(name); }) : null}
+          onClose={() => setEditRow(null)} colors={colors} fontJP={fontJP} />
       )}
       {/* ヘッダー：月切替＋操作 */}
       <div className="kz-no-print" style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
@@ -173,7 +194,7 @@ export default function SalesView({ tasks, customerMaster, now, colors, fontJP, 
               <CategoryTable
                 category={catOf(c.id)} rows={cRows} settings={settings}
                 total={computeCategoryTotal(rows, c.id, settings)}
-                updRow={updRow} removeRow={removeRow} companyList={companyList}
+                updRow={updRow} removeRow={removeRow} onEditRow={setEditRow} companyList={companyList}
                 colors={colors} fontJP={fontJP} />
             </div>
           );
@@ -207,6 +228,149 @@ export default function SalesView({ tasks, customerMaster, now, colors, fontJP, 
 }
 
 function navBtn(colors) { return { padding: '6px 7px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', color: colors.text, display: 'flex', alignItems: 'center' }; }
+
+// ===== 売上行の編集モーダル =====
+// 登録済みの売上行を1枚のページで編集する：売上区分の変更・全項目の編集・削除。
+// 自動連携行（srcRound あり）は工程図側が元データのため、連携の解除や
+// 案件そのもの（工程図）の編集への遷移もここから行える。
+function RowEditModal({ row, settings, ym, companyList, hasProject, onSave, onDelete, onEditProject, onClose, colors, fontJP }) {
+  const [d, setD] = useState({ ...row }); // 下書き（保存で確定）
+  const set = (k, v) => setD(prev => ({ ...prev, [k]: v }));
+  const isLinked = !!row.srcRound;
+  const c = computeRow(d, settings);
+  const label = { fontSize: 11, color: colors.textMute, marginBottom: 3, display: 'block' };
+  const input = (props) => ({ padding: '7px 9px', border: `1px solid ${colors.border}`, borderRadius: 4, fontFamily: fontJP, fontSize: 13, color: colors.text, background: '#fff', boxSizing: 'border-box', width: '100%', ...props });
+  const section = { fontSize: 12, fontWeight: 700, color: colors.text, borderBottom: `1px solid ${colors.border}`, paddingBottom: 4, margin: '14px 0 10px' };
+  const field = (lb, key, type) => (
+    <div>
+      <label style={label}>{lb}</label>
+      {type === 'date'
+        ? <input type="date" value={d[key] || ''} onChange={e => set(key, e.target.value)} style={input()} />
+        : <input value={d[key] ?? ''} onChange={e => set(key, e.target.value)} style={input()}
+            inputMode={type === 'num' ? 'numeric' : undefined} list={key === 'company' ? 'kz-company-list' : undefined} />}
+    </div>
+  );
+  return (
+    <div onClick={onClose}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}>
+      <div onClick={(e) => e.stopPropagation()}
+        style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 8, width: '100%', maxWidth: 760, maxHeight: '90vh', display: 'flex', flexDirection: 'column', fontFamily: fontJP, boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
+        <div style={{ padding: '14px 20px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: 10 }}>
+          <h3 style={{ fontSize: 16, margin: 0, fontWeight: 700 }}>売上行の編集</h3>
+          <span style={{ fontSize: 11, color: colors.textMute }}>{monthLabel(ym)}</span>
+          {isLinked && (
+            <span style={{ fontSize: 10, fontWeight: 700, color: '#5a7a4a', background: '#eef3e8', borderRadius: 8, padding: '2px 8px' }}>自動連携行</span>
+          )}
+          <button type="button" onClick={onClose} style={{ marginLeft: 'auto', background: 'transparent', border: 'none', cursor: 'pointer', color: colors.textMute, display: 'flex' }}><X size={18} /></button>
+        </div>
+        <div style={{ overflowY: 'auto', padding: '4px 20px 16px', flex: 1 }}>
+          {isLinked && (
+            <div style={{ background: '#fdf8e7', border: '1px solid #d9c78a', borderRadius: 5, padding: '9px 12px', fontSize: 11.5, color: '#7a5f14', marginTop: 12, lineHeight: 1.6 }}>
+              この行は案件（工程図のステップ）から自動連携されています。会社名・案件名・制作名・金額・外注・発注日・納品日は
+              <b>次回同期で工程図側の値に上書き</b>されます。これらを直したい場合は「案件を工程図で編集」（元データを修正）か、
+              「連携を解除」（この行を手動行にして自由編集）を使ってください。区分・納品予定日・完了・請求・入金・枚数・備考はこのまま編集できます。
+              <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                {onEditProject && hasProject && (
+                  <button type="button" onClick={() => onEditProject(row.projectName)}
+                    style={{ padding: '6px 12px', background: '#1a1a1a', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, fontWeight: 600 }}>
+                    案件を工程図で編集（{row.projectName}）
+                  </button>
+                )}
+                {d.srcRound !== null && (
+                  <button type="button"
+                    onClick={() => { if (window.confirm('自動連携を解除して手動行にしますか？\n以後、工程図側を変更してもこの行には反映されません（行が消えることもなくなります）。')) setD(prev => ({ ...prev, srcRound: null, srcVp: null })); }}
+                    style={{ padding: '6px 12px', background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12 }}>
+                    連携を解除して手動行にする
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+          {d.srcRound === null && row.srcRound && (
+            <div style={{ background: '#f3f8f0', border: '1px solid #bcd3b0', borderRadius: 5, padding: '7px 12px', fontSize: 11.5, color: '#3a5a40', marginTop: 10 }}>
+              保存すると連携が解除され、手動行になります。
+            </div>
+          )}
+
+          <div style={section}>売上区分</div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {SALES_CATEGORIES.map(cat => (
+              <button key={cat.id} type="button" onClick={() => set('category', cat.id)}
+                title={cat.note}
+                style={{
+                  padding: '7px 12px', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, fontWeight: d.category === cat.id ? 700 : 400,
+                  background: d.category === cat.id ? '#1a1a1a' : '#fff', color: d.category === cat.id ? '#fff' : colors.text,
+                  border: `1px solid ${d.category === cat.id ? '#1a1a1a' : colors.border}`,
+                }}>
+                {cat.label}
+              </button>
+            ))}
+          </div>
+
+          <div style={section}>基本情報</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
+            {field('会社名', 'company')}
+            {field('担当者名', 'person')}
+            {field('案件名', 'projectName')}
+            {field('制作種類', 'prodType')}
+            {field('制作名（納品名）', 'prodName')}
+          </div>
+
+          <div style={section}>金額・外注</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
+            {field('制作金額（税抜）', 'prodAmount', 'num')}
+            {field('外注金額（VND）', 'outsourceVND', 'num')}
+            {field('社内外注者', 'inHouseOutsourcer')}
+            {field('社外外注者', 'externalOutsourcer')}
+            {field('制作枚数', 'sheets', 'num')}
+          </div>
+          <div style={{ fontSize: 11.5, color: colors.textMute, marginTop: 6 }}>
+            自動計算：消費税 {formatYen(c.tax)} ・ 税込合計 {formatYen(c.taxIncl)} ・ 本社受取 {formatYen(c.hqReceive)}
+          </div>
+
+          <div style={section}>日付・完了</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10, alignItems: 'end' }}>
+            {field('発注/着手日', 'orderDate', 'date')}
+            {field('納品予定日', 'dueDate', 'date')}
+            {field('納品日', 'deliveryDate', 'date')}
+            <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, cursor: 'pointer', paddingBottom: 8 }}>
+              <input type="checkbox" checked={!!d.completed} onChange={e => set('completed', e.target.checked)} />
+              完了
+            </label>
+          </div>
+
+          <div style={section}>請求・入金</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
+            {field('請求書送付日', 'invoiceSentDate', 'date')}
+            {field('入金確認日', 'paymentConfirmedDate', 'date')}
+            {field('請求対象回', 'billRound')}
+            {field('請求金額', 'billAmount', 'num')}
+            {field('消費税納付', 'taxPayAmount', 'num')}
+            {field('本社請求状態', 'hqStatus')}
+          </div>
+
+          <div style={section}>備考</div>
+          <textarea value={d.note ?? ''} onChange={e => set('note', e.target.value)} rows={2}
+            style={{ ...input(), resize: 'vertical', minHeight: 44 }} />
+        </div>
+        <div style={{ padding: '12px 20px', borderTop: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <button type="button" onClick={onDelete}
+            style={{ padding: '8px 12px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', color: '#c0392b', fontFamily: fontJP, fontSize: 12, display: 'flex', alignItems: 'center', gap: 5 }}>
+            <Trash2 size={13} /> 行を削除
+          </button>
+          <button type="button" onClick={onClose}
+            style={{ marginLeft: 'auto', padding: '8px 16px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13, color: colors.textMute }}>
+            キャンセル
+          </button>
+          <button type="button" onClick={() => onSave(d)}
+            style={{ padding: '8px 20px', background: '#1a1a1a', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13, fontWeight: 600 }}>
+            保存
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ===== 案件から引用モーダル =====
 // これまで登録した案件（進行中・完了とも）を検索して選び、そのステップ
@@ -431,7 +595,7 @@ const COLS = [
   { key: 'note', label: '備考', w: 140 },
 ];
 
-function CategoryTable({ category, rows, settings, total, updRow, removeRow, companyList, colors, fontJP }) {
+function CategoryTable({ category, rows, settings, total, updRow, removeRow, onEditRow, companyList, colors, fontJP }) {
   const th = { border: `1px solid ${colors.border}`, padding: '4px 6px', background: '#3a3a3a', color: '#fff', fontSize: 10.5, fontWeight: 600, whiteSpace: 'nowrap', position: 'sticky', top: 0, WebkitPrintColorAdjust: 'exact' };
   const td = { border: `1px solid ${colors.border}`, padding: 0, fontSize: 11, verticalAlign: 'middle' };
   const cellInput = (align) => ({ width: '100%', border: 'none', padding: '4px 5px', fontFamily: fontJP, fontSize: 11, boxSizing: 'border-box', background: 'transparent', textAlign: align || 'left', outline: 'none' });
@@ -443,7 +607,7 @@ function CategoryTable({ category, rows, settings, total, updRow, removeRow, com
         <table style={{ borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: 1200 }}>
           <colgroup>
             {COLS.map(c => <col key={c.key} style={{ width: c.w }} />)}
-            <col style={{ width: 36 }} />
+            <col style={{ width: 58 }} />
           </colgroup>
           <thead>
             <tr>{COLS.map(c => <th key={c.key} style={th}>{c.label}</th>)}<th style={{ ...th }} className="kz-no-print"></th></tr>
@@ -473,7 +637,8 @@ function CategoryTable({ category, rows, settings, total, updRow, removeRow, com
                       </td>
                     );
                   })}
-                  <td style={{ ...td, textAlign: 'center' }} className="kz-no-print">
+                  <td style={{ ...td, textAlign: 'center', whiteSpace: 'nowrap' }} className="kz-no-print">
+                    <button onClick={() => onEditRow(r)} title="この行を編集（売上区分の変更・全項目の編集）" style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#3a7bd5', padding: 4 }}><Edit2 size={13} /></button>
                     <button onClick={() => removeRow(r.id)} title="削除" style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#c0392b', padding: 4 }}><Trash2 size={13} /></button>
                   </td>
                 </tr>
