@@ -2,10 +2,11 @@
 // UI を持たない関数・定数のみ。保存は billingStore（1帳票 = 1 Firestore ドキュメント、data/bill_{id}）。
 
 // ---- 種別 ----
+// accent はアップロードされたExcel帳票の上下帯の色（見積=黒・発注=青・請求=緑）
 export const DOC_TYPES = [
-  { id: 'estimate', label: '見積書', title: '御 見 積 書', accent: '#3a3a3a', leadText: '下記のとおり、御見積り申し上げます。' },
-  { id: 'order', label: '発注書', title: '発 注 書', accent: '#3a7bd5', leadText: '下記のとおり、御発注申し上げます。' },
-  { id: 'invoice', label: '請求書', title: '御 請 求 書', accent: '#8bc34a', leadText: '下記のとおり、ご請求申し上げます' },
+  { id: 'estimate', label: '見積書', title: '御 見 積 書', accent: '#434343', leadText: '下記のとおり、御見積り申し上げます。' },
+  { id: 'order', label: '発注書', title: '発 注 書', accent: '#3d85c6', leadText: '下記のとおり、御発注申し上げます。' },
+  { id: 'invoice', label: '請求書', title: '御 請 求 書', accent: '#93c47d', leadText: '下記のとおり、ご請求申し上げます' },
 ];
 export function docTypeOf(id) { return DOC_TYPES.find(t => t.id === id) || DOC_TYPES[0]; }
 

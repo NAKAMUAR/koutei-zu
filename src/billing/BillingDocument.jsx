@@ -3,120 +3,127 @@
 // デザインは元のExcel/PDF帳票に準拠（上下の色帯・字間広めの大見出し・白地＋色アンダーラインの明細・細罫線の集計）。
 import React from 'react';
 import {
-  DOC_TYPES, formatYen, formatJDate, lineAmount, computeTotals,
+  DOC_TYPES, docTypeOf, formatYen, formatJDate, lineAmount, computeTotals,
   CONDITION_SECTIONS, SCHEDULE_TIME_ROWS,
 } from './billingUtils.js';
 import rebegLogo from './rebeg-logo.png';
 
-const FONT = "'Noto Sans JP', sans-serif";
+// フォント（アップロードされたExcel帳票に準拠）：
+//   見積書 = BIZ UDPGothic ／ 発注書・請求書 = M PLUS 1p
+const FONT_ESTIMATE = "'BIZ UDPGothic', 'Noto Sans JP', sans-serif";
+const FONT_MPLUS = "'M PLUS 1p', 'Noto Sans JP', sans-serif";
 const exact = { WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' };
-const LINE = '#e2e0d8';   // 細罫線
-const LABEL = '#777';     // ラベル文字色
+const LINE = '#e2e0d8';       // 細罫線
+const TITLE_COLOR = '#434343'; // 大見出し・ヘッダー下線の色（Excelのタイトル色）
 
-// A4 1ページ。上下に色帯（上下に白マージンを残す）。
-function Page({ children, first, accentBar }) {
+// A4 1ページ。上下に色帯（Excelの上下余白 約20mm・帯1行ぶんに合わせる）。
+function Page({ children, first, accentBar, font }) {
   return (
     <div
       className="kz-doc-page"
       style={{
         width: '210mm', minHeight: '297mm', boxSizing: 'border-box',
-        background: '#fff', color: '#1a1a1a', fontFamily: FONT,
+        background: '#fff', color: '#1a1a1a', fontFamily: font || FONT_MPLUS,
         position: 'relative', overflow: 'hidden', padding: 0, margin: '0 auto',
         ...(first ? {} : { pageBreakBefore: 'always', breakBefore: 'page' }),
         ...exact,
       }}>
-      {accentBar && <div style={{ height: '6mm', background: accentBar, margin: '9mm 0 0', ...exact }} />}
-      <div style={{ padding: '10mm 16mm 22mm' }}>{children}</div>
-      {accentBar && <div style={{ position: 'absolute', bottom: '9mm', left: 0, right: 0, height: '6mm', background: accentBar, ...exact }} />}
+      {accentBar && <div style={{ height: '5.5mm', background: accentBar, margin: '12mm 0 0', ...exact }} />}
+      <div style={{ padding: '9mm 11mm 26mm' }}>{children}</div>
+      {accentBar && <div style={{ position: 'absolute', bottom: '12mm', left: 0, right: 0, height: '5.5mm', background: accentBar, ...exact }} />}
     </div>
   );
 }
 
-// 情報欄（件名・支払条件など）：グレー背景なし、細い下罫線のみ
-function Field({ label, children, w = 76 }) {
+// 情報欄（件名・支払条件など）：グレー背景なし、細い下罫線のみ（Excelは10-11pt・行高21pt）
+function Field({ label, children, w = 84 }) {
   return (
-    <div style={{ display: 'flex', borderBottom: `1px solid ${LINE}`, padding: '7px 0' }}>
-      <div style={{ width: w, flex: 'none', fontSize: 11, color: LABEL, paddingTop: 1 }}>{label}</div>
-      <div style={{ flex: 1, fontSize: 12, whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>{children}</div>
+    <div style={{ display: 'flex', borderBottom: `1px solid ${LINE}`, padding: '9px 0' }}>
+      <div style={{ width: w, flex: 'none', fontSize: 12.5, color: '#333', paddingTop: 1 }}>{label}</div>
+      <div style={{ flex: 1, fontSize: 12.5, whiteSpace: 'pre-wrap', lineHeight: 1.65 }}>{children}</div>
     </div>
   );
 }
 
-// 合計金額（情報欄の下に大きく）
+// 合計金額（情報欄の下に大きく。Excelは14pt・非太字＋（税込）9pt）
 function TotalLine({ total }) {
   return (
-    <div style={{ display: 'flex', marginTop: 14, alignItems: 'baseline', gap: 14 }}>
-      <span style={{ fontSize: 12, color: '#555' }}>合計金額</span>
-      <span style={{ fontSize: 22, fontWeight: 700 }}>{formatYen(total)}</span>
-      <span style={{ fontSize: 11, color: '#888' }}>（税込）</span>
+    <div style={{ display: 'flex', marginTop: 16, alignItems: 'baseline', gap: 14, borderBottom: `1px solid ${LINE}`, paddingBottom: 10 }}>
+      <span style={{ fontSize: 12.5, color: '#333' }}>合計金額</span>
+      <span style={{ fontSize: 19, fontWeight: 500 }}>{formatYen(total)}</span>
+      <span style={{ fontSize: 11.5, color: '#666' }}>（税込）</span>
     </div>
   );
 }
 
-// 発行元（自社）ブロック：ロゴ＋会社情報
+// 発行元（自社）ブロック：ロゴ＋会社情報（会社名14pt相当・詳細10pt相当）
 function FromBlock({ from, showReg }) {
   return (
-    <div style={{ fontSize: 11, lineHeight: 1.75 }}>
+    <div style={{ fontSize: 12.5, lineHeight: 1.8 }}>
       <img src={rebegLogo} alt="re-beg" style={{ width: '42mm', display: 'block', marginBottom: 8 }} />
-      <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 3 }}>{from.company || '株式会社リーベグ'}</div>
+      <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 4, color: TITLE_COLOR }}>{from.company || '株式会社リーベグ'}</div>
       {from.zip ? <div>〒{from.zip}</div> : null}
       {from.address ? <div>{from.address}</div> : null}
-      {from.tel ? <div style={{ marginTop: 5 }}>電話：{from.tel}</div> : null}
+      {from.tel ? <div style={{ marginTop: 6 }}>電話：{from.tel}</div> : null}
       {from.person ? <div>担当：{from.person}</div> : null}
-      {showReg && from.regNo ? <div style={{ marginTop: 5 }}>登録番号：{from.regNo}</div> : null}
+      {showReg && from.regNo ? <div style={{ marginTop: 6 }}>登録番号：{from.regNo}</div> : null}
     </div>
   );
 }
 
+// 大見出し（Excelは36pt・太字・#434343。全角スペース入りタイトル）
 function Title({ text }) {
-  return <h2 style={{ fontSize: 31, fontWeight: 700, letterSpacing: '0.22em', margin: 0, lineHeight: 1.1 }}>{text}</h2>;
+  return <h2 style={{ fontSize: 40, fontWeight: 700, letterSpacing: '0.22em', margin: 0, lineHeight: 1.15, color: TITLE_COLOR }}>{text}</h2>;
 }
 
 function NoBlock({ doc, dateLabel = '発行日' }) {
   return (
-    <div style={{ fontSize: 12, minWidth: 160, paddingTop: 6 }}>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}><span style={{ color: '#666' }}>NO：</span><span style={{ minWidth: 70 }}>{doc.no}</span></div>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 6 }}><span style={{ color: '#666' }}>{dateLabel}：</span><span style={{ minWidth: 70 }}>{formatJDate(doc.issueDate)}</span></div>
+    <div style={{ fontSize: 12.5, minWidth: 170, paddingTop: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}><span style={{ color: '#555' }}>NO：</span><span style={{ minWidth: 76 }}>{doc.no}</span></div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 7 }}><span style={{ color: '#555' }}>{dateLabel}：</span><span style={{ minWidth: 76 }}>{formatJDate(doc.issueDate)}</span></div>
     </div>
   );
 }
 
-// 宛先（御中）
+// 宛先（御中）。Excelは会社名16pt太字・御中11pt太字・下罫線
 function ToLine({ company, centered }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, borderBottom: '1px solid #9a9a9a', paddingBottom: 5, minWidth: 280 }}>
-      <span style={{ fontSize: 17, fontWeight: 700, flex: 1, textAlign: centered ? 'center' : 'left' }}>{company || '　'}</span>
-      <span style={{ fontSize: 13, fontWeight: 700 }}>御中</span>
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, borderBottom: '1px solid #9a9a9a', paddingBottom: 6, minWidth: 300 }}>
+      <span style={{ fontSize: 21, fontWeight: 700, flex: 1, textAlign: centered ? 'center' : 'left' }}>{company || '　'}</span>
+      <span style={{ fontSize: 14, fontWeight: 700 }}>御中</span>
     </div>
   );
 }
 
-// 帳票共通の帯・アンダーライン色（アップロードされた見積書フォームに合わせ、全種別で統一）
-const DOC_DARK = '#3a3a3a';
-
-// ===== 明細テーブル：白地ヘッダー＋太アンダーライン（項目・数量・単価・金額。全種別共通） =====
+// ===== 明細テーブル：白地ヘッダー＋太アンダーライン =====
+// Excelの構成に準拠：見積書14行・発注書/請求書10行。請求書のみ先頭に「日付」列。
+// 列幅もExcelの列構成（項目≒半分・数量1列・単価3列・金額3列）に合わせる。
 function ItemsTable({ doc }) {
   const rows = doc.items || [];
-  const minRows = 14; // アップロードされた見積書フォームと同じ行数
+  const isInvoice = doc.type === 'invoice';
+  const minRows = doc.type === 'estimate' ? 14 : 10;
   const filled = rows.slice();
   while (filled.length < minRows) filled.push({ id: 'pad' + filled.length, _pad: true });
-  const head = { padding: '7px 8px', fontSize: 11.5, fontWeight: 600, color: '#333', borderBottom: `2.5px solid ${DOC_DARK}`, textAlign: 'center', whiteSpace: 'nowrap' };
-  const cell = { borderBottom: `1px solid #ececec`, padding: '7px 8px', fontSize: 11.5, height: 24 };
+  const head = { padding: '8px 8px', fontSize: 12.5, fontWeight: 600, color: '#333', borderBottom: `2.5px solid ${TITLE_COLOR}`, textAlign: 'center', whiteSpace: 'nowrap' };
+  const cell = { borderBottom: `1px solid #ececec`, padding: '8px 8px', fontSize: 12.5, height: 26 };
   const sep = { borderLeft: '1px solid #f0eee8' };
+  const shortDate = (s) => { const [, m, d] = (s || '').split('-').map(Number); return (m && d) ? `${m}/${d}` : ''; };
   return (
     <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
       <thead>
         <tr>
+          {isInvoice && <th style={{ ...head, width: '9%' }}>日付</th>}
           <th style={{ ...head, textAlign: 'left' }}>項目</th>
-          <th style={{ ...head, width: '11%' }}>数量</th>
-          <th style={{ ...head, width: '16%' }}>単価</th>
-          <th style={{ ...head, width: '18%' }}>金額</th>
+          <th style={{ ...head, width: '8%' }}>数量</th>
+          <th style={{ ...head, width: isInvoice ? '17%' : '19%' }}>単価</th>
+          <th style={{ ...head, width: isInvoice ? '18%' : '20%' }}>金額</th>
         </tr>
       </thead>
       <tbody>
         {filled.map((it, i) => (
           <tr key={it.id || i}>
-            <td style={{ ...cell, textAlign: 'left' }}>
+            {isInvoice && <td style={{ ...cell, textAlign: 'center' }}>{it._pad ? '' : shortDate(it.date)}</td>}
+            <td style={{ ...cell, ...(isInvoice ? sep : {}), textAlign: 'left' }}>
               {it._pad ? '' : <>{it.reduced ? <span style={{ marginRight: 4 }}>*</span> : null}{it.name}</>}
             </td>
             <td style={{ ...cell, ...sep, textAlign: 'center' }}>{it._pad ? '' : (it.qty !== '' && it.qty != null ? it.qty : '')}</td>
@@ -129,42 +136,68 @@ function ItemsTable({ doc }) {
   );
 }
 
-// 合計ブロック（右寄せ・白地・細罫線）。アップロードされた見積書フォームと同じ
-// 「小計／消費税（TAX/10%）／合計金額（消費税込）」構成で全種別共通。
-// 請求書で軽減税率（8%）の項目がある場合のみ、税率別の行を差し込む（適格請求書の税率別記載）。
+// 合計ブロック（見積書・発注書）：右寄せ・白地・細罫線。
+// Excelの「小計／消費税（TAX/10%）／合計金額（消費税込）」3段（行高37.5pt・値12pt）に合わせる。
 function SimpleTotals({ doc }) {
   const t = computeTotals(doc);
   const row = (label, val, strong, last) => (
     <div key={label} style={{ display: 'flex', borderBottom: last ? 'none' : `1px solid ${LINE}` }}>
-      <div style={{ flex: 1, padding: '10px 12px', fontSize: 12, textAlign: 'center', color: '#444', borderRight: `1px solid ${LINE}` }}>{label}</div>
-      <div style={{ width: 150, padding: '10px 14px', fontSize: strong ? 14 : 12, fontWeight: strong ? 700 : 400, textAlign: 'right' }}>{formatYen(val)}</div>
+      <div style={{ flex: 1, padding: '14px 12px', fontSize: 12.5, textAlign: 'center', color: '#444', borderRight: `1px solid ${LINE}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{label}</div>
+      <div style={{ width: 160, padding: '14px 14px', fontSize: 16, fontWeight: strong ? 700 : 400, textAlign: 'right' }}>{formatYen(val)}</div>
     </div>
   );
-  const isInvoice = doc.type === 'invoice';
-  const hasReduced = isInvoice && t.base8 > 0;
   return (
-    <div style={{ width: 330, marginLeft: 'auto', marginTop: 18, border: `1px solid ${LINE}` }}>
+    <div style={{ width: 340, marginLeft: 'auto', marginTop: 18, border: `1px solid ${LINE}` }}>
       {row('小計', t.subtotal)}
-      {hasReduced ? (
-        <>
-          {row('8％対象（*） 小計', t.base8)}
-          {row('消費税（8％）', t.tax8)}
-          {row('10％対象 小計', t.base10)}
-          {row('消費税（10％）', t.tax10)}
-        </>
-      ) : (
-        row('消費税（TAX/10%）', isInvoice ? t.taxTotal : t.tax)
-      )}
+      {row('消費税（TAX/10%）', t.tax)}
       {row('合計金額（消費税込）', t.total, true, true)}
+    </div>
+  );
+}
+
+// 合計ブロック（請求書）：Excelの請求書と同じ3列構成を常時表示。
+// ［8％対象項目｜消費税(8%)］［10％対象項目｜消費税(10%)］［小計｜消費税(合計)｜合計金額(税込)］
+function InvoiceTotals({ doc }) {
+  const t = computeTotals(doc);
+  const lab = { border: '1px solid #cfcdc5', padding: '11px 8px', fontSize: 12, textAlign: 'center', color: '#444', background: '#fff', whiteSpace: 'nowrap' };
+  const val = { border: '1px solid #cfcdc5', padding: '11px 10px', fontSize: 13, textAlign: 'right' };
+  const none = { border: 'none' };
+  return (
+    <div style={{ marginTop: 16 }}>
+      <div style={{ fontSize: 11.5, color: '#555', marginBottom: 4 }}>　*　軽減税率対象</div>
+      <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+        <colgroup>
+          <col style={{ width: '14%' }} /><col style={{ width: '12%' }} />
+          <col style={{ width: '14%' }} /><col style={{ width: '12%' }} />
+          <col style={{ width: '18%' }} /><col style={{ width: '15%' }} />
+        </colgroup>
+        <tbody>
+          <tr>
+            <td style={lab}>8％対象項目</td><td style={val}>{formatYen(t.base8)}</td>
+            <td style={lab}>10％対象項目</td><td style={val}>{formatYen(t.base10)}</td>
+            <td style={lab}>小計</td><td style={val}>{formatYen(t.subtotal)}</td>
+          </tr>
+          <tr>
+            <td style={lab}>消費税（8％）</td><td style={val}>{formatYen(t.tax8)}</td>
+            <td style={lab}>消費税（10％）</td><td style={val}>{formatYen(t.tax10)}</td>
+            <td style={lab}>消費税（合計）</td><td style={val}>{formatYen(t.taxTotal)}</td>
+          </tr>
+          <tr>
+            <td style={none} colSpan={4}></td>
+            <td style={{ ...lab, background: '#efefef', ...exact }}>合計金額（消費税込）</td>
+            <td style={{ ...val, fontWeight: 700 }}>{formatYen(t.total)}</td>
+          </tr>
+        </tbody>
+      </table>
     </div>
   );
 }
 
 function NoteBlock({ title = '備考', lines }) {
   return (
-    <div style={{ marginTop: 18 }}>
-      <div style={{ fontSize: 11, color: '#666', borderBottom: '1px solid #ccc', paddingBottom: 4, marginBottom: 7 }}>{title}</div>
-      <div style={{ fontSize: 10.5, lineHeight: 1.8, whiteSpace: 'pre-wrap', color: '#333' }}>
+    <div style={{ marginTop: 20 }}>
+      <div style={{ fontSize: 12.5, color: '#333', borderBottom: '1px solid #ccc', paddingBottom: 5, marginBottom: 8 }}>　{title}</div>
+      <div style={{ fontSize: 12.5, lineHeight: 1.9, whiteSpace: 'pre-wrap', color: '#333' }}>
         {Array.isArray(lines) ? lines.map((l, i) => <div key={i}>{l}</div>) : lines}
       </div>
     </div>
@@ -175,15 +208,15 @@ function NoteBlock({ title = '備考', lines }) {
 function EstimatePage1({ doc }) {
   const t = computeTotals(doc);
   return (
-    <Page first accentBar="#3a3a3a">
+    <Page first accentBar={docTypeOf('estimate').accent} font={FONT_ESTIMATE}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <Title text="御 見 積 書" />
         <NoBlock doc={doc} />
       </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 26, gap: 24 }}>
-        <div style={{ flex: 1, maxWidth: 330 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 28, gap: 24 }}>
+        <div style={{ flex: 1, maxWidth: 340 }}>
           <ToLine company={doc.to.company} />
-          <div style={{ fontSize: 11, margin: '12px 0 6px', color: '#444' }}>下記のとおり、御見積り申し上げます。</div>
+          <div style={{ fontSize: 13, margin: '14px 0 6px', color: '#333' }}>下記のとおり、御見積り申し上げます。</div>
           <Field label="件名">{doc.subject}</Field>
           <Field label="制作条件">{doc.productionTerms}</Field>
           <Field label="支払条件">{doc.paymentTerms}</Field>
@@ -208,29 +241,29 @@ function OrderPage1({ doc }) {
   const t = computeTotals(doc);
   const f = doc.from || {};
   return (
-    <Page first accentBar={DOC_DARK}>
+    <Page first accentBar={docTypeOf('order').accent} font={FONT_MPLUS}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <Title text="発 注 書" />
         <NoBlock doc={doc} dateLabel="発効日" />
       </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 26, gap: 24 }}>
-        <div style={{ flex: 1, maxWidth: 330 }}>
-          <ToLine company={doc.to.company || '株式会社リーベグ'} />
-          <div style={{ fontSize: 11, margin: '12px 0 6px', color: '#444' }}>下記のとおり、御発注申し上げます。</div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 28, gap: 24 }}>
+        <div style={{ flex: 1, maxWidth: 340 }}>
+          <ToLine company={doc.to.company || '株式会社リーベグ'} centered />
+          <div style={{ fontSize: 13, margin: '14px 0 6px', color: '#333' }}>下記のとおり、御発注申し上げます。</div>
           <Field label="件名">{doc.subject}</Field>
           <Field label="支払条件">{doc.paymentTerms}</Field>
           <TotalLine total={t.total} />
         </div>
-        <div style={{ width: 240, flex: 'none', fontSize: 11, lineHeight: 1.75 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 3 }}>{f.company || '※お客様会社名'}</div>
+        <div style={{ width: 250, flex: 'none', fontSize: 12.5, lineHeight: 1.8 }}>
+          <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 4, color: TITLE_COLOR }}>{f.company || '※お客様会社名'}</div>
           <div>{f.zip ? `〒${f.zip}` : '※〒000-0000（郵便番号）'}</div>
           <div>{f.address || '※住所'}</div>
-          <div style={{ marginTop: 5 }}>{f.tel ? `電話：${f.tel}` : '※電話番号'}</div>
+          <div style={{ marginTop: 6 }}>{f.tel ? `電話：${f.tel}` : '※電話番号'}</div>
           <div>{f.rep || '※代表者名'}</div>
-          <div style={{ color: '#c0392b', marginTop: 10 }}>署名と捺印をお願いします。</div>
+          <div style={{ color: '#ff0000', marginTop: 10, fontSize: 12, textAlign: 'right' }}>署名と捺印をお願いします。</div>
         </div>
       </div>
-      <div style={{ marginTop: 24 }}>
+      <div style={{ marginTop: 26 }}>
         <ItemsTable doc={doc} />
         <SimpleTotals doc={doc} />
       </div>
@@ -242,29 +275,27 @@ function OrderPage1({ doc }) {
 // 請求書：見積書と同じフォーム（件名・支払期限の情報欄＋共通明細表＋共通合計欄＋備考に振込先）
 function InvoicePage1({ doc }) {
   const t = computeTotals(doc);
-  const hasReduced = (doc.items || []).some(it => it.reduced || Number(it.taxRate) === 8);
   return (
-    <Page first accentBar={DOC_DARK}>
+    <Page first accentBar={docTypeOf('invoice').accent} font={FONT_MPLUS}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <Title text="御 請 求 書" />
         <NoBlock doc={doc} />
       </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 26, gap: 24 }}>
-        <div style={{ flex: 1, maxWidth: 330 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 28, gap: 24 }}>
+        <div style={{ flex: 1, maxWidth: 340 }}>
           <ToLine company={doc.to.company} />
-          <div style={{ fontSize: 11, margin: '12px 0 6px', color: '#444' }}>下記のとおり、ご請求申し上げます</div>
+          <div style={{ fontSize: 13, margin: '14px 0 6px', color: '#333' }}>下記のとおり、ご請求申し上げます</div>
           <Field label="件名">{doc.subject}</Field>
           <Field label="支払期限">{doc.paymentDeadline}</Field>
           <TotalLine total={t.total} />
         </div>
-        <div style={{ width: 240, flex: 'none' }}>
+        <div style={{ width: 250, flex: 'none' }}>
           <FromBlock from={doc.from} showReg />
         </div>
       </div>
-      <div style={{ marginTop: 24 }}>
+      <div style={{ marginTop: 26 }}>
         <ItemsTable doc={doc} />
-        {hasReduced && <div style={{ fontSize: 10, color: '#666', marginTop: 5 }}>* 軽減税率対象</div>}
-        <SimpleTotals doc={doc} />
+        <InvoiceTotals doc={doc} />
       </div>
       <NoteBlock lines={[...(doc.note ? [doc.note] : []), ...(doc.bankLines || [])]} />
     </Page>
@@ -282,25 +313,25 @@ function CheckBox({ on }) {
 function ConditionPage({ doc }) {
   const cond = doc.conditions || {};
   return (
-    <Page accentBar="#3a3a3a">
+    <Page accentBar={docTypeOf('estimate').accent} font={FONT_ESTIMATE}>
       {CONDITION_SECTIONS.map(sec => (
-        <div key={sec.title} style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, borderBottom: '2px solid #1a1a1a', display: 'inline-block', paddingRight: 30, marginBottom: 6 }}>・ {sec.title}</div>
+        <div key={sec.title} style={{ marginBottom: 18 }}>
+          <div style={{ fontSize: 15, fontWeight: 600, borderBottom: '2px solid #1a1a1a', display: 'inline-block', paddingRight: 36, marginBottom: 7 }}>　・ {sec.title}</div>
           {sec.rows.map(row => {
             const sel = cond[row.key] || {};
             return (
-              <div key={row.key} style={{ border: '1px solid #d8d8d8', borderBottom: 'none', fontSize: 11 }}>
+              <div key={row.key} style={{ border: '1px solid #d8d8d8', borderBottom: 'none', fontSize: 12 }}>
                 <div style={{ display: 'flex', alignItems: 'stretch' }}>
-                  <div style={{ width: 150, flex: 'none', padding: '6px 8px', borderRight: '1px solid #d8d8d8', display: 'flex', alignItems: 'center' }}>{row.label}</div>
+                  <div style={{ width: 160, flex: 'none', padding: '7px 8px', borderRight: '1px solid #d8d8d8', display: 'flex', alignItems: 'center', background: '#f3f3f3', fontSize: 12.5, ...exact }}>{row.label}</div>
                   {row.options.map((op, i) => (
-                    <div key={i} style={{ flex: 1, padding: '6px 6px', borderRight: i < row.options.length - 1 ? '1px solid #eee' : 'none', display: 'flex', alignItems: 'center', gap: 5 }}>
+                    <div key={i} style={{ flex: 1, padding: '7px 6px', borderRight: i < row.options.length - 1 ? '1px solid #eee' : 'none', display: 'flex', alignItems: 'center', gap: 6 }}>
                       <CheckBox on={sel.selected === i} /><span>{op}</span>
                     </div>
                   ))}
                 </div>
                 <div style={{ display: 'flex', borderTop: '1px solid #eee', borderBottom: '1px solid #d8d8d8' }}>
-                  <div style={{ width: 150, flex: 'none', padding: '4px 8px', borderRight: '1px solid #d8d8d8', color: '#888', fontSize: 10 }}>※制作補足情報</div>
-                  <div style={{ flex: 1, padding: '4px 8px', fontSize: 10.5, whiteSpace: 'pre-wrap', minHeight: 14 }}>{sel.note || ''}</div>
+                  <div style={{ width: 160, flex: 'none', padding: '5px 8px', borderRight: '1px solid #d8d8d8', color: '#666', fontSize: 11, background: '#f3f3f3', ...exact }}>※制作補足情報</div>
+                  <div style={{ flex: 1, padding: '5px 8px', fontSize: 11.5, whiteSpace: 'pre-wrap', minHeight: 15 }}>{sel.note || ''}</div>
                 </div>
               </div>
             );
@@ -315,13 +346,14 @@ function ConditionPage({ doc }) {
 function SchedulePage({ doc }) {
   const s = doc.schedule || {};
   const cols = s.columns || [];
-  const partyColor = (p) => p === 'client' ? '#dbe7f3' : '#dceadb';
+  // Excelの区分色（お客様=水色 #CFE2F3・当社=薄緑 #D9EAD3）・見出し帯は青 #3D85C6
+  const partyColor = (p) => p === 'client' ? '#cfe2f3' : '#d9ead3';
   return (
-    <Page accentBar="#3a3a3a">
-      <div style={{ textAlign: 'center', margin: '4px 0 18px' }}>
-        <span style={{ display: 'inline-block', background: '#4a6fa5', color: '#fff', padding: '7px 34px', fontSize: 15, fontWeight: 700, ...exact }}>制作スケジュール / 工程予定表①</span>
+    <Page accentBar={docTypeOf('estimate').accent} font={FONT_ESTIMATE}>
+      <div style={{ textAlign: 'center', margin: '4px 0 20px' }}>
+        <span style={{ display: 'inline-block', background: '#3d85c6', color: '#fff', padding: '9px 44px', fontSize: 19, fontWeight: 700, ...exact }}>制作スケジュール / 工程予定表①</span>
       </div>
-      <div style={{ fontSize: 12, fontWeight: 700, borderBottom: '2px solid #1a1a1a', display: 'inline-block', paddingRight: 30, marginBottom: 8 }}>・ 制作情報</div>
+      <div style={{ fontSize: 15, fontWeight: 600, borderBottom: '2px solid #1a1a1a', display: 'inline-block', paddingRight: 36, marginBottom: 8 }}>　・ 制作情報</div>
       <div style={{ border: '1px solid #d8d8d8', marginBottom: 16 }}>
         <div style={{ display: 'flex' }}>
           <SCell label="制作案件名" val={s.projectName} />
@@ -337,9 +369,9 @@ function SchedulePage({ doc }) {
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-        <span style={{ fontSize: 12, fontWeight: 700, borderBottom: '2px solid #1a1a1a', paddingRight: 20 }}>・ 制作工程</span>
-        <span style={{ fontSize: 10, background: '#dbe7f3', padding: '2px 8px', ...exact }}>お客様対応区分</span>
-        <span style={{ fontSize: 10, background: '#dceadb', padding: '2px 8px', ...exact }}>当社対応区分</span>
+        <span style={{ fontSize: 15, fontWeight: 600, borderBottom: '2px solid #1a1a1a', paddingRight: 24 }}>　・ 制作工程</span>
+        <span style={{ fontSize: 11, fontWeight: 700, background: '#cfe2f3', padding: '3px 10px', ...exact }}>お客様対応区分</span>
+        <span style={{ fontSize: 11, fontWeight: 700, background: '#d9ead3', padding: '3px 10px', ...exact }}>当社対応区分</span>
       </div>
 
       <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', fontSize: 9 }}>
@@ -399,13 +431,13 @@ function SCell({ label, val, last, full }) {
 function AnglePage({ doc }) {
   const a = doc.angles || {};
   const box = (label, val) => (
-    <div style={{ marginBottom: 20 }}>
-      <div style={{ fontSize: 12, fontWeight: 700, borderBottom: '2px solid #1a1a1a', display: 'inline-block', paddingRight: 40, marginBottom: 8 }}>・ {label}</div>
-      <div style={{ border: '1px solid #999', height: '110mm', padding: 8, fontSize: 11, whiteSpace: 'pre-wrap', boxSizing: 'border-box' }}>{val}</div>
+    <div style={{ marginBottom: 22 }}>
+      <div style={{ fontSize: 15, fontWeight: 600, borderBottom: '2px solid #1a1a1a', display: 'inline-block', paddingRight: 44, marginBottom: 8 }}>　・ {label}</div>
+      <div style={{ border: '1px solid #999', height: '110mm', padding: 8, fontSize: 12, whiteSpace: 'pre-wrap', boxSizing: 'border-box' }}>{val}</div>
     </div>
   );
   return (
-    <Page accentBar="#3a3a3a">
+    <Page accentBar={docTypeOf('estimate').accent} font={FONT_ESTIMATE}>
       {box(`アングル（${a.exteriorLabel || ''}）`, a.exterior)}
       {box('アングル（内観-目線）', a.interior)}
     </Page>
