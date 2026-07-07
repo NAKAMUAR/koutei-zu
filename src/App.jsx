@@ -4333,17 +4333,18 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
       if (t.viewpointNameExternal) e.viewpointNameExternal = t.viewpointNameExternal;
       if (t.viewpointCategory) e.viewpointCategory = t.viewpointCategory;
       if (t.assignee) e.assignee = t.assignee;
-      // 過去の各ステップ（＝タスク）の名称・制作時間を控える（並びは stepOrder→createdAt）
+      // 過去の各ステップ（＝タスク）の名称・制作時間・完了時間を控える（並びは stepOrder→createdAt）
       e.steps.push({
         order: (t.stepOrder != null ? t.stepOrder : 0),
         createdAt: t.createdAt || 0,
         stepName: (t.stepName || '').trim(),
         hours: t.hours,
+        completedHours: t.completedHours,
       });
     }
     if (byVp.size === 0) { alert('過去案件に視点が見つかりませんでした'); return; }
     const viewpoints = [...byVp.values()].map(v => {
-      // 過去のステップ構成を再現：制作時間は復元、完了時間は0、種類=修正（fix）
+      // 過去のステップ構成を再現：制作時間・完了時間ともに復元、種類=修正（fix）
       // 種類は修正に統一する（元の種類のままだと納品として二重計上されるため。fix は納品に数えない）
       const steps = v.steps.slice()
         .sort((a, b) => (a.createdAt - b.createdAt) || (a.order - b.order))
@@ -4351,7 +4352,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
         .map(s => ({
           ...makeEmptyStep(s.stepName || '修正'),
           hours: (s.hours != null && !isNaN(s.hours) && s.hours > 0) ? fmtHM(s.hours) : '',
-          completedHours: '',
+          completedHours: (s.completedHours != null && !isNaN(s.completedHours) && s.completedHours > 0) ? fmtHM(s.completedHours) : '',
           roundType: 'fix',
         }));
       return {
@@ -4705,7 +4706,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
         {recallMatch && recallState.name === recallMatch.projectName && recallState.status === 'applied' && (
           <div style={{ border: '1px solid #bcd3b0', background: '#f3f8f0', borderRadius: 6, padding: '10px 14px', marginBottom: 16, fontSize: 12.5, color: '#3a5a40', display: 'flex', alignItems: 'center', gap: 8 }}>
             <CheckCircle2 size={15} style={{ flexShrink: 0 }} />
-            {recallMatch.hasActive ? '進行中案件' : '過去案件'}「{recallMatch.projectName}」の視点を過去のステップ構成（種類=修正／制作時間を復元・完了時間は0）で展開しました。不要な視点・ステップは削除し、必要に応じて制作時間を調整して登録してください。
+            {recallMatch.hasActive ? '進行中案件' : '過去案件'}「{recallMatch.projectName}」の視点を過去のステップ構成（種類=修正／制作時間・完了時間を復元）で展開しました。不要な視点・ステップは削除し、必要に応じて時間を調整して登録してください。
           </div>
         )}
         {recallMatch && recallState.name !== recallMatch.projectName && (
