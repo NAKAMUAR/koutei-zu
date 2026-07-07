@@ -4709,6 +4709,11 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                     <span style={{ color: s.fixCount > 0 ? '#c46a16' : colors.textMute, marginLeft: 5 }}>
                       修正{s.fixCount}回{s.fixSpentH > 0 ? `・${s.fixSpentH}h` : ''}
                     </span>
+                    {s.lastCompletedAt > 0 && (
+                      <span style={{ color: colors.textMute, marginLeft: 5 }} title="この視点の完了日時（最終ステップの完了時刻）">
+                        完了 {(() => { const d = new Date(s.lastCompletedAt); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; })()}
+                      </span>
+                    )}
                   </span>
                 ))}
               </div>
