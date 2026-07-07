@@ -9,10 +9,27 @@
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;700&family=Shippori+Mincho:wght@500;700&family=M+PLUS+1p:wght@400;500;700&family=BIZ+UDPGothic:wght@400;700&display=swap" />
     <style>
       body { margin: 0; background: #faf8f3; font-family: 'Noto Sans JP', sans-serif; }
+      /* JS 到着前から出す即時ローディング（真っ白防止）。React 描画時に #root ごと置換される */
+      #app-boot {
+        position: fixed; inset: 0; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; gap: 16px;
+        background: #faf8f3; color: #6b6b6b; font-size: 13px; letter-spacing: 0.05em;
+      }
+      #app-boot .spinner {
+        width: 28px; height: 28px; border-radius: 50%;
+        border: 3px solid #e8e3d6; border-top-color: #c1272d;
+        animation: app-boot-spin 0.8s linear infinite;
+      }
+      @keyframes app-boot-spin { to { transform: rotate(360deg); } }
     </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="app-boot">
+        <div class="spinner"></div>
+        <div>読み込み中...</div>
+      </div>
+    </div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
