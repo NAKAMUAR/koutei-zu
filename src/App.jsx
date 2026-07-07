@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useMemo, useRef, useLayoutEffect } from 'react';
-import { Plus, Trash2, Edit2, Calendar as CalIcon, MessageSquare, Settings as SettingsIcon, Check, X, Clock, Folder, User, ChevronUp, ChevronDown, Users, CheckCircle2, RotateCcw, TrendingUp, ArrowRight, GripVertical, Search, AlertTriangle, StickyNote, Bell, BellOff, Zap, PauseCircle, PlayCircle, FileText, Table } from 'lucide-react';
+import { Plus, Trash2, Edit2, Calendar as CalIcon, MessageSquare, Settings as SettingsIcon, Check, X, Clock, Folder, User, ChevronUp, ChevronDown, Users, CheckCircle2, RotateCcw, TrendingUp, ArrowRight, GripVertical, Search, AlertTriangle, StickyNote, Bell, BellOff, Zap, PauseCircle, PlayCircle, FileText, Table, ClipboardList } from 'lucide-react';
 import { storage, tasksStore, billingStore, salesStore, memberList, signIn, signOutUser, subscribeAuth } from './firebase.js';
 import BillingView from './billing/BillingView.jsx';
 import SalesView from './sales/SalesView.jsx';
 import CompanySummaryView from './sales/CompanySummaryView.jsx';
+import ProjectSheetView from './project/ProjectSheetView.jsx';
 import {
   ROUND_TYPES, roundTypeOf, normalizeHistory, deliveryBaseName,
   deliveryNameForNumber,
@@ -3124,6 +3125,7 @@ export default function App() {
     { id: 'memo', icon: <StickyNote size={15} />, label: 'タスクメモ' },
     { id: 'billing', icon: <FileText size={15} />, label: '帳票' },
     { id: 'sales', icon: <Table size={15} />, label: '売上登録' },
+    { id: 'projectSheet', icon: <ClipboardList size={15} />, label: '案件整理' },
     { id: 'companySummary', icon: <TrendingUp size={15} />, label: '会社別集計' },
   ];
 
@@ -3300,6 +3302,10 @@ export default function App() {
         {view === 'sales' && (
           <SalesView tasks={tasks} customerMaster={customerMaster} now={now}
             onEditProject={handleEditProject}
+            colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
+        )}
+        {view === 'projectSheet' && (
+          <ProjectSheetView tasks={tasks} customerMaster={customerMaster}
             colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
         )}
         {view === 'companySummary' && (
