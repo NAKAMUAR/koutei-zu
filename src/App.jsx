@@ -4899,14 +4899,14 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                           <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>制作時間</label>
                           <DurationSelect value={step.hours}
                             onChange={(val) => updateStepHours(vi, si, val)}
-                            colors={colors} fontJP={fontJP} />
+                            colors={colors} fontJP={fontJP} maxHours={100} />
                         </div>
                         {/* 完了時間 */}
                         <div style={{ flex: '0 0 auto' }}>
                           <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>完了時間</label>
                           <DurationSelect value={step.completedHours}
                             onChange={(val) => updateStep(vi, si, 'completedHours', val)}
-                            colors={colors} fontJP={fontJP} />
+                            colors={colors} fontJP={fontJP} maxHours={100} />
                         </div>
                         <button type="button" onClick={() => removeStep(vi, si)}
                           disabled={vp.steps.length <= 1}
