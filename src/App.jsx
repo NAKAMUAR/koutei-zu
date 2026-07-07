@@ -3982,6 +3982,35 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
   const addViewpointPreset = (preset) =>
     setForm({ ...form, viewpoints: [...form.viewpoints, makeViewpointFromPreset(preset)] });
   const removeViewpoint = (vi) => setForm({ ...form, viewpoints: form.viewpoints.filter((_, idx) => idx !== vi) });
+  // 視点の順番入れ替え（フォーム内で上下に移動）。隣同士を入れ替える。
+  const moveViewpoint = (vi, dir) => {
+    const target = vi + dir;
+    if (target < 0 || target >= form.viewpoints.length) return;
+    const vps = [...form.viewpoints];
+    [vps[vi], vps[target]] = [vps[target], vps[vi]];
+    setForm({ ...form, viewpoints: vps });
+  };
+  // 視点の統合：sourceVi の視点のステップを targetVi の視点の末尾へ移し、sourceVi を削除する。
+  // 残すのは targetVi（視点名・社外名・内観外観・担当者・納期などは targetVi のものを採用）。
+  // 移すステップは担当者を確定（source視点の担当者を焼き込み）して、target視点の担当者に化けないようにする。
+  const mergeViewpoint = (targetVi, sourceVi) => {
+    if (targetVi === sourceVi) return;
+    const vps = form.viewpoints;
+    const target = vps[targetVi];
+    const source = vps[sourceVi];
+    if (!target || !source) return;
+    const movedSteps = (source.steps || []).map(s => ({
+      ...s,
+      assignee: (s.assignee || '').trim() || (source.assignee || '').trim() || '',
+    }));
+    const mergedTarget = { ...target, steps: [...(target.steps || []), ...movedSteps] };
+    const next = [];
+    for (let i = 0; i < vps.length; i++) {
+      if (i === sourceVi) continue;
+      next.push(i === targetVi ? mergedTarget : vps[i]);
+    }
+    setForm({ ...form, viewpoints: next });
+  };
   const updateViewpointName = (vi, value) => {
     const vps = [...form.viewpoints];
     vps[vi] = { ...vps[vi], viewpointName: value };
@@ -4758,6 +4787,19 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                       background: '#fff', border: `1px solid ${colors.border}`,
                       borderRadius: 12, padding: '6px 10px', flexShrink: 0, marginBottom: 1,
                     }}>視点 {vi + 1}</span>
+                    {/* 視点の順番入れ替え（上下） */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexShrink: 0, marginBottom: 1 }}>
+                      <button type="button" onClick={() => moveViewpoint(vi, -1)} disabled={vi === 0}
+                        title="この視点を上へ移動"
+                        style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 3, padding: '1px 5px', lineHeight: 0, cursor: vi === 0 ? 'not-allowed' : 'pointer', color: vi === 0 ? '#ccc' : colors.textMute, display: 'flex' }}>
+                        <ChevronUp size={13} />
+                      </button>
+                      <button type="button" onClick={() => moveViewpoint(vi, 1)} disabled={vi === form.viewpoints.length - 1}
+                        title="この視点を下へ移動"
+                        style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 3, padding: '1px 5px', lineHeight: 0, cursor: vi === form.viewpoints.length - 1 ? 'not-allowed' : 'pointer', color: vi === form.viewpoints.length - 1 ? '#ccc' : colors.textMute, display: 'flex' }}>
+                        <ChevronDown size={13} />
+                      </button>
+                    </div>
                     <div style={{ flex: '1 1 160px' }}>
                       <label style={{ ...labelStyle, fontSize: 10, marginBottom: 3 }}>社内視点名</label>
                       <input type="text" list="viewpoint-list" value={vp.viewpointName}
@@ -4793,6 +4835,28 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                         inputStyle={{ ...inputStyle, padding: '8px 10px', fontSize: 13 }}
                         colors={colors} fontJP={fontJP} />
                     </div>
+                    {/* 視点の統合：他の視点を選ぶと、その視点のステップをこの視点の末尾へ統合し、元の視点は消える */}
+                    {form.viewpoints.length > 1 && (
+                      <div style={{ flexShrink: 0, marginBottom: 1 }}>
+                        <label style={{ ...labelStyle, fontSize: 10, marginBottom: 3 }}>統合（取り込み）</label>
+                        <select value="" title="選んだ視点のステップを、この視点に統合します（元の視点は削除されます）"
+                          onChange={(e) => {
+                            const src = parseInt(e.target.value, 10);
+                            e.target.value = '';
+                            if (isNaN(src) || src === vi) return;
+                            const srcName = (form.viewpoints[src]?.viewpointName || '').trim() || `視点 ${src + 1}`;
+                            const dstName = (vp.viewpointName || '').trim() || `視点 ${vi + 1}`;
+                            if (!window.confirm(`「${srcName}」のステップを「${dstName}」に統合します。\n元の「${srcName}」は削除されます。よろしいですか？`)) return;
+                            mergeViewpoint(vi, src);
+                          }}
+                          style={{ ...inputStyle, padding: '8px 8px', fontSize: 12, cursor: 'pointer', width: 'auto', minWidth: 130 }}>
+                          <option value="">他の視点を取り込む…</option>
+                          {form.viewpoints.map((ovp, oi) => oi === vi ? null : (
+                            <option key={oi} value={oi}>視点 {oi + 1}{(ovp.viewpointName || '').trim() ? `：${ovp.viewpointName}` : ''}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
                     <button type="button" onClick={() => removeViewpoint(vi)}
                       disabled={form.viewpoints.length <= 1}
                       style={{
@@ -4985,7 +5049,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
               </button>
             </div>
             <div style={{ fontSize: 10, color: colors.textMute, marginTop: 8 }}>
-              ※ 空欄の項目・ステップは登録されません ・ 制作時間は HH:MM（時:分）で入力（例 08:00・00:30）・ 0でも登録できます ・ 上から順に作業する想定でスケジュールされます
+              ※ 空欄の項目・ステップは登録されません ・ 制作時間は HH:MM（時:分）で入力（例 08:00・00:30）・ 0でも登録できます ・ 上から順に作業する想定でスケジュールされます ・ 視点は ▲▼ で並び替え、「統合（取り込み）」で他の視点のステップをこの視点にまとめられます
             </div>
           </div>
 
