@@ -106,6 +106,7 @@ export function stepDeliveryName(baseName, stepName) {
 export const DEFAULT_STEP_TYPES = [
   { id: 'white',        label: 'ホワイト',            paid: true,  deliveryBase: '白色', numbered: false },
   { id: 'color',        label: 'カラー',              paid: true,  deliveryBase: '色付', numbered: false },
+  { id: 'person_scene', label: '人物＋添景合成',       paid: true,  deliveryBase: '',     numbered: false },
   { id: 'white_fix',    label: 'ホワイト修正（無料）', paid: false, deliveryBase: '白色', numbered: true },
   { id: 'white_change', label: 'ホワイト変更（有料）', paid: true,  deliveryBase: '白色', numbered: true },
   { id: 'color_fix',    label: 'カラー修正（無料）',   paid: false, deliveryBase: '色付', numbered: true },
