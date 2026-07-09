@@ -1924,6 +1924,23 @@ export default function App() {
     }
   }, [loading, tasks, customerMaster, settings.companyOrder]);
 
+  // 制作時間0のステップ（タスク）を一度だけ削除する（起動時クリーンアップ）。
+  // 「制作時間0のステップは登録不可」に合わせ、既存データに残る0時間ステップを掃除する。
+  const didCleanupZeroHours = useRef(false);
+  useEffect(() => {
+    if (!tasksLoaded || didCleanupZeroHours.current) return;
+    didCleanupZeroHours.current = true;
+    const zeroIds = tasksRef.current
+      .filter(t => { const h = Number(t.hours); return isNaN(h) || h <= 0; })
+      .map(t => t.id);
+    if (zeroIds.length === 0) return;
+    const idSet = new Set(zeroIds);
+    const remaining = tasksRef.current.filter(t => !idSet.has(t.id));
+    setTasks(remaining);
+    tasksRef.current = remaining;
+    tasksStore.batch([], zeroIds).catch(e => console.error('制作時間0ステップ削除エラー:', e));
+  }, [tasksLoaded]);
+
   // タスクメモの追加・更新（id が一致すれば更新、無ければ追加）
   const upsertMemo = (memo) => {
     setMemos(prev => {
@@ -2015,6 +2032,8 @@ export default function App() {
           if (!name && hoursEmpty) continue;
           if (!name) { return { error: `視点「${vpName}」で時間を入力したステップには名称も入力してください` }; }
           if (isNaN(stepHours) || stepHours < 0) { return { error: `視点「${vpName}」の「${name}」の制作時間は HH:MM（時:分）で入力してください（例 08:00）` }; }
+          // 制作時間0のステップは登録不可（0のステップは残さない）
+          if (stepHours <= 0) { return { error: `視点「${vpName}」の「${name}」は制作時間が0です。制作時間を入力してください（制作時間0のステップは登録できません）` }; }
           const stepCompleted = step.completedHours === '' ? 0 : parseHM(step.completedHours);
           if (isNaN(stepCompleted) || stepCompleted < 0) { return { error: `「${name}」の完了時間が無効です` }; }
           if (stepCompleted > stepHours) { return { error: `「${name}」の完了時間が制作時間を超えています` }; }
@@ -2060,8 +2079,9 @@ export default function App() {
             stepTypeId: resolved.typeId || step.stepTypeId || '',
             stepDeliverySuffix: resolved.deliverySuffix || '',
             // ステップごとの金額・依頼日・完了日（ステップ＝納品単位。売上へ1ステップ1行で連携）
-            // 無料ステップ（種類が無料）は金額を反映しない（空に固定）。
-            stepAmount: resolved.paid === false ? '' : ((step.amount === undefined || step.amount === null) ? '' : String(step.amount).trim()),
+            // 金額が入るのはオフショア案件のみ。ラボ案件（amountApplicable=false）は0（空）に固定。
+            // 無料ステップ（種類が無料）も金額を反映しない（空に固定）。
+            stepAmount: (!amountApplicable || resolved.paid === false) ? '' : ((step.amount === undefined || step.amount === null) ? '' : String(step.amount).trim()),
             stepRequestDate: (step.requestDate || '').trim(),
             stepCompletedDate: (step.completedDate || '').trim(),
             stepDeliveryNameOverride: (step.deliveryName || '').trim(),
@@ -3999,8 +4019,9 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
     () => new Set((customerMaster || []).filter(c => (c.contractType || 'labo') === 'labo').map(c => (c.company || '').trim()).filter(Boolean)),
     [customerMaster]
   );
-  // この案件の会社で金額欄を出すか（ラボ会社のときは対象外）
-  const amountApplicable = !labCompanies.has((form.companyName || '').trim());
+  // この案件の会社で金額欄を出すか。
+  // 金額が入るのはオフショア案件のみ。ラボ案件は合計金額が別途決まっているため各ステップは0（金額欄なし）。
+  const amountApplicable = offshoreCompanies.has((form.companyName || '').trim());
   // 制作時間（時間）からの金額デフォルト：制作時間(h) × 2,500円（税抜）
   const STEP_AMOUNT_RATE = 2500;
   // 入力ページ内の表示切替：進行中一覧 / カレンダー / 担当者別
@@ -6514,10 +6535,13 @@ function ViewpointMetaPanel({ group, setViewpointMeta, setStepMeta, isOffshore, 
                       <div style={labelStyle}>依頼日</div>
                       <input type="date" value={t.stepRequestDate || ''} onChange={(e) => updateStep(t, { stepRequestDate: e.target.value })} style={{ ...inputBase, cursor: 'pointer' }} />
                     </div>
+                    {/* 金額はオフショア案件のみ。ラボ案件は合計金額が別途決まっているため0（欄なし） */}
+                    {isOffshore && (
                     <div>
                       <div style={labelStyle}>金額（円・税抜）</div>
                       <input value={t.stepAmount ?? ''} inputMode="numeric" placeholder="0" onChange={(e) => updateStep(t, { stepAmount: e.target.value })} style={{ ...inputBase, width: 90, textAlign: 'right' }} />
                     </div>
+                    )}
                     <div>
                       <div style={labelStyle}>社内外注者</div>
                       <input value={t.stepOutInHouse || ''} onChange={(e) => updateStep(t, { stepOutInHouse: e.target.value })} style={{ ...inputBase, width: 90 }} />
