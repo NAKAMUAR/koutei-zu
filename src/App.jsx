@@ -7292,8 +7292,18 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
       if (!isNonWorkingDay(d)) allDates.push(new Date(d));
     }
   } else {
-    // 全期間：今日（休みなら翌営業日）を先頭に、未来の営業日を並べる。
-    // 先頭＝今日 なので、初期表示で必ず左端が今日になる（過去日は表示しない）。
+    // 全期間：過去〜未来の営業日を並べる。過去も遡って確認できるようにする。
+    // 初期スクロール位置は「今日」を左端にする（下の useLayoutEffect）。左へスクロールすると過去が見える。
+    const PAST_DAYS = 60; // 過去に表示する営業日数（約3か月）
+    const past = [];
+    let back = addDays(new Date(today), -1);
+    let pcount = 0;
+    while (pcount < PAST_DAYS) {
+      if (!isNonWorkingDay(back)) { past.unshift(new Date(back)); pcount++; }
+      back = addDays(back, -1);
+    }
+    for (const d of past) allDates.push(d);
+    // 今日以降の営業日。
     let cursor = new Date(today);
     let count = 0;
     while (count < 72) {
@@ -7465,14 +7475,14 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
 
       {/* 表示モード切替＋期間ナビゲーション */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
-        {[['day', '1日'], ['scroll', '全期間'], ['simple', '簡易表示']].map(([m, label]) => (
+        {[['day', '1日'], ['week', '週間'], ['month', '月間'], ['scroll', '全期間'], ['simple', '簡易表示']].map(([m, label]) => (
           <button key={m} type="button"
             onClick={() => { setViewMode(m); setAnchor(today); }}
             style={tabStyle(viewMode === m, colors, fontJP)}>
             {label}
           </button>
         ))}
-        {viewMode === 'day' && (
+        {(viewMode === 'day' || viewMode === 'week' || viewMode === 'month') && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 10, flexWrap: 'wrap' }}>
             <button type="button" onClick={() => goStep(-1)}
               style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 3, padding: '6px 12px', cursor: 'pointer', fontFamily: fontJP, fontSize: 12, color: colors.text }}>
