@@ -1987,7 +1987,8 @@ export default function App() {
       const sim = simulateFormSchedule(form, tasksRef.current, settings, projectOrder, new Date());
       const hasStartPin = (form.viewpoints || []).some(v => v.manualStart);
       const moved = !!(sim && sim.moved && hasStartPin);
-      const violations = (sim && sim.deadlineViolations) || [];
+      // 案件編集モード中は納期超過の確認（納期警告）を出さない。
+      const violations = caseEditMode ? [] : ((sim && sim.deadlineViolations) || []);
       if (moved || violations.length > 0) {
         let reorder = null;
         if (violations.length > 0) {
@@ -4787,7 +4788,7 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
                 ※ 指定時刻に空きがないため、開始予定を移動しています
               </div>
             )}
-            {(previewSchedule?.deadlineViolations || []).map((v, i) => {
+            {!caseEditMode && (previewSchedule?.deadlineViolations || []).map((v, i) => {
               const dl = new Date(v.deadline + 'T00:00:00');
               return (
                 <div key={i} style={{ fontSize: 11, color: colors.accent, marginTop: 6, fontWeight: 600 }}>
@@ -5326,7 +5327,7 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
           </div>
         ) : listGroupMode === 'board' ? (
           // 担当者ボード：担当者ごとの進行中案件を一目で把握できる一覧（④）
-          <AssigneeBoard tasks={filteredActive} now={now} assigneeOrder={assigneeOrder} vpDeliveryCount={vpDeliveryCount} colors={colors} fontJP={fontJP} />
+          <AssigneeBoard tasks={filteredActive} now={now} assigneeOrder={assigneeOrder} vpDeliveryCount={vpDeliveryCount} caseEditMode={caseEditMode} colors={colors} fontJP={fontJP} />
         ) : listGroupMode === 'assignee' ? (
           // 担当者別表示：従業員マスタの並び順で担当者ごとにまとめ、タブで絞り込みできる
           (() => {
@@ -5850,13 +5851,15 @@ function ProjectInfoEditor({ pg, companyList, onSave, onCancel, colors, fontJP }
 // ============ 視点グループリスト ============
 // 担当者ボード（④）：担当者ごとの進行中案件を一目で把握する一覧。
 // 各担当者を1列のカードにし、視点（依頼項目）を納期の近い順にコンパクト表示する。
-function AssigneeBoard({ tasks, now, assigneeOrder, vpDeliveryCount, colors, fontJP }) {
+function AssigneeBoard({ tasks, now, assigneeOrder, vpDeliveryCount, caseEditMode, colors, fontJP }) {
   const todayYmd = fmtYMD(now);
   const soonYmd = fmtYMD(addDays(now, 2));
   const assignees = sortAssigneesByMaster([...new Set((tasks || []).map(t => t.assignee))], assigneeOrder);
 
-  // 納期・終了予定から緊急度を判定して色を返す
+  // 納期・終了予定から緊急度を判定して色を返す。
+  // 案件編集モード中は納期の警告（超過・本日・間近の色/バッジ）を隠す。
   const urgency = (g) => {
+    if (caseEditMode) return { level: 'none', color: colors.border, bg: '#fff', label: '' };
     const dl = g.deadline || '';
     const endYmd = g.scheduledEnd ? fmtYMD(g.scheduledEnd) : null;
     if (dl && (todayYmd > dl || (endYmd && endYmd > dl))) return { level: 'over', color: '#c1272d', bg: '#fbeaea', label: '納期超過' };
