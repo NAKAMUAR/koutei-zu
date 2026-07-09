@@ -4724,7 +4724,7 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <input type="date" value={form.projectRequestDate || ''}
                 onChange={(e) => setForm({ ...form, projectRequestDate: e.target.value })}
-                style={{ ...inputStyle, flex: '0 0 160px', width: 'auto' }} />
+                style={{ ...inputStyle, flex: '1 1 auto', minWidth: 0, width: 'auto' }} />
               {form.projectRequestDate && (
                 <button type="button" onClick={() => setForm({ ...form, projectRequestDate: '' })}
                   style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '6px 10px', borderRadius: 3, fontSize: 11, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP, whiteSpace: 'nowrap', flexShrink: 0 }}>
@@ -4738,7 +4738,7 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <input type="date" value={form.projectDeadline || ''}
                 onChange={(e) => setForm({ ...form, projectDeadline: e.target.value })}
-                style={{ ...inputStyle, flex: '0 0 160px', width: 'auto' }} />
+                style={{ ...inputStyle, flex: '1 1 auto', minWidth: 0, width: 'auto' }} />
               {form.projectDeadline && (
                 <button type="button" onClick={() => setForm({ ...form, projectDeadline: '' })}
                   style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '6px 10px', borderRadius: 3, fontSize: 11, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP, whiteSpace: 'nowrap', flexShrink: 0 }}>
