@@ -10,6 +10,7 @@ import {
   deliveryNameForNumber,
   metaFromGroup, num as vpNum, stepDeliveryName,
   computeRevisionStats,
+  DEFAULT_STEP_TYPES, normalizeStepTypes, resolveViewpointSteps, findStepType,
 } from './viewpoint/viewpointUtils.js';
 import { collectSalesSyncRows, reconcileLedger } from './viewpoint/salesSync.js';
 import { blankDoc, blankItem } from './billing/billingUtils.js';
@@ -143,18 +144,32 @@ const dateToDtLocal = (d) => {
 };
 
 // 依頼項目（視点）プリセット
+// プリセットのステップは種類マスタのID（DEFAULT_STEP_TYPES の id）で指定する。
 const VIEWPOINT_PRESETS = [
-  { id: 'pers', name: 'パース', steps: ['ホワイト', 'カラー', 'その他修正'] },
-  { id: 'photo', name: '写真合成', steps: ['写真合成'] },
+  { id: 'pers', name: 'パース', steps: ['white', 'color'] },
+  { id: 'photo', name: '写真合成', steps: [{ name: '写真合成' }] },
 ];
 // ステップ1件分の空テンプレート（種類・外注などの請求情報を含む）。
-function makeEmptyStep(name = '') {
+// stepTypeId: ステップ種類マスタの選択ID（プルダウン）。name は表示・検証用の素の名称。
+function makeEmptyStep(name = '', stepTypeId = '') {
   return {
-    name, hours: '', completedHours: '',
+    name, stepTypeId, hours: '', completedHours: '',
     amount: '', requestDate: '', completedDate: '', deliveryName: '',
     // 種類（初回/追加/修正）・外注情報（社内外注者/社外外注者/外注VND）。請求はステップが唯一の元データ。
     roundType: '', outInHouse: '', outExternal: '', outVND: '',
   };
+}
+// プリセットのステップ定義（種類ID文字列 or {name} or {typeId}）→ 空ステップに変換。
+function makeStepFromPreset(entry) {
+  if (typeof entry === 'string') {
+    const t = DEFAULT_STEP_TYPES.find(x => x.id === entry);
+    return t ? makeEmptyStep(t.label, t.id) : makeEmptyStep(entry);
+  }
+  if (entry && entry.typeId) {
+    const t = DEFAULT_STEP_TYPES.find(x => x.id === entry.typeId);
+    return t ? makeEmptyStep(t.label, t.id) : makeEmptyStep((entry.name || ''));
+  }
+  return makeEmptyStep((entry && entry.name) || '');
 }
 function makeViewpointFromPreset(preset) {
   if (!preset) return { viewpointName: '', viewpointNameExternal: '', viewpointCategory: '', assignee: '', manualStart: '', manualEnd: '', deadline: '', deliveryName: '', steps: [makeEmptyStep()] };
@@ -169,7 +184,7 @@ function makeViewpointFromPreset(preset) {
     deliveryName: '', // 納品名（納品用の視点名）の手動上書き。空なら自動（案件名_視点名）
     // ステップごとに金額・依頼日・完了日・種類・外注を持つ（ステップ＝納品単位。売上へ1ステップ1行で連携）
     // 種類は既定で空（''＝納品に数えない）。納品種類（初回/追加）はカードの請求パネルで明示的に設定する。
-    steps: preset.steps.map((name) => ({ ...makeEmptyStep(name), roundType: '' })),
+    steps: preset.steps.map(makeStepFromPreset),
   };
 }
 
@@ -1213,6 +1228,8 @@ export default function App() {
   // お客様マスタ（[{ id, company, contact }]）・従業員マスタ（[{ id, name, role }]）
   const [customerMaster, setCustomerMaster] = useState([]);
   const [employeeMaster, setEmployeeMaster] = useState([]);
+  // ステップ種類マスタ（新規案件のステップ・プルダウンの選択肢）。「マスタ」タブで編集可能。
+  const [stepTypeMaster, setStepTypeMaster] = useState(() => DEFAULT_STEP_TYPES.map(t => ({ ...t })));
   // 売上登録表（自動同期用）。null=未ロード, {}=空。視点の制作履歴から売上行を生成する。
   const [salesLedgerSync, setSalesLedgerSync] = useState(null);
   // メンバー許可リスト（オーナー以外にアクセスを許可する Gmail。設定画面から編集）
@@ -1421,6 +1438,12 @@ export default function App() {
       try { const arr = JSON.parse(val); if (Array.isArray(arr)) setEmployeeMaster(arr); }
       catch (e) { setEmployeeMaster([]); }
     });
+    // ステップ種類マスタを購読（未保存なら既定の6種類を使う）
+    const unsubStepTypes = storage.subscribe('stepTypeMaster', (val) => {
+      if (!val) { setStepTypeMaster(DEFAULT_STEP_TYPES.map(t => ({ ...t }))); return; }
+      try { const arr = JSON.parse(val); setStepTypeMaster(normalizeStepTypes(arr)); }
+      catch (e) { setStepTypeMaster(DEFAULT_STEP_TYPES.map(t => ({ ...t }))); }
+    });
 
     // タスクメモを購読
     const unsubMemos = storage.subscribe('memos', (val) => {
@@ -1491,6 +1514,7 @@ export default function App() {
       unsubOrder();
       unsubCustomer();
       unsubEmployee();
+      unsubStepTypes();
       unsubMemos();
       unsubSalesLedger();
       unsubMembers();
@@ -1834,6 +1858,12 @@ export default function App() {
     try { await storage.set('employeeMaster', JSON.stringify(arr)); }
     catch (e) { console.error('従業員マスタ保存エラー:', e); }
   };
+  const saveStepTypeMaster = async (arr) => {
+    const norm = normalizeStepTypes(arr);
+    setStepTypeMaster(norm);
+    try { await storage.set('stepTypeMaster', JSON.stringify(norm)); }
+    catch (e) { console.error('ステップ種類マスタ保存エラー:', e); }
+  };
 
   // 案件登録/更新時、フォームで新しく入力された担当者を従業員マスタへ自動追加する。
   // これにより次回以降の担当者候補や表示順（カレンダー等）に反映され、毎回マスタへ手入力する必要がなくなる。
@@ -1973,8 +2003,12 @@ export default function App() {
         let order = 0;
         let vpHasStep = false;
         const vpFirstIdx = upserts.length; // この視点のレコード開始位置（視点ごとの開始時間の適用先を探す用）
-        for (const step of vp.steps) {
-          const name = (step.name || '').trim();
+        // ステップ種類マスタから、回数付きの表示名・納品名サフィックスを解決（配列順で連番）
+        const vpResolved = resolveViewpointSteps(vp.steps, stepTypeMaster);
+        for (let stepIdx = 0; stepIdx < vp.steps.length; stepIdx++) {
+          const step = vp.steps[stepIdx];
+          const resolved = vpResolved[stepIdx] || { label: (step.name || '').trim(), deliverySuffix: '', typeId: '', paid: true };
+          const name = (resolved.label || step.name || '').trim();
           const hoursStr = step.hours === undefined || step.hours === null ? '' : String(step.hours);
           const hoursEmpty = hoursStr.trim() === '';
           const stepHours = hoursEmpty ? 0 : parseHM(hoursStr);
@@ -2022,8 +2056,12 @@ export default function App() {
             createdAt: existing?.createdAt || (baseTime + seq),
             // 登録日（自動記録・編集しても最初の登録日を維持）。案件の登録日はタスクの最早値
             registeredDate: existing?.registeredDate || fmtYMD(new Date(baseTime)),
+            // ステップ種類（プルダウン選択のマスタID）と納品名サフィックス（白色/色付/色付2…）
+            stepTypeId: resolved.typeId || step.stepTypeId || '',
+            stepDeliverySuffix: resolved.deliverySuffix || '',
             // ステップごとの金額・依頼日・完了日（ステップ＝納品単位。売上へ1ステップ1行で連携）
-            stepAmount: (step.amount === undefined || step.amount === null) ? '' : String(step.amount).trim(),
+            // 無料ステップ（種類が無料）は金額を反映しない（空に固定）。
+            stepAmount: resolved.paid === false ? '' : ((step.amount === undefined || step.amount === null) ? '' : String(step.amount).trim()),
             stepRequestDate: (step.requestDate || '').trim(),
             stepCompletedDate: (step.completedDate || '').trim(),
             stepDeliveryNameOverride: (step.deliveryName || '').trim(),
@@ -2287,6 +2325,7 @@ export default function App() {
         steps: sortedSteps.map(t => ({
           taskId: t.id,
           name: t.stepName || '',
+          stepTypeId: t.stepTypeId || (findStepType(stepTypeMaster, { name: t.stepName }) || {}).id || '',
           assignee: t.assignee || '',
           hours: fmtHM(t.hours),
           completedHours: fmtHM(t.completedHours || 0),
@@ -2426,6 +2465,7 @@ export default function App() {
       steps: tasksOfVp.map(t => ({
         taskId: t.id,
         name: t.stepName || '',
+        stepTypeId: t.stepTypeId || (findStepType(stepTypeMaster, { name: t.stepName }) || {}).id || '',
         assignee: t.assignee || '',
         hours: fmtHM(t.hours),
         completedHours: fmtHM(t.completedHours || 0),
@@ -2532,7 +2572,7 @@ export default function App() {
       const items = moneySteps.map(t => {
         const it = blankItem(docType);
         const rtId = (t.stepRoundType || '').trim() || 'initial';
-        const name = (t.stepDeliveryNameOverride || '').trim() || stepDeliveryName(base, t.stepName);
+        const name = (t.stepDeliveryNameOverride || '').trim() || stepDeliveryName(base, t.stepDeliverySuffix || t.stepName);
         it.name = `${name}（${roundTypeOf(rtId).label}）`;
         it.qty = '1';
         it.unit = String(vpNum(t.stepAmount));
@@ -3283,6 +3323,7 @@ export default function App() {
           <MasterView
             customerMaster={customerMaster} saveCustomerMaster={saveCustomerMaster}
             employeeMaster={employeeMaster} saveEmployeeMaster={saveEmployeeMaster}
+            stepTypeMaster={stepTypeMaster} saveStepTypeMaster={saveStepTypeMaster}
             settings={settings} assigneeList={assigneeList}
             addOvertime={addOvertime} removeOvertime={removeOvertime}
             addAbsence={addAbsence} removeAbsence={removeAbsence}
@@ -4034,7 +4075,18 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
   };
   const addStep = (vi) => {
     const vps = [...form.viewpoints];
-    vps[vi] = { ...vps[vi], steps: [...vps[vi].steps, { name: '', hours: '', completedHours: '', amount: '', requestDate: '', completedDate: '', deliveryName: '' }] };
+    vps[vi] = { ...vps[vi], steps: [...vps[vi].steps, makeEmptyStep()] };
+    setForm({ ...form, viewpoints: vps });
+  };
+  // ステップ種類（プルダウン）の選択。種類IDと表示名（素の名称）を同期し、無料種類なら金額をクリアする。
+  const updateStepType = (vi, si, typeId) => {
+    const vps = [...form.viewpoints];
+    const steps = [...vps[vi].steps];
+    const t = stepTypeMaster.find(x => x.id === typeId);
+    const next = { ...steps[si], stepTypeId: typeId, name: t ? t.label : steps[si].name };
+    if (t && t.paid === false) next.amount = ''; // 無料は金額を反映しない
+    steps[si] = next;
+    vps[vi] = { ...vps[vi], steps };
     setForm({ ...form, viewpoints: vps });
   };
   // 各ステップ名称に納品名（納品名＋ステップ名）を一括反映する。二重付与はしない。
@@ -4064,7 +4116,9 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
     const steps = [...vps[vi].steps];
     const cur = steps[si];
     const next = { ...cur, hours: value };
-    if (amountApplicable && (cur.amount === '' || cur.amount == null)) {
+    const curType = findStepType(stepTypeMaster, cur);
+    const isFree = curType && curType.paid === false;
+    if (amountApplicable && !isFree && (cur.amount === '' || cur.amount == null)) {
       const h = parseHM(value);
       if (!isNaN(h) && h > 0) next.amount = String(Math.round(h * STEP_AMOUNT_RATE));
     }
@@ -4922,10 +4976,16 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                   {/* ステップリスト（下段）：納品名はステップごとに持つ */}
                   <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {vp.steps.map((step, si) => {
+                      // マスタから回数付きの表示名・納品名サフィックスを解決（配列順で連番）
+                      const vpResolved = resolveViewpointSteps(vp.steps, stepTypeMaster);
+                      const resolved = vpResolved[si] || { label: step.name, deliverySuffix: '', typeId: step.stepTypeId || '', paid: true };
+                      const stepType = findStepType(stepTypeMaster, step);
+                      const isPaid = !stepType || stepType.paid !== false; // 種類未選択・不明は有料扱い（金額欄を出す）
+                      const selectValue = resolved.typeId || (step.name ? '__free__' : '');
                       const hNum = parseHM(step.hours);
                       const amtDefault = (!isNaN(hNum) && hNum > 0) ? String(Math.round(hNum * STEP_AMOUNT_RATE)) : '';
                       const vpBase = deliveryBaseName(form.projectName, vp.viewpointNameExternal || vp.viewpointName, vp.deliveryName);
-                      const stepDelivery = stepDeliveryName(vpBase, step.name);
+                      const stepDelivery = stepDeliveryName(vpBase, resolved.deliverySuffix || step.name);
                       return (
                       <div key={si} style={{
                         display: 'flex', gap: 6, alignItems: 'flex-end',
@@ -4938,20 +4998,33 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                           display: 'flex', alignItems: 'center', justifyContent: 'center',
                           fontSize: 11, fontWeight: 600, marginBottom: 1,
                         }}>{si + 1}</div>
-                        {/* ステップ名称 */}
-                        <div style={{ flex: '0 1 96px', minWidth: 78 }}>
-                          <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>ステップ名称</label>
-                          <input type="text" value={step.name}
-                            onChange={(e) => updateStep(vi, si, 'name', e.target.value)}
-                            placeholder="例: ホワイト" style={{ ...inputStyle, padding: '7px 10px', fontSize: 13 }} />
+                        {/* ステップ名称（プルダウン選択式。選択肢は「マスタ」タブで編集可能） */}
+                        <div style={{ flex: '0 1 150px', minWidth: 128 }}>
+                          <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>ステップ（種類）</label>
+                          <select value={selectValue}
+                            onChange={(e) => updateStepType(vi, si, e.target.value)}
+                            style={{ ...inputStyle, padding: '7px 8px', fontSize: 13, cursor: 'pointer' }}
+                            title="ステップの種類を選択。選択肢は「マスタ」タブのステップ設定で編集できます">
+                            <option value="">選択…</option>
+                            {stepTypeMaster.map(t => (
+                              <option key={t.id} value={t.id}>{t.label}</option>
+                            ))}
+                            {selectValue === '__free__' && (
+                              <option value="__free__">{step.name}（自由入力）</option>
+                            )}
+                          </select>
+                          {/* 回数付きの解決後の名称（例：カラー変更1回目（有料））を表示 */}
+                          {resolved.label && resolved.label !== step.name && (
+                            <div style={{ fontSize: 10, color: colors.textMute, marginTop: 3 }}>→ {resolved.label}</div>
+                          )}
                         </div>
-                        {/* 納品名（ステップごと。案件名_社外視点名_ステップ名称。空欄なら自動） */}
+                        {/* 納品名（ステップごと。空欄なら自動：案件名_社外視点名_納品名サフィックス。例：色付2） */}
                         <div style={{ flex: '1 1 120px', minWidth: 100 }}>
                           <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>納品名</label>
                           <input type="text" value={step.deliveryName || ''}
                             onChange={(e) => updateStep(vi, si, 'deliveryName', e.target.value)}
-                            placeholder={stepDelivery || '案件名_社外視点名_ステップ名称'}
-                            title="このステップの納品名。空欄なら自動（案件名_社外視点名_ステップ名称）。売上の制作名へ連携されます"
+                            placeholder={stepDelivery || '案件名_社外視点名_納品名'}
+                            title="このステップの納品名。空欄なら自動（案件名_社外視点名_白色/色付…）。売上の制作名へ連携されます"
                             style={{ ...inputStyle, padding: '7px 10px', fontSize: 13 }} />
                         </div>
                         {/* 依頼日 */}
@@ -4978,8 +5051,8 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                             )}
                           </div>
                         </div>
-                        {/* 金額（ラボ会社は対象外。制作時間×2,500円をデフォルト算出） */}
-                        {amountApplicable && (
+                        {/* 金額（ラボ会社は対象外。無料ステップも対象外。制作時間×2,500円をデフォルト算出） */}
+                        {amountApplicable && isPaid && (
                           <div style={{ flex: '0 0 86px' }}>
                             <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>金額（円）</label>
                             <input type="text" inputMode="numeric" value={step.amount ?? ''}
@@ -4987,6 +5060,13 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                               placeholder={amtDefault ? `自動 ${Number(amtDefault).toLocaleString('ja-JP')}` : '例: 30000'}
                               style={{ ...inputStyle, padding: '7px 8px', fontSize: 13, textAlign: 'right' }}
                               title="このステップ（納品）の金額（税抜）。制作時間×2,500円で自動算出（上書き可）。売上登録表へ1行連携" />
+                          </div>
+                        )}
+                        {/* 無料ステップは金額欄なし（金額を反映しない旨を明示） */}
+                        {amountApplicable && !isPaid && (
+                          <div style={{ flex: '0 0 86px' }}>
+                            <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>金額（円）</label>
+                            <div style={{ fontSize: 11, color: colors.textMute, padding: '7px 0' }}>無料</div>
                           </div>
                         )}
                         {/* 制作時間（変更すると金額を自動算出） */}
@@ -5016,6 +5096,29 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                       </div>
                       );
                     })}
+                    {/* 初回依頼の合計金額：ホワイト・カラー（1回目＝回数なしの有料ステップ）の金額合計 */}
+                    {amountApplicable && (() => {
+                      const initialSteps = vp.steps.filter(s => {
+                        const t = findStepType(stepTypeMaster, s);
+                        return t && t.paid !== false && !t.numbered;
+                      });
+                      const total = initialSteps.reduce((sum, s) => {
+                        const n = parseInt(String(s.amount ?? '').replace(/[^\d.-]/g, ''), 10);
+                        return sum + (isNaN(n) ? 0 : n);
+                      }, 0);
+                      if (initialSteps.length === 0 || total <= 0) return null;
+                      return (
+                        <div style={{
+                          display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+                          background: colors.accentSoft, border: `1px solid ${colors.accent}`,
+                          borderRadius: 4, padding: '7px 12px',
+                        }}>
+                          <span style={{ fontSize: 11.5, color: colors.accent, fontWeight: 700 }}>初回依頼 合計</span>
+                          <span style={{ fontSize: 10.5, color: colors.textMute }}>（ホワイト＋カラー 1回目）</span>
+                          <span style={{ fontSize: 14, color: colors.text, fontWeight: 700, marginLeft: 'auto' }}>¥{total.toLocaleString('ja-JP')}</span>
+                        </div>
+                      );
+                    })()}
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
                       <button type="button" onClick={() => addStep(vi)}
                         style={{
@@ -5026,7 +5129,7 @@ function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit
                         }}>
                         <Plus size={12} /> ステップを追加
                       </button>
-                      <span style={{ fontSize: 10, color: colors.textMute }}>納品名は各ステップ欄で自動表示・編集できます（空欄なら自動）</span>
+                      <span style={{ fontSize: 10, color: colors.textMute }}>ステップ（種類）はプルダウンで選択。選択肢は「マスタ」タブのステップ設定で編集できます</span>
                     </div>
                   </div>
                 </div>
@@ -6396,7 +6499,7 @@ function ViewpointMetaPanel({ group, setViewpointMeta, setStepMeta, isOffshore, 
               {steps.map(t => {
                 const rawType = (t.stepRoundType || '').trim();
                 const rt = rawType ? roundTypeOf(rawType) : null;
-                const autoName = stepDeliveryName(base, t.stepName);
+                const autoName = stepDeliveryName(base, t.stepDeliverySuffix || t.stepName);
                 return (
                   <div key={t.id} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end', background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 4, padding: '6px 8px' }}>
                     <span style={{ fontSize: 9, fontWeight: 700, color: rt ? '#fff' : colors.textMute, background: rt ? rt.color : '#eee', borderRadius: 8, padding: '2px 7px', alignSelf: 'center' }} title={t.stepName || ''}>{rt ? rt.short : '—'}</span>
@@ -6863,10 +6966,10 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
       <div style={{ flex: '1 1 200px', minWidth: 180 }}>
         {(() => {
           const vpBase = deliveryBaseName(task.projectName, task.viewpointNameExternal || task.viewpointName, task.deliveryNameOverride);
-          const stepDelivery = (task.stepDeliveryNameOverride || '').trim() || stepDeliveryName(vpBase, task.stepName);
+          const stepDelivery = (task.stepDeliveryNameOverride || '').trim() || stepDeliveryName(vpBase, task.stepDeliverySuffix || task.stepName);
           // 社内視点名ベースの納品名（併記用）。社外視点名が別にある場合のみ差分が出る。
           const vpBaseInternal = deliveryBaseName(task.projectName, task.viewpointName, task.deliveryNameOverride);
-          const stepDeliveryInternal = (task.stepDeliveryNameOverride || '').trim() || stepDeliveryName(vpBaseInternal, task.stepName);
+          const stepDeliveryInternal = (task.stepDeliveryNameOverride || '').trim() || stepDeliveryName(vpBaseInternal, task.stepDeliverySuffix || task.stepName);
           const amt = vpNum(task.stepAmount);
           const cd = task.stepCompletedDate || '';
           const cdStr = cd ? `${cd.split('T')[0]}${cd.split('T')[1] ? ' ' + cd.split('T')[1] : ''}` : '';
@@ -8739,12 +8842,14 @@ function DoneTaskRow({ task, onRestore, onDelete, onSetActualEnd, onEditProject,
 }
 
 // ============ マスタ管理ビュー ============
-function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEmployeeMaster, settings, assigneeList, addOvertime, removeOvertime, addAbsence, removeAbsence, addHolidays, removeHoliday, saveCompanyOrder, usedCompanies, colors, fontJP, fontDisplay }) {
+function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEmployeeMaster, stepTypeMaster, saveStepTypeMaster, settings, assigneeList, addOvertime, removeOvertime, addAbsence, removeAbsence, addHolidays, removeHoliday, saveCompanyOrder, usedCompanies, colors, fontJP, fontDisplay }) {
   // ローカル下書き（入力中の値）。props が更新されたら同期する
   const [customers, setCustomers] = useState(customerMaster);
   const [employees, setEmployees] = useState(employeeMaster);
+  const [stepTypes, setStepTypes] = useState(stepTypeMaster || []);
   useEffect(() => { setCustomers(customerMaster); }, [customerMaster]);
   useEffect(() => { setEmployees(employeeMaster); }, [employeeMaster]);
+  useEffect(() => { setStepTypes(stepTypeMaster || []); }, [stepTypeMaster]);
 
   // 表示切替：お客様設定 / 従業員設定 / 会社の表示順（進行中案件のタブと同じ要領）
   const [masterTab, setMasterTab] = useState('customer');
@@ -8811,6 +8916,21 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
     saveEmployeeMaster(next);
   };
 
+  // ステップ種類マスタ（新規案件のステップ・プルダウンの選択肢）
+  const commitStepTypes = (next) => { setStepTypes(next); saveStepTypeMaster(next); };
+  const addStepType = () => commitStepTypes([...stepTypes, { id: newId('st'), label: '', paid: true, deliveryBase: '', numbered: false }]);
+  const removeStepType = (id) => commitStepTypes(stepTypes.filter(s => s.id !== id));
+  const setStepTypeField = (id, field, val) => setStepTypes(ss => ss.map(s => s.id === id ? { ...s, [field]: val } : s));
+  const commitStepTypesNow = () => saveStepTypeMaster(stepTypes);
+  const moveStepType = (id, dir) => {
+    const i = stepTypes.findIndex(s => s.id === id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= stepTypes.length) return;
+    const next = [...stepTypes];
+    [next[i], next[j]] = [next[j], next[i]];
+    commitStepTypes(next);
+  };
+
   const inputStyle = {
     width: '100%', padding: '8px 10px', boxSizing: 'border-box',
     border: `1px solid ${colors.border}`, borderRadius: 4,
@@ -8837,7 +8957,7 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
     <div style={{ maxWidth: 880 }}>
       {/* 表示切替：お客様設定 / 従業員設定 / 会社の表示順 */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 20 }}>
-        {[{ id: 'customer', label: 'お客様設定' }, { id: 'employee', label: '従業員設定' }, { id: 'companyOrder', label: '会社の表示順' }, { id: 'holiday', label: 'ベトナムの祝日' }].map(t => (
+        {[{ id: 'customer', label: 'お客様設定' }, { id: 'employee', label: '従業員設定' }, { id: 'stepType', label: 'ステップ設定' }, { id: 'companyOrder', label: '会社の表示順' }, { id: 'holiday', label: 'ベトナムの祝日' }].map(t => (
           <button key={t.id} type="button" onClick={() => setMasterTab(t.id)}
             style={{
               padding: '8px 16px', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13, fontWeight: 600,
@@ -9129,6 +9249,75 @@ function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEm
           absences={settings?.absences || []} assigneeList={assigneeList}
           onAdd={addAbsence} onRemove={removeAbsence}
           colors={colors} fontJP={fontJP} />
+      </section>
+
+      </>)}
+
+      {masterTab === 'stepType' && (<>
+      {/* ステップ種類マスタ（新規案件のステップ・プルダウンの選択肢） */}
+      <section style={cardStyle}>
+        <h2 style={{ fontFamily: fontDisplay, fontSize: 18, margin: '0 0 4px 0', fontWeight: 500 }}>ステップ設定</h2>
+        <p style={{ fontSize: 12, color: colors.textMute, margin: '0 0 16px 0' }}>
+          新規案件の「ステップ（種類）」プルダウンの選択肢を編集します。<br />
+          ・<b>有料</b>のステップは金額欄が表示され、<b>無料</b>のステップは金額を反映しません。<br />
+          ・<b>納品名ベース</b>（例：白色・色付）が同じステップは、上から順に連番の納品名になります（1つ目＝ベースそのまま、2つ目以降＝色付2・色付3…）。<br />
+          ・<b>回数あり</b>にすると、同じ種類を複数入れたとき「1回目・2回目…」が自動で付きます（例：カラー変更1回目（有料））。
+        </p>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '0 2px' }}>
+            <div style={{ width: 30, flexShrink: 0, ...labelStyle }}>順</div>
+            <div style={{ flex: '2 1 0', ...labelStyle }}>名称（（有料）/（無料）を含む素の名称）</div>
+            <div style={{ width: 84, flexShrink: 0, ...labelStyle }}>有料/無料</div>
+            <div style={{ width: 96, flexShrink: 0, ...labelStyle }}>納品名ベース</div>
+            <div style={{ width: 72, flexShrink: 0, ...labelStyle }}>回数</div>
+            <div style={{ width: 34, flexShrink: 0 }} />
+          </div>
+          {stepTypes.length === 0 && (
+            <div style={{ fontSize: 12, color: colors.textMute, padding: '8px 2px' }}>
+              まだ登録がありません。「＋ ステップ種類を追加」から登録してください。
+            </div>
+          )}
+          {stepTypes.map((s, si) => (
+            <div key={s.id} style={{ display: 'flex', gap: 8, alignItems: 'center', borderRadius: 4, padding: 2 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2, width: 30, flexShrink: 0 }}>
+                <button type="button" onClick={() => moveStepType(s.id, -1)} disabled={si === 0}
+                  style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 2, padding: '1px 4px', cursor: si === 0 ? 'not-allowed' : 'pointer', color: si === 0 ? '#ccc' : colors.textMute, display: 'flex', alignItems: 'center', justifyContent: 'center' }} title="上へ">
+                  <ChevronUp size={11} />
+                </button>
+                <button type="button" onClick={() => moveStepType(s.id, 1)} disabled={si === stepTypes.length - 1}
+                  style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 2, padding: '1px 4px', cursor: si === stepTypes.length - 1 ? 'not-allowed' : 'pointer', color: si === stepTypes.length - 1 ? '#ccc' : colors.textMute, display: 'flex', alignItems: 'center', justifyContent: 'center' }} title="下へ">
+                  <ChevronDown size={11} />
+                </button>
+              </div>
+              <input type="text" value={s.label || ''}
+                onChange={(ev) => setStepTypeField(s.id, 'label', ev.target.value)}
+                onBlur={commitStepTypesNow}
+                placeholder="例: カラー変更（有料）" style={{ ...inputStyle, flex: '2 1 0' }} />
+              <select value={s.paid ? 'paid' : 'free'}
+                onChange={(ev) => commitStepTypes(stepTypes.map(x => x.id === s.id ? { ...x, paid: ev.target.value === 'paid' } : x))}
+                style={{ ...inputStyle, width: 84, flexShrink: 0, cursor: 'pointer' }} title="有料＝金額欄あり / 無料＝金額を反映しない">
+                <option value="paid">有料</option>
+                <option value="free">無料</option>
+              </select>
+              <input type="text" value={s.deliveryBase || ''}
+                onChange={(ev) => setStepTypeField(s.id, 'deliveryBase', ev.target.value)}
+                onBlur={commitStepTypesNow}
+                placeholder="例: 色付" style={{ ...inputStyle, width: 96, flexShrink: 0 }} title="納品名のベース。同じベースのステップで連番を共有します（例：色付→色付2）" />
+              <label style={{ width: 72, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: colors.text, cursor: 'pointer' }} title="同じ種類を複数入れたとき「1回目・2回目…」を自動で付ける">
+                <input type="checkbox" checked={!!s.numbered}
+                  onChange={(ev) => commitStepTypes(stepTypes.map(x => x.id === s.id ? { ...x, numbered: ev.target.checked } : x))} />
+                回数
+              </label>
+              <button type="button" onClick={() => removeStepType(s.id)} style={delBtnStyle} title="この行を削除">
+                <Trash2 size={14} />
+              </button>
+            </div>
+          ))}
+        </div>
+        <button type="button" onClick={addStepType} style={{ ...addBtnStyle, marginTop: 14 }}>
+          <Plus size={14} /> ステップ種類を追加
+        </button>
       </section>
 
       </>)}
