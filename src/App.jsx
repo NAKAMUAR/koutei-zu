@@ -2010,6 +2010,8 @@ export default function App() {
       const upserts = [];
       const baseTime = Date.now();
       let seq = 0;
+      // 金額が入るのはオフショア案件のみ（ラボ案件は各ステップ金額を0＝空に固定）。
+      const amountApplicable = offshoreCompanies.has((form.companyName || '').trim());
       for (const vp of form.viewpoints) {
         const vpName = (vp.viewpointName || '').trim();
         const vpAssignee = (vp.assignee || '').trim() || form.assignee.trim();
@@ -2029,11 +2031,11 @@ export default function App() {
           const hoursStr = step.hours === undefined || step.hours === null ? '' : String(step.hours);
           const hoursEmpty = hoursStr.trim() === '';
           const stepHours = hoursEmpty ? 0 : parseHM(hoursStr);
-          if (!name && hoursEmpty) continue;
-          if (!name) { return { error: `視点「${vpName}」で時間を入力したステップには名称も入力してください` }; }
-          if (isNaN(stepHours) || stepHours < 0) { return { error: `視点「${vpName}」の「${name}」の制作時間は HH:MM（時:分）で入力してください（例 08:00）` }; }
-          // 制作時間0のステップは登録不可（0のステップは残さない）
-          if (stepHours <= 0) { return { error: `視点「${vpName}」の「${name}」は制作時間が0です。制作時間を入力してください（制作時間0のステップは登録できません）` }; }
+          // 制作時間0のステップは登録しない（空欄ステップと同様にスキップ）。
+          // 名称（種類）だけ選んで時間未入力のステップも、ここで除外して登録対象にしない。
+          if (isNaN(stepHours) || stepHours <= 0) continue;
+          // 制作時間を入力したのに種類（名称）が未選択のステップは登録できない
+          if (!name) { return { error: `視点「${vpName}」で制作時間を入力したステップには種類（ステップ名）を選択してください` }; }
           const stepCompleted = step.completedHours === '' ? 0 : parseHM(step.completedHours);
           if (isNaN(stepCompleted) || stepCompleted < 0) { return { error: `「${name}」の完了時間が無効です` }; }
           if (stepCompleted > stepHours) { return { error: `「${name}」の完了時間が制作時間を超えています` }; }
@@ -5180,7 +5182,7 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
               </button>
             </div>
             <div style={{ fontSize: 10, color: colors.textMute, marginTop: 8 }}>
-              ※ 空欄の項目・ステップは登録されません ・ 制作時間は HH:MM（時:分）で入力（例 08:00・00:30）・ 0でも登録できます ・ 上から順に作業する想定でスケジュールされます ・ 視点は ▲▼ で並び替え、「統合（取り込み）」で他の視点のステップをこの視点にまとめられます
+              ※ 空欄の項目・ステップは登録されません ・ 制作時間は HH:MM（時:分）で入力（例 08:00・00:30）・ 制作時間0のステップは登録されません ・ 上から順に作業する想定でスケジュールされます ・ 視点は ▲▼ で並び替え、「統合（取り込み）」で他の視点のステップをこの視点にまとめられます
             </div>
           </div>
 
