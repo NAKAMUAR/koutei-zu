@@ -3274,7 +3274,7 @@ export default function App() {
 
       <main style={{ maxWidth: 1600, margin: '0 auto', padding: '28px' }}>
         {view === 'input' && (
-          <InputView form={form} setForm={setForm} handleSubmit={handleSubmit} registerDraftAndEdit={registerDraftAndEdit} editingId={editingId} editMode={editMode} caseEditMode={caseEditMode} vpDeliveryCount={vpDeliveryCount}
+          <InputView form={form} setForm={setForm} stepTypeMaster={stepTypeMaster} handleSubmit={handleSubmit} registerDraftAndEdit={registerDraftAndEdit} editingId={editingId} editMode={editMode} caseEditMode={caseEditMode} vpDeliveryCount={vpDeliveryCount}
             cancelEdit={() => { setEditingId(null); setEditMode(null); setForm(emptyForm); }}
             tasks={tasks} scheduled={scheduled}
             projectOrder={projectOrder} saveProjectOrder={saveProjectOrderPartial}
@@ -3300,7 +3300,7 @@ export default function App() {
           {/* カレンダーから案件編集を開いた場合、入力へ遷移せずスケジュールのすぐ下にフォームを表示 */}
           {calendarEdit && editMode && (
             <div style={{ marginTop: 24 }}>
-              <InputView embedded form={form} setForm={setForm} handleSubmit={handleSubmit} registerDraftAndEdit={registerDraftAndEdit} editingId={editingId} editMode={editMode} caseEditMode={caseEditMode} vpDeliveryCount={vpDeliveryCount}
+              <InputView embedded form={form} setForm={setForm} stepTypeMaster={stepTypeMaster} handleSubmit={handleSubmit} registerDraftAndEdit={registerDraftAndEdit} editingId={editingId} editMode={editMode} caseEditMode={caseEditMode} vpDeliveryCount={vpDeliveryCount}
                 cancelEdit={() => { setEditingId(null); setEditMode(null); setForm(emptyForm); setCalendarEdit(false); }}
                 tasks={tasks} scheduled={scheduled}
                 projectOrder={projectOrder} saveProjectOrder={saveProjectOrderPartial}
@@ -3997,7 +3997,7 @@ function MemberSettings({ memberEmails, isOwner, colors, fontJP }) {
   );
 }
 
-function InputView({ embedded, form, setForm, handleSubmit, registerDraftAndEdit, editingId, editMode, caseEditMode, cancelEdit, tasks, scheduled, vpDeliveryCount, projectOrder, saveProjectOrder, companyList, customerMaster, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, setTaskAssignee, completeProject, cancelProject, suspendProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, setViewpointMeta, setStepMeta, createBillingFromViewpoint, saveProjectInfo, setProjectDeadline, finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, resumeProject, projectList, projectInternalList, viewpointList, assigneeList, assigneeOrder, settings, now, selectedAssignee, setSelectedAssignee, companyOrder, onReorderAssignee, onReorderProject, onReassignViewpoint, colors, fontJP, fontDisplay }) {
+function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, registerDraftAndEdit, editingId, editMode, caseEditMode, cancelEdit, tasks, scheduled, vpDeliveryCount, projectOrder, saveProjectOrder, companyList, customerMaster, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, setTaskAssignee, completeProject, cancelProject, suspendProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, setViewpointMeta, setStepMeta, createBillingFromViewpoint, saveProjectInfo, setProjectDeadline, finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, resumeProject, projectList, projectInternalList, viewpointList, assigneeList, assigneeOrder, settings, now, selectedAssignee, setSelectedAssignee, companyOrder, onReorderAssignee, onReorderProject, onReassignViewpoint, colors, fontJP, fontDisplay }) {
   // お客様担当者の候補：会社名を選んでいればその会社に所属する担当者を表示
   // （会社名はひらがな/カタカナ/全半角の違いを無視して照合）
   const contactOptions = useMemo(() => {
