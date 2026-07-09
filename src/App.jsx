@@ -4148,6 +4148,16 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
     vps[vi] = { ...vps[vi], steps: vps[vi].steps.filter((_, idx) => idx !== si) };
     setForm({ ...form, viewpoints: vps });
   };
+  // ステップの並び替え（▲▼）。この順が登録時の stepOrder になり、呼び出し時もこの順で復元される。
+  const moveStep = (vi, si, dir) => {
+    const vps = [...form.viewpoints];
+    const steps = [...vps[vi].steps];
+    const sj = si + dir;
+    if (sj < 0 || sj >= steps.length) return;
+    [steps[si], steps[sj]] = [steps[sj], steps[si]];
+    vps[vi] = { ...vps[vi], steps };
+    setForm({ ...form, viewpoints: vps });
+  };
   const updateStep = (vi, si, field, value) => {
     const vps = [...form.viewpoints];
     const steps = [...vps[vi].steps];
@@ -5037,12 +5047,27 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
                         background: '#fbf9f4', border: `1px solid ${colors.border}`,
                         borderRadius: 4, padding: 10, flexWrap: 'wrap',
                       }}>
-                        <div style={{
-                          width: 24, height: 24, borderRadius: '50%', flexShrink: 0,
-                          background: colors.text, color: '#fff',
-                          display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          fontSize: 11, fontWeight: 600, marginBottom: 1,
-                        }}>{si + 1}</div>
+                        {/* 番号バッジ ＋ 並び替え（▲▼）。並び順は登録時の順番として保存される。 */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0, marginBottom: 1 }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                            <button type="button" onClick={() => moveStep(vi, si, -1)} disabled={si === 0}
+                              title="このステップを上へ"
+                              style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 2, padding: '0 3px', cursor: si === 0 ? 'not-allowed' : 'pointer', color: si === 0 ? '#ccc' : colors.textMute, display: 'flex', alignItems: 'center', lineHeight: 1 }}>
+                              <ChevronUp size={11} />
+                            </button>
+                            <button type="button" onClick={() => moveStep(vi, si, 1)} disabled={si === vp.steps.length - 1}
+                              title="このステップを下へ"
+                              style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 2, padding: '0 3px', cursor: si === vp.steps.length - 1 ? 'not-allowed' : 'pointer', color: si === vp.steps.length - 1 ? '#ccc' : colors.textMute, display: 'flex', alignItems: 'center', lineHeight: 1 }}>
+                              <ChevronDown size={11} />
+                            </button>
+                          </div>
+                          <div style={{
+                            width: 24, height: 24, borderRadius: '50%', flexShrink: 0,
+                            background: colors.text, color: '#fff',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            fontSize: 11, fontWeight: 600,
+                          }}>{si + 1}</div>
+                        </div>
                         {/* ステップ名称（プルダウン選択式。選択肢は「マスタ」タブで編集可能） */}
                         <div style={{ flex: '0 1 150px', minWidth: 128 }}>
                           <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>ステップ（種類）</label>
