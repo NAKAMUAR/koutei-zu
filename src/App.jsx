@@ -1941,6 +1941,27 @@ export default function App() {
     tasksStore.batch([], zeroIds).catch(e => console.error('制作時間0ステップ削除エラー:', e));
   }, [tasksLoaded]);
 
+  // 一度きりのデータ補正：案件「REN.39」の各ステップの完了時間を制作時間と同じ値にする。
+  // （過去に入れた REN.39 の完了時間が全て0になっていたため。冪等：一致していれば対象外）
+  const didFixREN39Completed = useRef(false);
+  useEffect(() => {
+    if (!tasksLoaded || didFixREN39Completed.current) return;
+    didFixREN39Completed.current = true;
+    // 区切り・大文字小文字の違いを吸収して「REN.39 / REN-39 / REN 39 / ren39」を同一視
+    const norm = (s) => (s || '').toString().replace(/[\s._-]/g, '').toUpperCase();
+    const isTarget = (t) => norm(t.projectName) === 'REN39' || norm(t.projectNameInternal) === 'REN39';
+    const patched = tasksRef.current
+      .filter(t => isTarget(t))
+      .filter(t => { const h = Number(t.hours) || 0; const c = Number(t.completedHours) || 0; return h > 0 && c !== h; })
+      .map(t => ({ ...t, completedHours: Number(t.hours) || 0 }));
+    if (patched.length === 0) return;
+    const patchMap = new Map(patched.map(p => [p.id, p]));
+    const next = tasksRef.current.map(t => patchMap.get(t.id) || t);
+    setTasks(next);
+    tasksRef.current = next;
+    tasksStore.batch(patched, []).catch(e => console.error('REN.39 完了時間補正エラー:', e));
+  }, [tasksLoaded]);
+
   // タスクメモの追加・更新（id が一致すれば更新、無ければ追加）
   const upsertMemo = (memo) => {
     setMemos(prev => {
