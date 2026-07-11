@@ -15,6 +15,7 @@ import {
 import { collectSalesSyncRows, reconcileLedger } from './viewpoint/salesSync.js';
 import { blankDoc, blankItem } from './billing/billingUtils.js';
 import { notify, ToastHost } from './ui/toast.jsx';
+import { confirmDialog, ConfirmHost } from './ui/confirmDialog.jsx';
 import { useEscKey } from './ui/useEscKey.js';
 import MemoView from './views/MemoView.jsx';
 import { ConfirmModal, TimeSelect, DurationSelect, NavButton, NavDropdown, Combobox } from './ui/controls.jsx';
@@ -1432,7 +1433,7 @@ export default function App() {
       const keptIds = new Set(upserts.filter(u => originalById.has(u.id)).map(u => u.id));
       const deletedIds = originalTasks.filter(t => !keptIds.has(t.id)).map(t => t.id);
       if (deletedIds.length > 0) {
-        if (!confirm(`${deletedIds.length}件のステップが削除されます。よろしいですか？`)) return;
+        if (!(await confirmDialog(`${deletedIds.length}件のステップが削除されます。よろしいですか？`, { title: 'ステップの削除', confirmLabel: '削除する', danger: true }))) return;
       }
 
       // シート由来タスクの削除を deletedExternalIds に記録
@@ -1484,7 +1485,7 @@ export default function App() {
           const detail = doneOut > 0
             ? `${needsRename.length}件（他視点アクティブ ${activeOut}件・完了済み ${doneOut}件）`
             : `他の視点 ${activeOut}件`;
-          const ok = confirm(
+          const ok = await confirmDialog(
             `案件名（または案件コード）を変更すると、\n` +
             `この案件の全タスク（${detail}）にも反映されます。\n` +
             `よろしいですか？`
@@ -1679,7 +1680,7 @@ export default function App() {
     const msg = `視点「${group.projectName} ／ ${group.viewpointName}」を削除しますか？\n` +
       `ぶら下がっているステップ ${detail} も一緒に削除されます。\n` +
       `この操作は取り消せません。`;
-    if (!confirm(msg)) return;
+    if (!(await confirmDialog(msg, { title: '視点の削除', confirmLabel: '削除する', danger: true }))) return;
 
     // シート由来タスクの削除を deletedExternalIds に記録（次回同期で復活させない）
     try {
@@ -1909,11 +1910,12 @@ export default function App() {
     return true;
   };
 
+  // タスク削除：確認ダイアログは出さず、すぐ削除して「元に戻す」トーストを出す
   const handleDelete = async (id) => {
-    if (!confirm('このタスクを削除しますか？')) return;
     const task = tasksRef.current.find(t => t.id === id);
+    if (!task) return;
     // シート由来タスクは削除済みリストに記録 → 次回同期で復活させない
-    if (task && task.externalId) {
+    if (task.externalId) {
       try {
         const current = await storage.get('deletedExternalIds');
         const list = (current && current.value) ? JSON.parse(current.value) : [];
@@ -1926,6 +1928,24 @@ export default function App() {
       }
     }
     await removeTask(id);
+    const label = `${task.projectName || ''}${task.viewpointName ? ' ／ ' + task.viewpointName : ''}${task.stepName ? '（' + task.stepName + '）' : ''}`;
+    notify(`タスク「${label}」を削除しました`, 'info', {
+      duration: 10000,
+      action: {
+        label: '元に戻す',
+        onClick: async () => {
+          await saveTasks(prev => normalizePriorities([...prev, task]));
+          if (task.externalId) {
+            try {
+              const current = await storage.get('deletedExternalIds');
+              const list = (current && current.value) ? JSON.parse(current.value) : [];
+              const next = list.filter(x => x !== task.externalId);
+              if (next.length !== list.length) await storage.set('deletedExternalIds', JSON.stringify(next));
+            } catch (e) { console.warn('削除済みリストの復元に失敗:', e); }
+          }
+        },
+      },
+    });
   };
 
   const toggleStatus = (id) => {
@@ -2020,11 +2040,11 @@ export default function App() {
 
   // 「案件中止」：未完了タスクを「中止」として完了タブへ移動する。
   // 実績（completedHours）はそのまま残し、actualEnd は記録しない（後続スケジュールに影響させない）
-  const cancelProject = (projectName) => {
+  const cancelProject = async (projectName) => {
     if (!projectName) return;
     const activeTasks = scheduled.active.filter(t => t.projectName === projectName);
     if (activeTasks.length === 0) { notify('この案件には未完了のタスクがありません'); return; }
-    if (!confirm(`案件「${projectName}」を中止にしますか？\n未完了のタスク ${activeTasks.length}件が「中止」として完了タブへ移動します。\n（完了タブの「戻す」で復元できます）`)) return;
+    if (!(await confirmDialog(`案件「${projectName}」を中止にしますか？\n未完了のタスク ${activeTasks.length}件が「中止」として完了タブへ移動します。\n（完了タブの「戻す」で復元できます）`, { title: '案件の中止', confirmLabel: '中止にする', danger: true }))) return;
     const idSet = new Set(activeTasks.map(t => t.id));
     const nowMs = Date.now();
     saveTasks(prev => normalizePriorities(prev.map(t =>
@@ -2038,11 +2058,11 @@ export default function App() {
   // 「制作中断」：お客様へ納品後の確認待ちなどで進行できない案件を、一旦スケジュールから外す。
   // 未完了タスクに suspended フラグを立てるだけ（完了にはしない・実績はそのまま）。
   // 「制作中断」一覧へ移り、制作再開でいつでも進行中（スケジュール）へ戻せる。
-  const suspendProject = (projectName) => {
+  const suspendProject = async (projectName) => {
     if (!projectName) return;
     const activeTasks = scheduled.active.filter(t => t.projectName === projectName);
     if (activeTasks.length === 0) { notify('この案件には未完了のタスクがありません'); return; }
-    if (!confirm(`案件「${projectName}」を制作中断にしますか？\nスケジュールから一旦外れ、「制作中断」一覧へ移動します。\n（制作再開でいつでも進行中へ戻せます）`)) return;
+    if (!(await confirmDialog(`案件「${projectName}」を制作中断にしますか？\nスケジュールから一旦外れ、「制作中断」一覧へ移動します。\n（制作再開でいつでも進行中へ戻せます）`, { title: '制作中断', confirmLabel: '中断する' }))) return;
     const idSet = new Set(activeTasks.map(t => t.id));
     const nowMs = Date.now();
     saveTasks(prev => prev.map(t =>
@@ -2069,8 +2089,8 @@ export default function App() {
     saveTasks(prev => prev.map(t => reviewMatch(t, g) ? { ...t, reviewState: null } : t));
   };
   // 「進行中に戻す」：確認待ちから進行中へ差し戻す
-  const reopenReview = (g) => {
-    if (!confirm(`「${g.projectName} ／ ${g.viewpointName}」を進行中に戻しますか？`)) return;
+  const reopenReview = async (g) => {
+    if (!(await confirmDialog(`「${g.projectName} ／ ${g.viewpointName}」を進行中に戻しますか？`, { confirmLabel: '進行中に戻す' }))) return;
     saveTasks(prev => normalizePriorities(prev.map(t => reviewMatch(t, g)
       ? { ...t, status: 'pending', reviewState: null, reviewAt: null, reviewUpdatedAt: null, completedAt: null, actualEnd: null }
       : t)));
@@ -2467,6 +2487,7 @@ export default function App() {
   return (
     <div style={{ minHeight: '100vh', background: colors.bg, fontFamily: fontJP, color: colors.text }}>
       <ToastHost fontJP={fontJP} />
+      <ConfirmHost fontJP={fontJP} fontDisplay={fontDisplay} />
       <header style={{ borderBottom: `1px solid ${colors.border}`, background: colors.surface }}>
         <div style={{ maxWidth: 1600, margin: '0 auto', padding: '20px 28px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16 }}>
           <div>
@@ -2843,8 +2864,8 @@ function MemberSettings({ memberEmails, isOwner, colors, fontJP }) {
     if (!memberEmails.includes(email)) save([...memberEmails, email]);
     setInput('');
   };
-  const remove = (email) => {
-    if (!confirm(`${email} のアクセス許可を解除しますか？`)) return;
+  const remove = async (email) => {
+    if (!(await confirmDialog(`${email} のアクセス許可を解除しますか？`, { title: 'メンバーの解除', confirmLabel: '解除する', danger: true }))) return;
     save(memberEmails.filter(e => e !== email));
   };
   return (
@@ -3263,7 +3284,7 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
         if (ok) { setQuoteOpen(false); return; }
       }
       // 登録できなかった場合（案件名・視点未入力など）は従来どおり破棄確認
-      if (!window.confirm('入力中の内容を破棄して引用しますか？')) return;
+      if (!(await confirmDialog('入力中の内容を破棄して引用しますか？', { confirmLabel: '破棄して引用' }))) return;
     }
     applyQuote(proj);
   };
@@ -3290,13 +3311,13 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
     if (!recallMatch) return [];
     return computeRevisionStats(tasks.filter(t => (t.projectName || '') === recallMatch.projectName));
   }, [recallMatch, tasks]);
-  const applyRecall = () => {
+  const applyRecall = async () => {
     const proj = recallMatch;
     if (!proj) return;
     const vpDirty = (form.viewpoints || []).some(vp =>
       (vp.viewpointNameExternal || '').trim() || (vp.deadline || '').trim() || (vp.assignee || '').trim() ||
       (vp.steps || []).some(s => String(s.hours ?? '').trim() || String(s.completedHours ?? '').trim()));
-    if (vpDirty && !window.confirm('入力中の視点の内容を、過去案件の視点（修正）で置き換えます。よろしいですか？')) return;
+    if (vpDirty && !(await confirmDialog('入力中の視点の内容を、過去案件の視点（修正）で置き換えます。よろしいですか？', { confirmLabel: '置き換える' }))) return;
     // 過去タスクから視点ごとの最新情報（社外視点名・内観/外観・担当者）とステップ構成を拾う
     const projTasks = tasks.filter(t => (t.projectName || '') === proj.projectName)
       .slice().sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
@@ -3551,10 +3572,10 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
                 inputStyle={inputStyle} colors={colors} fontJP={fontJP} wrapperStyle={{ flex: 1 }} />
               {editMode?.type === 'project' && (
                 <button type="button"
-                  onClick={() => {
+                  onClick={async () => {
                     const a = (form.assignee || '').trim();
                     if (!a) { notify('適用する担当者名を入力してください'); return; }
-                    if (!confirm(`この案件の全視点（${form.viewpoints.length}件）の担当者を「${a}」に一括変更します。よろしいですか？`)) return;
+                    if (!(await confirmDialog(`この案件の全視点（${form.viewpoints.length}件）の担当者を「${a}」に一括変更します。よろしいですか？`, { confirmLabel: '一括変更する' }))) return;
                     setForm({
                       ...form,
                       viewpoints: form.viewpoints.map(vp => ({ ...vp, assignee: a })),
@@ -3817,13 +3838,13 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
                       <div style={{ flexShrink: 0, marginBottom: 1 }}>
                         <label style={{ ...labelStyle, fontSize: 11, marginBottom: 3 }}>統合（取り込み）</label>
                         <select value="" title="選んだ視点のステップを、この視点に統合します（元の視点は削除されます）"
-                          onChange={(e) => {
+                          onChange={async (e) => {
                             const src = parseInt(e.target.value, 10);
                             e.target.value = '';
                             if (isNaN(src) || src === vi) return;
                             const srcName = (form.viewpoints[src]?.viewpointName || '').trim() || `視点 ${src + 1}`;
                             const dstName = (vp.viewpointName || '').trim() || `視点 ${vi + 1}`;
-                            if (!window.confirm(`「${srcName}」のステップを「${dstName}」に統合します。\n元の「${srcName}」は削除されます。よろしいですか？`)) return;
+                            if (!(await confirmDialog(`「${srcName}」のステップを「${dstName}」に統合します。\n元の「${srcName}」は削除されます。よろしいですか？`, { title: '視点の統合', confirmLabel: '統合する' }))) return;
                             mergeViewpoint(vi, src);
                           }}
                           style={{ ...inputStyle, padding: '8px 8px', fontSize: 12, cursor: 'pointer', width: 'auto', minWidth: 130 }}>
@@ -6057,8 +6078,8 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
           ) : null}
           {onSetManualStart && (
             <button type="button"
-              onClick={() => {
-                if (window.confirm('この工程を「今」から開始（割り込み）します。\n同じ担当者で作業中の案件は、現在時刻の前後に自動で分割されます。よろしいですか？')) {
+              onClick={async () => {
+                if (await confirmDialog('この工程を「今」から開始（割り込み）します。\n同じ担当者で作業中の案件は、現在時刻の前後に自動で分割されます。よろしいですか？', { confirmLabel: '今から開始' })) {
                   onSetManualStart(dateToDtLocal(new Date()));
                 }
               }}

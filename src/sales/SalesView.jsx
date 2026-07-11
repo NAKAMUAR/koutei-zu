@@ -12,6 +12,7 @@ import {
 } from './salesUtils.js';
 import { computeRevisionStats } from '../viewpoint/viewpointUtils.js';
 import { collectQuoteCandidates } from '../viewpoint/salesSync.js';
+import { confirmDialog } from '../ui/confirmDialog.jsx';
 
 export default function SalesView({ tasks, customerMaster, now, onEditProject, colors, fontJP, fontDisplay }) {
   const [ledger, setLedger] = useState({});      // { ym: { rows, settings, updatedAt } }
@@ -99,9 +100,9 @@ export default function SalesView({ tasks, customerMaster, now, onEditProject, c
     updRow(editRow.id, patch);
     setEditRow(null);
   };
-  const deleteEditRow = () => {
+  const deleteEditRow = async () => {
     if (!editRow) return;
-    if (!window.confirm('この売上行を削除しますか？')) return;
+    if (!(await confirmDialog('この売上行を削除しますか？', { title: '売上行の削除', confirmLabel: '削除する', danger: true }))) return;
     removeRow(editRow.id);
     setEditRow(null);
   };
@@ -278,7 +279,7 @@ function RowEditModal({ row, settings, ym, companyList, hasProject, onSave, onDe
                 )}
                 {d.srcRound !== null && (
                   <button type="button"
-                    onClick={() => { if (window.confirm('自動連携を解除して手動行にしますか？\n以後、工程図側を変更してもこの行には反映されません（行が消えることもなくなります）。')) setD(prev => ({ ...prev, srcRound: null, srcVp: null })); }}
+                    onClick={async () => { if (await confirmDialog('自動連携を解除して手動行にしますか？\n以後、工程図側を変更してもこの行には反映されません（行が消えることもなくなります）。', { confirmLabel: '連携を解除' })) setD(prev => ({ ...prev, srcRound: null, srcVp: null })); }}
                     style={{ padding: '6px 12px', background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12 }}>
                     連携を解除して手動行にする
                   </button>

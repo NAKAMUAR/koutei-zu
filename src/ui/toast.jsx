@@ -6,10 +6,11 @@ import React, { useEffect, useState } from 'react';
 const EVENT_NAME = 'kz-toast';
 let seq = 0;
 
-export function notify(message, type = 'warn') {
+// opts.action = { label, onClick }（「元に戻す」等のボタン）、opts.duration = 表示ミリ秒
+export function notify(message, type = 'warn', opts = {}) {
   if (typeof window === 'undefined') return;
   window.dispatchEvent(new CustomEvent(EVENT_NAME, {
-    detail: { id: `t${Date.now()}-${seq++}`, message: String(message ?? ''), type },
+    detail: { id: `t${Date.now()}-${seq++}`, message: String(message ?? ''), type, action: opts.action || null, duration: opts.duration },
   }));
 }
 
@@ -31,7 +32,7 @@ export function ToastHost({ fontJP = "'Noto Sans JP', sans-serif" }) {
       setToasts(prev => [...prev.slice(-4), t]); // 最大5件まで保持
       setTimeout(() => {
         setToasts(prev => prev.filter(x => x.id !== t.id));
-      }, AUTO_DISMISS_MS);
+      }, t.duration || AUTO_DISMISS_MS);
     };
     window.addEventListener(EVENT_NAME, onToast);
     return () => window.removeEventListener(EVENT_NAME, onToast);
@@ -59,6 +60,21 @@ export function ToastHost({ fontJP = "'Noto Sans JP', sans-serif" }) {
             }}>
             <span aria-hidden="true" style={{ fontWeight: 700, flexShrink: 0 }}>{s.icon}</span>
             <span style={{ flex: 1 }}>{t.message}</span>
+            {t.action && (
+              <button type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setToasts(prev => prev.filter(x => x.id !== t.id));
+                  try { t.action.onClick(); } catch (err) { console.error(err); }
+                }}
+                style={{
+                  flexShrink: 0, background: '#fff', border: `1px solid ${s.color}`, color: s.color,
+                  borderRadius: 4, padding: '4px 12px', fontFamily: fontJP, fontSize: 12.5,
+                  fontWeight: 700, cursor: 'pointer',
+                }}>
+                {t.action.label}
+              </button>
+            )}
           </div>
         );
       })}

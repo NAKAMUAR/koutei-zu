@@ -5,6 +5,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Plus, Trash2, Edit2, Copy, Printer, X, FileText, Search, Building2 } from 'lucide-react';
 import { storage, billingStore } from '../firebase.js';
 import { notify } from '../ui/toast.jsx';
+import { confirmDialog } from '../ui/confirmDialog.jsx';
 import BillingDocument from './BillingDocument.jsx';
 import {
   DOC_TYPES, docTypeOf, blankDoc, blankItem, formatYen, formatJDate, computeTotals,
@@ -53,8 +54,8 @@ export default function BillingView({ customerMaster, tasks, now, colors, fontJP
     billingStore.set(stamped.id, stamped).catch(e => console.error('帳票保存エラー:', e));
     return stamped;
   };
-  const deleteDoc = (id) => {
-    if (!confirm('この帳票を削除しますか？この操作は取り消せません。')) return;
+  const deleteDoc = async (id) => {
+    if (!(await confirmDialog('この帳票を削除しますか？この操作は取り消せません。', { title: '帳票の削除', confirmLabel: '削除する', danger: true }))) return;
     setDocs(prev => prev.filter(d => d.id !== id));
     billingStore.remove(id).catch(e => console.error('帳票削除エラー:', e));
     if (editing && editing.id === id) setEditing(null);
@@ -339,8 +340,8 @@ function BillingEditor({ initial, customerMaster, tasks, onSave, onSaveClose, on
 
   const markSaved = (d) => { savedJson.current = JSON.stringify(d); };
   const handleSave = () => { onSave(doc); markSaved(doc); };
-  const handleClose = () => {
-    if (dirty && !confirm('保存されていない変更があります。破棄して一覧へ戻りますか？')) return;
+  const handleClose = async () => {
+    if (dirty && !(await confirmDialog('保存されていない変更があります。破棄して一覧へ戻りますか？', { confirmLabel: '破棄して戻る', danger: true }))) return;
     onClose();
   };
 
@@ -353,7 +354,7 @@ function BillingEditor({ initial, customerMaster, tasks, onSave, onSaveClose, on
   }, [dirty]);
 
   // 印刷（PDF出力）。主要項目が空なら確認してから進む
-  const handlePrint = () => {
+  const handlePrint = async () => {
     const missing = [];
     if (!(doc.subject || '').trim()) missing.push('件名');
     if (isOrder) {
@@ -362,7 +363,7 @@ function BillingEditor({ initial, customerMaster, tasks, onSave, onSaveClose, on
       missing.push('宛先 会社名');
     }
     if (isInvoice && !(doc.paymentDeadline || '').trim()) missing.push('支払期限');
-    if (missing.length && !confirm(`「${missing.join('」「')}」が未入力です。このまま印刷しますか？`)) return;
+    if (missing.length && !(await confirmDialog(`「${missing.join('」「')}」が未入力です。このまま印刷しますか？`, { confirmLabel: 'このまま印刷' }))) return;
     onSave(doc); markSaved(doc); window.print();
   };
 
