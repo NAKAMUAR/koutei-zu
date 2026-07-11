@@ -29,14 +29,13 @@
 
 ユーザーから **「デザイン復元：design-v1」** というメッセージ（またはこれに準ずる「UI改善前のデザインに戻して」という明確な依頼）が来たら、以下の手順で 2026-07 の UI改善を取り消して元のデザインへ戻すこと：
 
-- 対象コミット: `02faebe`（UI改善一式：ナビ整理・トースト通知・段階登録・操作性の磨き込み）
-- 改善前のベースライン: `ded4cf4`
-- 手順（推奨）: `git revert --no-edit 02faebe` を実行し、コンフリクトが出たら「改善前（ded4cf4 時点）の見た目」を優先して解消する。
-  - revert が大きく衝突する場合の代替: `git checkout ded4cf4 -- src/` で src を丸ごと戻す。ただしこの方法は 02faebe より後に入った src の機能修正も消えるため、`git log --oneline 02faebe..HEAD -- src/` で後続コミットを確認し、必要な変更は再適用すること。
+- 改善前のベースライン: `ded4cf4`。UI改善は `02faebe` から始まる一連のコミット（第1弾 `02faebe`・ガード `bf70e34`・分割 `e6587da`・テスト `aa53d75`・confirm置換 `063475f`・レスポンシブ/検索 `1e009cd` とその後続。`git log --oneline ded4cf4..HEAD` で確認）。
+- 手順（推奨）: `git revert --no-edit ded4cf4..HEAD` で UI改善コミット群を一括 revert する（改善後に UI改善以外の機能修正コミットが入っている場合は、そのコミットだけ revert 対象から除外する）。コンフリクトは「改善前（ded4cf4 時点）の見た目」を優先して解消する。UI品質ガード・テストも同時に取り消されるため、追加のガード解除作業は不要。
+  - revert が大きく衝突する場合の代替: `git checkout ded4cf4 -- src/ scripts/ package.json` で丸ごと戻し、`src/ui/ src/views/ src/lib/ scripts/tests/`（ded4cf4 に無いファイル）を削除する。ただしこの方法は改善後に入った機能修正も消えるため、`git log --oneline ded4cf4..HEAD -- src/` で後続コミットを確認し、必要な変更は再適用すること。
 - 戻した後は通常どおりビルド・デプロイ・push（上記の必須運用ルール）を実施する。
-- **注意**: 復元すると下記「UI品質ガード」に違反してビルドが失敗するため、復元時は `scripts/check-ui-rules.mjs` と package.json の `prebuild` も併せて削除（または該当ルールを無効化）すること。復元フレーズによる復元は、ガード解除が許可される唯一のケース。
+- 復元フレーズによる復元は、下記「UI品質ガード」の解除が許可される唯一のケース。
 
-> UI改善の内容: ナビの3グループ化（経理・管理ドロップダウン）／案件編集モードのヘッダー内トグル化／alert()→トースト通知／データ更新ボタンの設定パネル移動／「登録して詳細編集へ」ボタン／Escでモーダル閉じ／最小フォント11px化／App.jsx の部分分割（src/ui/・src/views/・src/lib/）。
+> UI改善の内容（第1弾＋第2弾）: ナビの3グループ化（経理・管理ドロップダウン）／案件編集モードのヘッダー内トグル化／alert()→トースト通知／confirm()→アプリ内確認ダイアログ／タスク削除の「元に戻す」トースト／データ更新ボタンの設定パネル移動／「登録して詳細編集へ」ボタン／Escでモーダル閉じ・フォーカス管理・aria-label／最小フォント11px化／レスポンシブ対応（900px以下でナビをメニュー化）／ヘッダーのグローバル検索／App.jsx の分割（src/ui/・src/views/・src/lib/）／スケジューラの自動テスト。
 
 ## UI品質ガード（AI・人を問わず全修正に適用）
 
@@ -44,11 +43,12 @@
 
 守るべきルール（＝チェック内容）：
 
-1. **alert() 禁止** — 通知は `src/ui/toast.jsx` の `notify(message, type)` を使う（type: 'warn' | 'error' | 'info'）
-2. **分割済みモジュールを App.jsx へ再統合しない** — `src/ui/`（toast・controls・useEscKey）、`src/views/MemoView.jsx`、`src/lib/text.js` を維持
-3. **App.jsx の構造維持** — ルートに `<ToastHost />`、ナビは `<NavDropdown>` による経理・管理のグループ化を維持
+1. **alert()・confirm() 禁止** — 通知は `src/ui/toast.jsx` の `notify(message, type, opts)`、確認は `src/ui/confirmDialog.jsx` の `await confirmDialog(message, opts)` を使う（危険操作は `danger: true`・ボタンラベルは操作名にする）
+2. **分割済みモジュールを App.jsx へ再統合しない** — `src/ui/`（toast・controls・useEscKey・confirmDialog・useMediaQuery）、`src/views/MemoView.jsx`、`src/lib/`（text・datetime・colors・scheduler）を維持
+3. **App.jsx の構造維持** — ルートに `<ToastHost />` と `<ConfirmHost />`、ナビは `<NavDropdown>` による経理・管理のグループ化、ヘッダーの `<GlobalSearch>`、`useMediaQuery()` による狭幅レイアウトを維持
 4. **最小フォント 11px** — App.jsx で `fontSize: 10.5` 禁止、`fontSize: 10` はロゴ下タグライン2箇所のみ許容
-5. **モーダルの Esc 閉じ** — `src/ui/controls.jsx` の `useEscKey()` を維持。新しいモーダルを作るときも `useEscKey(onCancel)` を入れる
+5. **モーダルの Esc 閉じ** — `src/ui/controls.jsx` の `useEscKey()` を維持。新しいモーダルを作るときも `useEscKey(onCancel)`・`role="dialog"` を入れる
+6. **スケジューラのテスト維持** — `scripts/tests/scheduler.test.mjs` と package.json の prebuild からのテスト実行（`npm test`）を維持。スケジューラ（`src/lib/scheduler.js`）の挙動を意図的に変えるときはテストも更新する
 
 > `scripts/check-ui-rules.mjs` 自体の削除・緩和は禁止。例外は (a) ユーザーが明示的に指示した場合、(b) 復元フレーズ「デザイン復元：design-v1」による正式なデザイン復元の場合のみ。新しい UI 上の約束事ができたら、このガードにルールを**追加**していくのは歓迎。
 
@@ -62,6 +62,8 @@
 ## 技術スタック
 
 - React 18 + Vite 5（JavaScript / JSX、TypeScript不使用）、インラインスタイル、lucide-react
+- ソース構成: `src/App.jsx`（メインビュー群）＋ `src/lib/`（scheduler=スケジューラ純粋ロジック・datetime・colors・text）＋ `src/ui/`（toast・confirmDialog・controls・useEscKey・useMediaQuery）＋ `src/views/MemoView.jsx` ＋ billing/ sales/ project/ viewpoint/
+- テスト: `npm test`（= `node --test scripts/tests/`）。`npm run build` の prebuild で UI品質ガードとともに毎回自動実行される
 - バックエンド: Firebase（Cloud Firestore + Auth）。`storage`（`workspaces/{id}/data/{key}` の汎用KV）、`tasksStore`（タスク1件=1ドキュメント）、`billingStore`（帳票1件=1ドキュメント、`data/bill_{id}`）、`salesStore`（売上1か月=1ドキュメント、`data/sales_{YYYY-MM}`）
   - 帳票・売上の旧1ドキュメント集中保存（`billingDocuments` / `salesLedger`）は起動時に自動移行され、旧データは `*_backup` キーへ退避される
 - ホスティング: GitHub Pages（`gh-pages` で `dist/` を公開）
