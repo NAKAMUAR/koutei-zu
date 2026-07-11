@@ -15,7 +15,7 @@ import { AssigneeView } from './AssigneeView.jsx';
 function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdit, selectedAssignee, setSelectedAssignee }) {
   const {
     colors, fontJP, fontDisplay,
-    tasks, scheduled, settings, now, caseEditMode,
+    tasks, scheduled, settings, now,
     projectOrder, projectList, projectInternalList, viewpointList,
     assigneeList, assigneeOrder, companyList, customerMaster,
     stepTypeMaster, vpDeliveryCount,
@@ -325,11 +325,35 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
   const [riskAck, setRiskAck] = useState(false);
   const riskKey = atRiskProjects.map(p => p.projectName).sort().join('|');
   useEffect(() => { setRiskAck(false); }, [riskKey]);
+  // 「今日は表示しない」（日付キー付きで localStorage に保存。翌日には自動で戻る）
+  const todayKey = fmtYMD(now);
+  const [riskMutedDay, setRiskMutedDay] = useState(() => {
+    try { return localStorage.getItem('kz-riskMute') || ''; } catch (e) { return ''; }
+  });
+  const riskMutedToday = riskMutedDay === todayKey;
+  const muteRiskToday = () => {
+    setRiskMutedDay(todayKey);
+    try { localStorage.setItem('kz-riskMute', todayKey); } catch (e) {}
+  };
 
   // 予測遅延（事前警告）：納期はまだ先だが、終了予定がこのままだと納期を超える視点。
   // 赤警告（納期当日・超過）より前の段階で担当替え・優先順位変更の判断材料にする。
   const lateRisks = useMemo(() => computeLateRisks(scheduled.active, now), [scheduled.active, now]);
   const [lateRiskOpen, setLateRiskOpen] = useState(true);
+  // 予測遅延のミュート（今日だけ）。all=バナーごと隠す / items=視点ごとに隠す
+  const [lateMute, setLateMute] = useState(() => {
+    try {
+      const o = JSON.parse(localStorage.getItem('kz-lateRiskMute') || 'null');
+      return (o && typeof o === 'object') ? o : { date: '', all: false, items: [] };
+    } catch (e) { return { date: '', all: false, items: [] }; }
+  });
+  const lateMuteToday = lateMute.date === todayKey ? lateMute : { date: todayKey, all: false, items: [] };
+  const saveLateMute = (m) => {
+    setLateMute(m);
+    try { localStorage.setItem('kz-lateRiskMute', JSON.stringify(m)); } catch (e) {}
+  };
+  const lateItemKey = (r) => `${r.projectName}::${r.viewpointName || ''}`;
+  const visibleLateRisks = lateMuteToday.all ? [] : lateRisks.filter(r => !lateMuteToday.items.includes(lateItemKey(r)));
 
   // ===== 過去案件から引用 =====
   const [quoteOpen, setQuoteOpen] = useState(false);
@@ -493,7 +517,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
         <QuoteModal projects={pastProjects} onSelect={selectQuote} onClose={() => setQuoteOpen(false)}
           colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
       )}
-      {!caseEditMode && atRiskProjects.length > 0 && !riskAck && (
+      {atRiskProjects.length > 0 && !riskAck && !riskMutedToday && (
         <div onClick={() => setRiskAck(true)}
           style={{
             position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000,
@@ -525,7 +549,15 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                   );
                 })}
               </div>
-              <div style={{ marginTop: 16, textAlign: 'right' }}>
+              <div style={{ marginTop: 16, display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
+                <button type="button" onClick={() => { muteRiskToday(); setRiskAck(true); }}
+                  title="このポップアップを今日は表示しません（明日になれば自動で復活します）"
+                  style={{
+                    background: 'transparent', color: colors.textMute, border: `1px solid ${colors.border}`, borderRadius: 4,
+                    padding: '8px 14px', cursor: 'pointer', fontFamily: fontJP, fontSize: 13,
+                  }}>
+                  今日は表示しない
+                </button>
                 <button type="button" onClick={() => setRiskAck(true)}
                   style={{
                     background: '#c1272d', color: '#fff', border: 'none', borderRadius: 4,
@@ -538,20 +570,25 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
           </div>
         </div>
       )}
-      {/* 予測遅延の事前警告（納期はまだ先だが終了予定が超過見込みの視点）。案件編集モード中は隠す */}
-      {!caseEditMode && lateRisks.length > 0 && (
-        <div style={{ background: '#fdf3e7', border: '1px solid #e0b072', borderRadius: 6, padding: '10px 16px', marginBottom: 16, fontFamily: fontJP }}>
+      {/* 予測遅延の事前警告（納期はまだ先だが終了予定が超過見込みの視点）。視点ごと／今日だけのミュート可 */}
+      {visibleLateRisks.length > 0 && (
+        <div style={{ background: '#fdf3e7', border: '1px solid #e0b072', borderRadius: 6, padding: '10px 16px', marginBottom: 16, fontFamily: fontJP, position: 'relative' }}>
           <button type="button" onClick={() => setLateRiskOpen(o => !o)}
             style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, fontFamily: fontJP, width: '100%', textAlign: 'left' }}>
             <AlertTriangle size={16} color="#c46a16" />
             <span style={{ fontSize: 13, fontWeight: 700, color: '#c46a16' }}>
-              納期超過の見込み {lateRisks.length}件（このままだと納期に遅れる予定の視点）
+              納期超過の見込み {visibleLateRisks.length}件（このままだと納期に遅れる予定の視点）
             </span>
             <span style={{ marginLeft: 'auto', color: '#c46a16', display: 'flex' }}>{lateRiskOpen ? <ChevronUp size={15} /> : <ChevronDown size={15} />}</span>
           </button>
+          <button type="button" onClick={() => saveLateMute({ ...lateMuteToday, all: true })}
+            title="この警告バナーを今日は表示しません（明日になれば自動で復活します）"
+            style={{ position: 'absolute', top: 8, right: 36, background: 'transparent', border: 'none', color: '#c46a16', fontSize: 11, cursor: 'pointer', fontFamily: fontJP, textDecoration: 'underline' }}>
+            今日は隠す
+          </button>
           {lateRiskOpen && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 8 }}>
-              {lateRisks.map((r, i) => {
+              {visibleLateRisks.map((r, i) => {
                 const dl = new Date(r.deadline + 'T00:00:00');
                 const end = new Date(r.endYmd + 'T00:00:00');
                 return (
@@ -565,6 +602,11 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                       納期 {fmtMD(dl)}({dayName(dl)}) → 終了予定 {fmtMD(end)}({dayName(end)})
                     </span>
                     <span style={{ fontWeight: 700, color: '#c1272d', whiteSpace: 'nowrap' }}>{r.lateDays}日遅れ見込み</span>
+                    <button type="button" onClick={() => saveLateMute({ ...lateMuteToday, items: [...lateMuteToday.items, lateItemKey(r)] })}
+                      title="この視点の警告を今日はミュート（明日になれば自動で復活します）"
+                      style={{ background: 'transparent', border: 'none', color: colors.textMute, cursor: 'pointer', padding: 2, display: 'flex', flexShrink: 0 }}>
+                      <X size={13} />
+                    </button>
                   </div>
                 );
               })}
@@ -794,7 +836,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                 ※ 指定時刻に空きがないため、開始予定を移動しています
               </div>
             )}
-            {!caseEditMode && (previewSchedule?.deadlineViolations || []).map((v, i) => {
+            {(previewSchedule?.deadlineViolations || []).map((v, i) => {
               const dl = new Date(v.deadline + 'T00:00:00');
               return (
                 <div key={i} style={{ fontSize: 11, color: colors.accent, marginTop: 6, fontWeight: 600 }}>

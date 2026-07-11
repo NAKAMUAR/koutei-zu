@@ -75,40 +75,6 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
-  // 案件編集モード：ONの間は納期の警告表示（一覧の納期バッジ・上部の「間に合わない恐れ」バナー）を隠す。
-  // 入力など操作があってから30分経過で自動的にOFFになる（一時的なモード）。
-  const CASE_EDIT_TIMEOUT_MS = 30 * 60 * 1000;
-  const [caseEditMode, setCaseEditMode] = useState(false);
-  const caseEditExpireRef = useRef(0); // 自動解除する時刻（epoch ms）
-  const bumpCaseEdit = () => { if (caseEditExpireRef.current) caseEditExpireRef.current = Date.now() + CASE_EDIT_TIMEOUT_MS; };
-  const toggleCaseEditMode = () => {
-    setCaseEditMode(prev => {
-      const next = !prev;
-      caseEditExpireRef.current = next ? Date.now() + CASE_EDIT_TIMEOUT_MS : 0;
-      return next;
-    });
-  };
-  // 操作（入力・キー・クリック）があるたびに自動解除の期限を延長する
-  useEffect(() => {
-    if (!caseEditMode) return;
-    const onActivity = () => bumpCaseEdit();
-    window.addEventListener('input', onActivity, true);
-    window.addEventListener('keydown', onActivity, true);
-    window.addEventListener('pointerdown', onActivity, true);
-    return () => {
-      window.removeEventListener('input', onActivity, true);
-      window.removeEventListener('keydown', onActivity, true);
-      window.removeEventListener('pointerdown', onActivity, true);
-    };
-  }, [caseEditMode]);
-  // 期限超過の監視（30秒ごと）。最後の操作から30分でOFF。
-  useEffect(() => {
-    if (!caseEditMode) return;
-    const id = setInterval(() => {
-      if (caseEditExpireRef.current && Date.now() >= caseEditExpireRef.current) setCaseEditMode(false);
-    }, 30000);
-    return () => clearInterval(id);
-  }, [caseEditMode]);
 
   // タスクメモの通知：開始時刻（終日は朝の始業時刻）が来たらOS通知＋アプリ内バナーを出す。
   // アプリを開いている間のみ。プッシュ基盤が無いため、タブを閉じている間は通知できない。
@@ -867,8 +833,7 @@ export default function App() {
       const sim = simulateFormSchedule(form, tasksRef.current, settings, projectOrder, new Date());
       const hasStartPin = (form.viewpoints || []).some(v => v.manualStart);
       const moved = !!(sim && sim.moved && hasStartPin);
-      // 案件編集モード中は納期超過の確認（納期警告）を出さない。
-      const violations = caseEditMode ? [] : ((sim && sim.deadlineViolations) || []);
+      const violations = (sim && sim.deadlineViolations) || [];
       if (moved || violations.length > 0) {
         let reorder = null;
         if (violations.length > 0) {
@@ -2094,7 +2059,6 @@ export default function App() {
     stepTypeMaster, vpDeliveryCount, offshoreCompanies,
     companyOrder: settings.companyOrder || [],
     usedCompanies: [...new Set(tasks.map(t => (t.companyName || '').trim()).filter(Boolean))],
-    caseEditMode,
     dragTaskId,
     // タスク・案件・視点の操作
     handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject,
@@ -2138,20 +2102,6 @@ export default function App() {
   return (
     <AppCtx.Provider value={appValue}>
     <div style={{ minHeight: '100vh', background: colors.bg, fontFamily: fontJP, color: colors.text }}>
-      {/* 一番上：案件編集モードのトグル（ON中は納期の警告を一時的に非表示） */}
-      <div style={{ background: caseEditMode ? '#fff4d6' : colors.surface, borderBottom: `1px solid ${caseEditMode ? '#e8d089' : colors.border}` }}>
-        <div style={{ maxWidth: 1600, margin: '0 auto', padding: '6px 28px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <button onClick={toggleCaseEditMode}
-            title="ON中は納期の警告（一覧の納期バッジ・上部バナー）を一時的に隠します。操作から30分で自動解除されます。"
-            style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '5px 12px', borderRadius: 999, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, fontWeight: 700, border: `1px solid ${caseEditMode ? '#d9a93a' : colors.border}`, background: caseEditMode ? '#f2b705' : 'transparent', color: caseEditMode ? '#3a2d00' : colors.textMute }}>
-            <span style={{ width: 9, height: 9, borderRadius: '50%', background: caseEditMode ? '#1f8a3b' : '#bbb', display: 'inline-block' }} />
-            案件編集モード：{caseEditMode ? 'ON' : 'OFF'}
-          </button>
-          {caseEditMode && (
-            <span style={{ fontSize: 11, color: '#9a7b1f' }}>納期の警告を一時的に非表示中（操作から30分で自動解除）</span>
-          )}
-        </div>
-      </div>
       <header style={{ borderBottom: `1px solid ${colors.border}`, background: colors.surface }}>
         <div style={{ maxWidth: 1600, margin: '0 auto', padding: '20px 28px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16 }}>
           <div>

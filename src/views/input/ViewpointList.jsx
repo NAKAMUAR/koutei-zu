@@ -9,7 +9,7 @@ import { DateTimeField, iconBtnStyle, miniBtnStyle, progressBtnStyle } from '../
 
 function ViewpointGroupList({ groups, allActive, sortMode, defaultCollapsed }) {
   const {
-    colors, fontJP, now, caseEditMode, companyOrder, projectOrder, saveProjectOrder,
+    colors, fontJP, now, companyOrder, projectOrder, saveProjectOrder,
     offshoreCompanies, handleEditProject, completeProject, cancelProject,
     suspendProject, setProjectDeadline,
   } = useApp();
@@ -260,7 +260,7 @@ function ViewpointGroupList({ groups, allActive, sortMode, defaultCollapsed }) {
                   );
                 }
                 const dl = new Date(section.deadlineGroup + 'T00:00:00');
-                const overdue = !caseEditMode && section.deadlineGroup < fmtYMD(now);
+                const overdue = section.deadlineGroup < fmtYMD(now);
                 return (
                   <span style={{
                     fontSize: 13, fontWeight: 700, color: '#fff',
@@ -303,7 +303,7 @@ function ViewpointGroupList({ groups, allActive, sortMode, defaultCollapsed }) {
         const startedTs = pg.scheduledStart ? pg.scheduledStart.getTime() + (pg.scheduledStartMin || 0) * 60000 : null;
         const started = startedTs != null && startedTs <= now.getTime();
         const dueToday = endYmd != null && endYmd === todayYmd;
-        const deadlinePassed = !caseEditMode && !!pg.deadline && pg.deadline <= todayYmd;
+        const deadlinePassed = !!pg.deadline && pg.deadline <= todayYmd;
         const atRisk = deadlinePassed && !dueToday;
         const headerBg = atRisk ? '#fbdcdc' : dueToday ? '#ffe6c9' : started ? '#fdf3a6' : '#fff';
         const nameColor = deadlinePassed ? '#c1272d' : colors.text;
@@ -394,7 +394,7 @@ function ViewpointGroupList({ groups, allActive, sortMode, defaultCollapsed }) {
                 // 案件ヘッダーで「全体納期」を直接編集（案件の全タスクに反映）。個別納期があれば各視点側が優先
                 const todayYmd = fmtYMD(new Date());
                 const endYmd = pg.scheduledEnd ? fmtYMD(pg.scheduledEnd) : null;
-                const danger = !caseEditMode && pg.projectDeadline && (todayYmd > pg.projectDeadline || (endYmd && endYmd > pg.projectDeadline));
+                const danger = pg.projectDeadline && (todayYmd > pg.projectDeadline || (endYmd && endYmd > pg.projectDeadline));
                 const d = pg.projectDeadline ? new Date(pg.projectDeadline + 'T00:00:00') : null;
                 return (
                   <span style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}
@@ -421,7 +421,7 @@ function ViewpointGroupList({ groups, allActive, sortMode, defaultCollapsed }) {
               })() : (pg.deadline && (() => {
                 const todayYmd = fmtYMD(new Date());
                 const endYmd = pg.scheduledEnd ? fmtYMD(pg.scheduledEnd) : null;
-                const danger = !caseEditMode && (todayYmd > pg.deadline || (endYmd && endYmd > pg.deadline));
+                const danger = (todayYmd > pg.deadline || (endYmd && endYmd > pg.deadline));
                 const d = new Date(pg.deadline + 'T00:00:00');
                 return (
                   <span title={danger ? '納期を過ぎている、または終了予定が納期を超えています（視点ごとの納期のうち最早のもの）' : '納期（視点ごとの納期のうち最早のもの）'} style={{
@@ -693,7 +693,7 @@ function ViewpointMetaPanel({ group, isOffshore }) {
 
 function ViewpointCard({ group, allSortedIds, companyFirstIds, companyLastIds }) {
   const {
-    colors, fontJP, now, caseEditMode, assigneeList, offshoreCompanies,
+    colors, fontJP, now, assigneeList, offshoreCompanies,
     handleEdit, handleEditViewpoint, handleDeleteViewpoint, handleDelete, toggleStatus,
     moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress,
     setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, setTaskAssignee,
@@ -771,7 +771,7 @@ function ViewpointCard({ group, allSortedIds, companyFirstIds, companyLastIds })
               const todayYmd = fmtYMD(new Date());
               const endYmd = group.scheduledEnd ? fmtYMD(group.scheduledEnd) : null;
               // 実効納期＝個別＞全体（group.deadline は集約済み）。危険判定は実効で行う
-              const danger = !caseEditMode && group.deadline && (todayYmd > group.deadline || (endYmd && endYmd > group.deadline));
+              const danger = group.deadline && (todayYmd > group.deadline || (endYmd && endYmd > group.deadline));
               const indiv = group.individualDeadline || '';
               const proj = group.projectDeadline || '';
               const inherited = !indiv && !!proj; // 個別なし＝全体納期を継承

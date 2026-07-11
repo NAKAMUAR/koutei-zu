@@ -326,7 +326,7 @@ function ReviewCard({ g }) {
 // 担当者ボード（④）：担当者ごとの進行中案件を一目で把握する一覧。
 // 各担当者を1列のカードにし、視点（依頼項目）を納期の近い順にコンパクト表示する。
 function AssigneeBoard({ tasks }) {
-  const { colors, fontJP, now, assigneeOrder, vpDeliveryCount, caseEditMode } = useApp();
+  const { colors, fontJP, now, assigneeOrder, vpDeliveryCount } = useApp();
   const todayYmd = fmtYMD(now);
   const soonYmd = fmtYMD(addDays(now, 2));
   const assignees = sortAssigneesByMaster([...new Set((tasks || []).map(t => t.assignee))], assigneeOrder);
@@ -334,7 +334,6 @@ function AssigneeBoard({ tasks }) {
   // 納期・終了予定から緊急度を判定して色を返す。
   // 案件編集モード中は納期の警告（超過・本日・間近の色/バッジ）を隠す。
   const urgency = (g) => {
-    if (caseEditMode) return { level: 'none', color: colors.border, bg: '#fff', label: '' };
     const dl = g.deadline || '';
     const endYmd = g.scheduledEnd ? fmtYMD(g.scheduledEnd) : null;
     if (dl && (todayYmd > dl || (endYmd && endYmd > dl))) return { level: 'over', color: '#c1272d', bg: '#fbeaea', label: '納期超過' };
