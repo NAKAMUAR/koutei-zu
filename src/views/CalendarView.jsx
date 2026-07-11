@@ -287,6 +287,16 @@ function CalendarView() {
         </button>
       </div>
 
+      {/* ドラッグ操作の凡例（タッチ端末や初見でも操作に気づけるように明示する） */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', marginBottom: 12, fontSize: 11, color: colors.textMute, fontFamily: fontJP }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <GripVertical size={12} /> ドラッグでできること：
+        </span>
+        <span>担当者名を上下に入れ替え → <b>表示順の変更</b></span>
+        <span>案件ブロックを別の担当者名へ → <b>担当替え</b></span>
+        <span>案件ブロックを別の案件ブロックへ → <b>制作順の変更</b></span>
+      </div>
+
       {/* 空き時間サマリー：担当者×営業日の空き時間（h）。休日・不在・残業枠を考慮 */}
       {freeOpen && (() => {
         const dayCount = 10;

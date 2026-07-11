@@ -1088,13 +1088,14 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
               fontFamily: fontJP, fontSize: 12, fontWeight: 700, color: priorityColor(task.priority),
             }} />
         ) : (
-          <button onClick={() => setEditingPriority(true)}
+          <button onClick={() => setEditingPriority(true)} className="kz-inline-edit"
             style={{
               background: priorityColor(task.priority), color: '#fff', border: 'none', borderRadius: 3, padding: '4px 7px',
               fontSize: 11, fontWeight: 700, cursor: 'pointer', minWidth: 28, fontFamily: fontJP,
+              display: 'inline-flex', alignItems: 'center',
             }}
-            title="クリックして直接編集">
-            #{task.priority}
+            title="クリックして優先順位を直接編集">
+            #{task.priority}<Edit2 size={9} className="kz-pencil" />
           </button>
         )}
       </div>
@@ -1182,8 +1183,9 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
                 onKeyDown={(e) => { if (e.key === 'Enter') commitCompletedHours(); if (e.key === 'Escape') { setEditingCompletedHours(false); setCompletedHoursInput(fmtHM(task.completedHours || 0)); } }}
                 autoFocus style={numInputStyle} />
             ) : (
-              <button type="button" onClick={() => setEditingCompletedHours(true)} style={numStyle} title="クリックで完了済み時間を編集（HH:MM）">
-                {fmtHM(completed)}
+              <button type="button" onClick={() => setEditingCompletedHours(true)} className="kz-inline-edit"
+                style={{ ...numStyle, display: 'inline-flex', alignItems: 'center' }} title="クリックで完了済み時間を編集（HH:MM）">
+                {fmtHM(completed)}<Edit2 size={9} className="kz-pencil" />
               </button>
             )}
             /
@@ -1194,8 +1196,9 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
                 onKeyDown={(e) => { if (e.key === 'Enter') commitTotalHours(); if (e.key === 'Escape') { setEditingTotalHours(false); setTotalHoursInput(fmtHM(task.hours)); } }}
                 autoFocus style={numInputStyle} />
             ) : (
-              <button type="button" onClick={() => setEditingTotalHours(true)} style={numStyle} title="クリックで制作予定時間を編集（HH:MM）">
-                {fmtHM(task.hours)}
+              <button type="button" onClick={() => setEditingTotalHours(true)} className="kz-inline-edit"
+                style={{ ...numStyle, display: 'inline-flex', alignItems: 'center' }} title="クリックで制作予定時間を編集（HH:MM）">
+                {fmtHM(task.hours)}<Edit2 size={9} className="kz-pencil" />
               </button>
             )}
             {remaining > 0 && <span style={{ color: colors.accent, fontWeight: 600, marginLeft: 4 }}>残 {fmtHM(remaining)}</span>}
