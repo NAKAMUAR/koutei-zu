@@ -316,6 +316,65 @@ function NavButton({ active, onClick, icon, label, badge }) {  return (
   );
 }
 
+// ============ ナビグループ（複数タブをまとめるドロップダウン） ============
+// 「集計・帳票」のように、使用頻度の低いタブ群を1つのボタンに集約する。
+// アクティブなタブがグループ内にあるときは、そのタブ名をボタンに表示して現在地を見失わせない。
+function NavGroup({ label, icon, items, activeId, onSelect }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    window.addEventListener('pointerdown', onDown);
+    return () => window.removeEventListener('pointerdown', onDown);
+  }, [open]);
+  const activeItem = items.find(i => i.id === activeId) || null;
+  const active = !!activeItem;
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <button onClick={() => setOpen(o => !o)}
+        title={`${label}（${items.map(i => i.label).join('・')}）`}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '7px 12px',
+          background: active ? '#1a1a1a' : 'transparent',
+          color: active ? '#fff' : '#1a1a1a',
+          border: `1px solid ${active ? '#1a1a1a' : '#e8e3d6'}`,
+          borderRadius: 4, cursor: 'pointer',
+          fontFamily: "'Noto Sans JP', sans-serif",
+          fontSize: 13, fontWeight: 500,
+        }}>
+        {icon}
+        {activeItem ? `${label}：${activeItem.label}` : label}
+        <ChevronDown size={13} style={{ transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
+      </button>
+      {open && (
+        <div style={{
+          position: 'absolute', top: 'calc(100% + 4px)', right: 0, zIndex: 1500,
+          background: '#fff', border: '1px solid #e8e3d6', borderRadius: 6,
+          boxShadow: '0 8px 24px rgba(0,0,0,0.14)', padding: 6,
+          display: 'flex', flexDirection: 'column', gap: 2, minWidth: 168,
+        }}>
+          {items.map(item => (
+            <button key={item.id}
+              onClick={() => { onSelect(item.id); setOpen(false); }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                padding: '8px 12px', textAlign: 'left',
+                background: activeId === item.id ? '#1a1a1a' : 'transparent',
+                color: activeId === item.id ? '#fff' : '#1a1a1a',
+                border: 'none', borderRadius: 4, cursor: 'pointer',
+                fontFamily: "'Noto Sans JP', sans-serif", fontSize: 13, fontWeight: 500,
+              }}>
+              {item.icon}{item.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const iconBtnStyle = (colors) => ({
   background: 'transparent', border: 'none', cursor: 'pointer',
   padding: 6, color: colors.textMute, borderRadius: 3,
@@ -462,7 +521,7 @@ function Combobox({ value, onChange, options, placeholder, inputStyle, colors, f
 
 
 export {
-  ConfirmModal, PromptModal, ToastStack, DeadlineConfirmModal, TimeSelect, DurationSelect, NavButton,
+  ConfirmModal, PromptModal, ToastStack, DeadlineConfirmModal, TimeSelect, DurationSelect, NavButton, NavGroup,
   iconBtnStyle, miniBtnStyle, progressBtnStyle, tabStyle,
   EndTimeFields, CompleteDialog, Combobox,
 };

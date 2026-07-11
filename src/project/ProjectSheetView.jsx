@@ -1,7 +1,7 @@
 // 案件整理タブ：登録済みタスク（案件登録）を会社ごとに一覧集計する表。
 // スプレッドシートの「案件情報一覧」を模した読み取り専用ビュー。
 // 1行＝1カット（視点）。列：番号・社内案件名・案件名・担当者名・制作状況・カット名・ご依頼日・納品日。
-// 編集は「入力」タブの案件登録／案件を編集で行う（この表は集計表示）。
+// 編集は「案件」タブの案件登録／案件を編集で行う（この表は集計表示）。
 import { useState, useMemo } from 'react';
 import { Download, Printer } from 'lucide-react';
 
@@ -130,7 +130,7 @@ export default function ProjectSheetView({ tasks, customerMaster, colors, fontJP
     <div style={{ fontFamily: fontJP, color: colors.text }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 6, flexWrap: 'wrap' }}>
         <h2 style={{ fontFamily: fontDisplay, fontSize: 20, fontWeight: 700, margin: 0 }}>案件整理</h2>
-        <span style={{ fontSize: 12, color: colors.textMute }}>案件登録の内容を会社ごとに一覧集計します（1行＝1カット／視点）。編集は「入力」タブから。</span>
+        <span style={{ fontSize: 12, color: colors.textMute }}>案件登録の内容を会社ごとに一覧集計します（1行＝1カット／視点）。編集は「案件」タブから。</span>
       </div>
 
       {/* 会社タブ */}

@@ -10,7 +10,7 @@ import { computeDeadlineReorder, computeProjectOrder, deadlineInsertPriority, de
 import { collectSalesSyncRows, reconcileLedger } from './viewpoint/salesSync.js';
 import { blankDoc, blankItem } from './billing/billingUtils.js';
 import { CheckCircle2, ClipboardList, FileText, Folder, MessageSquare, Plus, RotateCcw, Settings as SettingsIcon, StickyNote, Table, TrendingUp } from 'lucide-react';
-import { CompleteDialog, ConfirmModal, DeadlineConfirmModal, NavButton, PromptModal, TimeSelect, ToastStack } from './components/common.jsx';
+import { CompleteDialog, ConfirmModal, DeadlineConfirmModal, NavButton, NavGroup, PromptModal, TimeSelect, ToastStack } from './components/common.jsx';
 import { MemberSettings } from './components/MemberSettings.jsx';
 import { InputView } from './views/InputView.jsx';
 import { EndPromptModal } from './components/modals.jsx';
@@ -2120,12 +2120,15 @@ export default function App() {
     confirmDialog, promptDialog, notify,
   };
 
+  // 毎日使うタブは直接表示、経理・集計系は「集計・帳票」ドロップダウンへ集約
   const navItems = [
-    { id: 'input', icon: <Plus size={15} />, label: '入力' },
+    { id: 'input', icon: <Plus size={15} />, label: '案件' },
     { id: 'message', icon: <MessageSquare size={15} />, label: 'サマリー' },
     { id: 'done', icon: <CheckCircle2 size={15} />, label: '完了' },
-    { id: 'master', icon: <Folder size={15} />, label: 'マスタ' },
     { id: 'memo', icon: <StickyNote size={15} />, label: 'タスクメモ' },
+    { id: 'master', icon: <Folder size={15} />, label: 'マスタ' },
+  ];
+  const reportNavItems = [
     { id: 'billing', icon: <FileText size={15} />, label: '帳票' },
     { id: 'sales', icon: <Table size={15} />, label: '売上登録' },
     { id: 'projectSheet', icon: <ClipboardList size={15} />, label: '案件整理' },
@@ -2162,6 +2165,8 @@ export default function App() {
               <NavButton key={item.id} active={view === item.id} onClick={() => setView(item.id)} icon={item.icon} label={item.label}
                 badge={item.id === 'done' ? scheduled.doneFinal.length : null} />
             ))}
+            <NavGroup label="集計・帳票" icon={<FileText size={15} />} items={reportNavItems}
+              activeId={view} onSelect={setView} />
             <style>{`@keyframes kz-spin { to { transform: rotate(360deg); } }`}</style>
             <button onClick={refreshData} disabled={refreshing}
               title={lastSync
