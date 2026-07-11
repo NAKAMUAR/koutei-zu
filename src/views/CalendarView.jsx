@@ -1,5 +1,6 @@
 // カレンダービュー（担当者×日付のスケジュール表）。App.jsx から分割。
 import { useState, useRef, useLayoutEffect } from 'react';
+import { useApp } from '../appContext.js';
 import { addDays, dayName, fmtMD, fmtYMD, fmtYMDJP, getDailySlots, getHoursPerDay, getProjectColor, isNonWorkingDay, isSameDay, minToTime, pastelize, priorityColor, startOfDay } from '../lib/utils.js';
 import { buildDoneSlots, computeFreeHours, dayAbsence, dayOvertimeIntervals, dayWorkSlots, maxOvertimeEndMin, sortAssigneesByMaster, subtractBusy } from '../lib/schedule.js';
 import { Calendar as CalIcon, GripVertical } from 'lucide-react';
@@ -7,7 +8,12 @@ import { tabStyle } from '../components/common.jsx';
 
 
 // ============ カレンダービュー ============
-function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditProject, fontJP, assigneeOrder, onReorderAssignee, onReorderProject, onReassignViewpoint }) {
+function CalendarView() {
+  const {
+    colors, fontJP, fontDisplay, scheduled, settings, now, assigneeOrder,
+    onReorderAssignee, onReorderProject, onReassignViewpoint,
+    handleEditProject: onEditProject,
+  } = useApp();
   // ドラッグ＆ドロップ並び替え：担当者行（左端ラベル）と案件（タスクブロック）
   const [rowDrag, setRowDrag] = useState(null);
   const [rowDragOver, setRowDragOver] = useState(null);

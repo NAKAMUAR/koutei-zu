@@ -1,5 +1,6 @@
 // 完了タスクビュー（完了一覧＋視点別修正集計）。App.jsx から分割。
 import { useState, useMemo } from 'react';
+import { useApp } from '../appContext.js';
 import { computeRevisionStats } from '../viewpoint/viewpointUtils.js';
 import { Check, CheckCircle2, ChevronDown, ChevronUp, Clock, Edit2, RotateCcw, Search, Trash2, User, X } from 'lucide-react';
 import { dayName, fmtYMD, fmtYMDJP, getProjectColor, startOfDay } from '../lib/utils.js';
@@ -97,7 +98,8 @@ function RevisionStatsSection({ tasks, colors, fontJP, fontDisplay }) {
   );
 }
 
-function DoneView({ scheduled, tasks, toggleStatus, handleDelete, setActualEnd, handleEditProject, colors, fontJP, fontDisplay }) {
+function DoneView() {
+  const { colors, fontJP, fontDisplay, scheduled, tasks, toggleStatus, handleDelete, setActualEnd, handleEditProject } = useApp();
   const doneTasks = [...scheduled.doneFinal].sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
 
   // 検索：案件名・社内案件名・会社名・お客様担当者・制作担当者・視点名・ステップ名・メモで絞り込み

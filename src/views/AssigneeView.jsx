@@ -4,9 +4,11 @@ import { Users } from 'lucide-react';
 import { tabStyle } from '../components/common.jsx';
 import { fmtHM, getProjectColor } from '../lib/utils.js';
 import { ViewpointGroupList } from './input/ViewpointList.jsx';
+import { useApp } from '../appContext.js';
 
 // ============ 担当者別ビュー ============
-function AssigneeView({ scheduled, selectedAssignee, setSelectedAssignee, now, caseEditMode, assigneeOrder, vpDeliveryCount, companyOrder, companyList, saveProjectInfo, setProjectDeadline, projectOrder, saveProjectOrder, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, setTaskAssignee, completeProject, cancelProject, suspendProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, setViewpointMeta, setStepMeta, createBillingFromViewpoint, offshoreCompanies, assigneeList, colors, fontJP, fontDisplay }) {
+function AssigneeView({ selectedAssignee, setSelectedAssignee }) {
+  const { scheduled, assigneeOrder, vpDeliveryCount, colors, fontJP, fontDisplay } = useApp();
   const assignees = sortAssigneesByMaster([...new Set(scheduled.active.map(t => t.assignee))], assigneeOrder);
   if (assignees.length === 0) {
     return (
@@ -85,16 +87,7 @@ function AssigneeView({ scheduled, selectedAssignee, setSelectedAssignee, now, c
                 </div>
               </div>
             </div>
-            <ViewpointGroupList groups={groups} allActive={allActive} now={now} caseEditMode={caseEditMode}
-              companyOrder={companyOrder}
-              projectOrder={projectOrder} saveProjectOrder={saveProjectOrder}
-              handleEdit={handleEdit} handleEditProject={handleEditProject} handleEditViewpoint={handleEditViewpoint}
-              handleAddViewpointToProject={handleAddViewpointToProject}
-              handleDeleteViewpoint={handleDeleteViewpoint}
-              handleDelete={handleDelete} toggleStatus={toggleStatus}
-              moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={onDragTask} onDropTask={onDropTask} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} setTaskAssignee={setTaskAssignee} completeProject={completeProject} cancelProject={cancelProject} suspendProject={suspendProject} completeViewpoint={completeViewpoint}
-              handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} setViewpointMeta={setViewpointMeta} setStepMeta={setStepMeta} createBillingFromViewpoint={createBillingFromViewpoint} offshoreCompanies={offshoreCompanies} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline} companyList={companyList} assigneeList={assigneeList}
-              colors={colors} fontJP={fontJP} />
+            <ViewpointGroupList groups={groups} allActive={allActive} />
           </section>
         );
       })}

@@ -1,5 +1,6 @@
 // タスクメモビュー（Apple カレンダー風：スケジュール＋メモ）。App.jsx から分割。
 import { useState, useMemo } from 'react';
+import { useApp } from '../appContext.js';
 import { Bell, BellOff, Plus, Search, StickyNote, Trash2, X } from 'lucide-react';
 
 // ============ タスクメモビュー（Apple カレンダー風：スケジュール＋メモ） ============
@@ -18,7 +19,8 @@ function formatMemoDate(dateStr) {
   return `${m}月${d}日（${wd}）`;
 }
 
-function MemoView({ memos, upsertMemo, deleteMemo, now, colors, fontJP, fontDisplay }) {
+function MemoView() {
+  const { colors, fontJP, fontDisplay, memos, upsertMemo, deleteMemo, now } = useApp();
   const blankMemo = () => ({
     id: null, title: '', date: todayStr(now), startTime: '09:00', endTime: '10:00',
     allDay: false, note: '', color: MEMO_COLORS[0],

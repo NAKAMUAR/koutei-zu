@@ -1,5 +1,6 @@
 // 入力ビューのセクション（制作中断・確認待ち・案件情報編集・担当者ボード）。App.jsx から分割。
 import { useState, useEffect, useRef } from 'react';
+import { useApp } from '../../appContext.js';
 import { addDays, dayName, fmtHM, fmtMD, fmtYMD, getProjectColor, minToTime } from '../../lib/utils.js';
 import { Check, ChevronDown, ChevronUp, PauseCircle, PlayCircle, User } from 'lucide-react';
 import { groupByViewpoint, sortAssigneesByMaster } from '../../lib/schedule.js';
@@ -7,7 +8,8 @@ import { groupByViewpoint, sortAssigneesByMaster } from '../../lib/schedule.js';
 // ============ 制作中断セクション ============
 // 納品後の確認待ちなどで進行できない案件を、一旦スケジュールから外して表示する。
 // 「制作再開」でいつでも進行中（スケジュール）へ戻せる。完了ではないので完了タブには入らない。
-function SuspendedSection({ suspended, now, resumeProject, colors, fontJP, fontDisplay }) {
+function SuspendedSection({ suspended }) {
+  const { colors, fontJP, fontDisplay, resumeProject } = useApp();
   const [collapsed, setCollapsed] = useState(() => new Set());
   const toggle = (p) => setCollapsed(prev => { const n = new Set(prev); n.has(p) ? n.delete(p) : n.add(p); return n; });
   if (!suspended || suspended.length === 0) return null;
@@ -116,7 +118,8 @@ function SuspendedSection({ suspended, now, resumeProject, colors, fontJP, fontD
 // 追加修正があればメモを記入でき、3日更新がないとグレー、7日でアプリが自動的に完了タブへ移す。
 const REVIEW_GRAY_DAYS = 3;
 const REVIEW_AUTO_DONE_DAYS = 7;
-function ReviewSection({ review, now, finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, vpDeliveryCount, colors, fontJP, fontDisplay }) {
+function ReviewSection({ review }) {
+  const { colors, fontJP, fontDisplay, vpDeliveryCount } = useApp();
   // 案件ごとの折りたたみ状態（進行中案件一覧と同じ形式）
   const [collapsed, setCollapsed] = useState(() => new Set());
   const toggle = (p) => setCollapsed(prev => { const n = new Set(prev); n.has(p) ? n.delete(p) : n.add(p); return n; });
@@ -212,9 +215,7 @@ function ReviewSection({ review, now, finalizeReview, reopenReview, setReviewNot
               {!isCollapsed && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginLeft: 22 }}>
                   {pg.items.map(g => (
-                    <ReviewCard key={g.key} g={g} now={now}
-                      finalizeReview={finalizeReview} reopenReview={reopenReview} setReviewNote={setReviewNote} setReviewActualEnd={setReviewActualEnd}
-                      colors={colors} fontJP={fontJP} />
+                    <ReviewCard key={g.key} g={g} />
                   ))}
                 </div>
               )}
@@ -226,7 +227,8 @@ function ReviewSection({ review, now, finalizeReview, reopenReview, setReviewNot
   );
 }
 
-function ReviewCard({ g, now, finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, colors, fontJP }) {
+function ReviewCard({ g }) {
+  const { colors, fontJP, now, finalizeReview, reopenReview, setReviewNote, setReviewActualEnd } = useApp();
   const [note, setNote] = useState(g.reviewNote || '');
   // 他端末などで g.reviewNote が更新されたら、編集中でなければ追従
   const [focused, setFocused] = useState(false);
@@ -322,94 +324,12 @@ function ReviewCard({ g, now, finalizeReview, reopenReview, setReviewNote, setRe
   );
 }
 
-// ============ 案件情報インライン編集パネル ============
-// 進行中案件の案件ヘッダーから、案件情報（案件名・会社名・お客様担当者・メモ・仮案件）を
-// その場で編集する。保存すると案件の全タスクへ反映される。
-function ProjectInfoEditor({ pg, companyList, onSave, onCancel, colors, fontJP }) {
-  const [v, setV] = useState({
-    projectName: pg.projectName === '(案件名未設定)' ? '' : (pg.projectName || ''),
-    projectNameInternal: pg.projectNameInternal || '',
-    companyName: pg.companyName || '',
-    customerContact: pg.customerContact || '',
-    memo: pg.memo || '',
-    tentative: !!pg.tentative,
-    tentativeStart: pg.tentativeStart || '',
-    tentativeEnd: pg.tentativeEnd || '',
-  });
-  const set = (k, val) => setV(p => ({ ...p, [k]: val }));
-  const inputStyle = {
-    width: '100%', padding: '8px 10px', boxSizing: 'border-box',
-    border: `1px solid ${colors.border}`, borderRadius: 4,
-    fontFamily: fontJP, fontSize: 13, background: '#fff', color: colors.text, outline: 'none',
-  };
-  const labelStyle = { display: 'block', fontSize: 11, color: colors.textMute, marginBottom: 4 };
-  return (
-    <div style={{
-      background: '#fbf9f4', border: `1px solid ${colors.border}`,
-      borderLeft: `4px solid ${getProjectColor(pg.projectName)}`, borderRadius: 4, padding: 14, marginLeft: 22,
-    }}>
-      <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10, color: colors.text }}>
-        案件情報を編集（この案件の全タスク・完了済み含むに反映）
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
-        <div>
-          <label style={labelStyle}>社外案件名</label>
-          <input type="text" value={v.projectName} onChange={(e) => set('projectName', e.target.value)} placeholder="例: 〇〇マンション" style={inputStyle} />
-        </div>
-        <div>
-          <label style={labelStyle}>社内案件名（任意）</label>
-          <input type="text" value={v.projectNameInternal} onChange={(e) => set('projectNameInternal', e.target.value)} placeholder="例: TAMAZEN.58-6" style={inputStyle} />
-        </div>
-        <div>
-          <label style={labelStyle}>会社名</label>
-          <input type="text" list="inline-company-list" value={v.companyName} onChange={(e) => set('companyName', e.target.value)} placeholder="会社名" style={inputStyle} />
-          <datalist id="inline-company-list">{(companyList || []).map(c => <option key={c} value={c} />)}</datalist>
-        </div>
-        <div>
-          <label style={labelStyle}>お客様担当者（任意）</label>
-          <input type="text" value={v.customerContact} onChange={(e) => set('customerContact', e.target.value)} placeholder="お客様担当者" style={inputStyle} />
-        </div>
-        <div style={{ gridColumn: '1 / -1' }}>
-          <label style={labelStyle}>メモ（任意）</label>
-          <input type="text" value={v.memo} onChange={(e) => set('memo', e.target.value)} placeholder="例: 6/20 受注確定予定" style={inputStyle} />
-        </div>
-      </div>
-      <label style={{
-        display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginTop: 12,
-        fontSize: 13, fontFamily: fontJP, color: v.tentative ? '#c46a16' : colors.text, fontWeight: v.tentative ? 700 : 400,
-      }}>
-        <input type="checkbox" checked={v.tentative} onChange={(e) => set('tentative', e.target.checked)}
-          style={{ width: 15, height: 15, accentColor: '#c46a16', cursor: 'pointer' }} />
-        仮案件（仮予定）として登録する
-      </label>
-      {v.tentative && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
-          <span style={{ fontSize: 12, color: '#c46a16', fontWeight: 600, whiteSpace: 'nowrap' }}>対応想定期間</span>
-          <input type="date" value={v.tentativeStart} onChange={(e) => set('tentativeStart', e.target.value)}
-            style={{ ...inputStyle, width: 'auto', flex: '0 0 160px' }} />
-          <span style={{ fontSize: 12, color: colors.textMute }}>〜</span>
-          <input type="date" value={v.tentativeEnd} onChange={(e) => set('tentativeEnd', e.target.value)}
-            style={{ ...inputStyle, width: 'auto', flex: '0 0 160px' }} />
-        </div>
-      )}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
-        <button type="button" onClick={onCancel}
-          style={{ padding: '7px 14px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, color: colors.textMute }}>
-          キャンセル
-        </button>
-        <button type="button" onClick={() => onSave(v)}
-          style={{ padding: '7px 18px', background: colors.text, color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
-          <Check size={14} /> 保存
-        </button>
-      </div>
-    </div>
-  );
-}
 
 // ============ 視点グループリスト ============
 // 担当者ボード（④）：担当者ごとの進行中案件を一目で把握する一覧。
 // 各担当者を1列のカードにし、視点（依頼項目）を納期の近い順にコンパクト表示する。
-function AssigneeBoard({ tasks, now, assigneeOrder, vpDeliveryCount, caseEditMode, colors, fontJP }) {
+function AssigneeBoard({ tasks }) {
+  const { colors, fontJP, now, assigneeOrder, vpDeliveryCount, caseEditMode } = useApp();
   const todayYmd = fmtYMD(now);
   const soonYmd = fmtYMD(addDays(now, 2));
   const assignees = sortAssigneesByMaster([...new Set((tasks || []).map(t => t.assignee))], assigneeOrder);
@@ -493,4 +413,4 @@ function AssigneeBoard({ tasks, now, assigneeOrder, vpDeliveryCount, caseEditMod
 }
 
 
-export { SuspendedSection, ReviewSection, ReviewCard, ProjectInfoEditor, AssigneeBoard, REVIEW_GRAY_DAYS, REVIEW_AUTO_DONE_DAYS };
+export { SuspendedSection, ReviewSection, ReviewCard, AssigneeBoard, REVIEW_GRAY_DAYS, REVIEW_AUTO_DONE_DAYS };

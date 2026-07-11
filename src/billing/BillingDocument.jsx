@@ -1,7 +1,6 @@
 // 帳票のA4描画（画面プレビュー兼・印刷/PDF出力用）。
 // 入力UIは持たず、doc の内容を忠実にレンダリングするだけ。
 // デザインは元のExcel/PDF帳票に準拠（上下の色帯・字間広めの大見出し・白地＋色アンダーラインの明細・細罫線の集計）。
-import React from 'react';
 import {
   DOC_TYPES, docTypeOf, docFontCss, formatYen, formatJDate, lineAmount, computeTotals,
   CONDITION_SECTIONS, SCHEDULE_TIME_ROWS,

@@ -1,5 +1,6 @@
 // 入力ビュー（新規案件登録フォーム＋進行中一覧タブ）。App.jsx から分割。
 import { useState, useEffect, useMemo, useRef } from 'react';
+import { useApp } from '../appContext.js';
 import { VIEWPOINT_PRESETS, dayName, fmtHM, fmtMD, fmtYMD, getProjectColor, kanaNormalize, makeEmptyStep, makeViewpointFromPreset, minToTime, parseHM, sheetsLabel } from '../lib/utils.js';
 import { computeRevisionStats, deliveryBaseName, findStepType, num as vpNum, resolveViewpointSteps, stepDeliveryName } from '../viewpoint/viewpointUtils.js';
 import { computeLateRisks, groupByViewpoint, simulateFormSchedule, sortAssigneesByMaster } from '../lib/schedule.js';
@@ -11,7 +12,15 @@ import { ViewpointGroupList } from './input/ViewpointList.jsx';
 import { CalendarView } from './CalendarView.jsx';
 import { AssigneeView } from './AssigneeView.jsx';
 
-function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, registerDraftAndEdit, editingId, editMode, caseEditMode, cancelEdit, tasks, scheduled, vpDeliveryCount, projectOrder, saveProjectOrder, companyList, customerMaster, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, setTaskAssignee, completeProject, cancelProject, suspendProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, setViewpointMeta, setStepMeta, createBillingFromViewpoint, saveProjectInfo, setProjectDeadline, finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, resumeProject, projectList, projectInternalList, viewpointList, assigneeList, assigneeOrder, settings, now, selectedAssignee, setSelectedAssignee, companyOrder, onReorderAssignee, onReorderProject, onReassignViewpoint, colors, fontJP, fontDisplay }) {
+function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdit, selectedAssignee, setSelectedAssignee }) {
+  const {
+    colors, fontJP, fontDisplay,
+    tasks, scheduled, settings, now, caseEditMode,
+    projectOrder, projectList, projectInternalList, viewpointList,
+    assigneeList, assigneeOrder, companyList, customerMaster,
+    stepTypeMaster, vpDeliveryCount,
+    registerDraftAndEdit,
+  } = useApp();
   // お客様担当者の候補：会社名を選んでいればその会社に所属する担当者を表示
   // （会社名はひらがな/カタカナ/全半角の違いを無視して照合）
   const contactOptions = useMemo(() => {
@@ -26,11 +35,6 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
   // 契約形態が「オフショア」の会社名の集合（進行中案件一覧で「オフショア（その他）」へ集約する）
   const offshoreCompanies = useMemo(
     () => new Set((customerMaster || []).filter(c => c.contractType === 'offshore').map(c => (c.company || '').trim()).filter(Boolean)),
-    [customerMaster]
-  );
-  // 契約形態「ラボ」の会社（金額欄の対象外）
-  const labCompanies = useMemo(
-    () => new Set((customerMaster || []).filter(c => (c.contractType || 'labo') === 'labo').map(c => (c.company || '').trim()).filter(Boolean)),
     [customerMaster]
   );
   // この案件の会社で金額欄を出すか。
@@ -122,15 +126,6 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
     if (t && t.paid === false) next.amount = ''; // 無料は金額を反映しない
     steps[si] = next;
     vps[vi] = { ...vps[vi], steps };
-    setForm({ ...form, viewpoints: vps });
-  };
-  // 各ステップ名称に納品名（納品名＋ステップ名）を一括反映する。二重付与はしない。
-  const fillStepNamesWithDelivery = (vi) => {
-    const vps = [...form.viewpoints];
-    const vp = vps[vi];
-    const base = deliveryBaseName(form.projectName, vp.viewpointName, vp.deliveryName);
-    if (!base) { alert('案件名と視点名を入力すると納品名を自動生成できます'); return; }
-    vps[vi] = { ...vp, steps: vp.steps.map(s => ({ ...s, name: stepDeliveryName(base, s.name) })) };
     setForm({ ...form, viewpoints: vps });
   };
   const removeStep = (vi, si) => {
@@ -238,9 +233,6 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
   // 視点ごとの納期（お客様への提出日）
   const setVpDeadline = (vi, val) =>
     setForm({ ...form, viewpoints: form.viewpoints.map((vp, i) => i === vi ? { ...vp, deadline: val || '' } : vp) });
-  // 視点ごとの納品名（納品用の視点名・上書き）
-  const setVpDeliveryName = (vi, val) =>
-    setForm({ ...form, viewpoints: form.viewpoints.map((vp, i) => i === vi ? { ...vp, deliveryName: val } : vp) });
 
   // 案件の検索：案件名・社内案件名・会社名・お客様担当者・制作担当者・視点名・ステップ名で絞り込み
   const [searchQuery, setSearchQuery] = useState('');
@@ -487,7 +479,7 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
         <QuoteModal projects={pastProjects} onSelect={selectQuote} onClose={() => setQuoteOpen(false)}
           colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
       )}
-      {!embedded && !caseEditMode && atRiskProjects.length > 0 && !riskAck && (
+      {!caseEditMode && atRiskProjects.length > 0 && !riskAck && (
         <div onClick={() => setRiskAck(true)}
           style={{
             position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 1000,
@@ -1342,7 +1334,7 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
           </div>
         ) : listGroupMode === 'board' ? (
           // 担当者ボード：担当者ごとの進行中案件を一目で把握できる一覧（④）
-          <AssigneeBoard tasks={filteredActive} now={now} assigneeOrder={assigneeOrder} vpDeliveryCount={vpDeliveryCount} caseEditMode={caseEditMode} colors={colors} fontJP={fontJP} />
+          <AssigneeBoard tasks={filteredActive} />
         ) : listGroupMode === 'assignee' ? (
           // 担当者別表示：従業員マスタの並び順で担当者ごとにまとめ、タブで絞り込みできる
           (() => {
@@ -1394,19 +1386,10 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
                   </div>
                 </div>
                 <ViewpointGroupList
-                  caseEditMode={caseEditMode}
                   groups={aGroups}
-                  allActive={filteredActive} now={now}
-                  companyOrder={settings.companyOrder || []}
+                  allActive={filteredActive}
                   sortMode="deadline"
-                  projectOrder={projectOrder} saveProjectOrder={saveProjectOrder}
-                  handleEdit={handleEdit} handleEditProject={handleEditProject} handleEditViewpoint={handleEditViewpoint}
-                  handleAddViewpointToProject={handleAddViewpointToProject}
-                  handleDeleteViewpoint={handleDeleteViewpoint}
-                  handleDelete={handleDelete} toggleStatus={toggleStatus}
-                  moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={onDragTask} onDropTask={onDropTask} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} setTaskAssignee={setTaskAssignee} completeProject={completeProject} cancelProject={cancelProject} suspendProject={suspendProject} completeViewpoint={completeViewpoint}
-                  handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} setViewpointMeta={setViewpointMeta} setStepMeta={setStepMeta} createBillingFromViewpoint={createBillingFromViewpoint} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline} companyList={companyList} assigneeList={assigneeList} offshoreCompanies={offshoreCompanies} defaultCollapsed
-                  colors={colors} fontJP={fontJP} />
+                  defaultCollapsed />
               </section>
             );
           })}
@@ -1415,49 +1398,20 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
           })()
         ) : (
           <ViewpointGroupList
-            caseEditMode={caseEditMode}
             groups={groupByViewpoint(filteredActive, vpDeliveryCount)}
-            allActive={filteredActive} now={now}
-            companyOrder={settings.companyOrder || []}
+            allActive={filteredActive}
             sortMode={listGroupMode === 'deadline' ? 'deadline' : 'production'}
-            projectOrder={projectOrder} saveProjectOrder={saveProjectOrder}
-            handleEdit={handleEdit} handleEditProject={handleEditProject} handleEditViewpoint={handleEditViewpoint}
-            handleAddViewpointToProject={handleAddViewpointToProject}
-            handleDeleteViewpoint={handleDeleteViewpoint}
-            handleDelete={handleDelete} toggleStatus={toggleStatus}
-            moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={onDragTask} onDropTask={onDropTask} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} setTaskAssignee={setTaskAssignee} completeProject={completeProject} cancelProject={cancelProject} suspendProject={suspendProject} completeViewpoint={completeViewpoint}
-            handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} setViewpointMeta={setViewpointMeta} setStepMeta={setStepMeta} createBillingFromViewpoint={createBillingFromViewpoint} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline} companyList={companyList} assigneeList={assigneeList} offshoreCompanies={offshoreCompanies} defaultCollapsed
-            colors={colors} fontJP={fontJP} />
+            defaultCollapsed />
         )}
       </section>
 
-      <SuspendedSection
-        suspended={scheduled.suspended} now={now}
-        resumeProject={resumeProject}
-        colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
+      <SuspendedSection suspended={scheduled.suspended} />
 
-      <ReviewSection
-        review={scheduled.review} now={now}
-        finalizeReview={finalizeReview} reopenReview={reopenReview} setReviewNote={setReviewNote} setReviewActualEnd={setReviewActualEnd}
-        vpDeliveryCount={vpDeliveryCount}
-        colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
+      <ReviewSection review={scheduled.review} />
       </>)}
-      {inputTab === 'calendar' && (
-        <CalendarView scheduled={scheduled} settings={settings} now={now} colors={colors} fontDisplay={fontDisplay} fontJP={fontJP}
-          onEditProject={handleEditProject} assigneeOrder={assigneeOrder}
-          onReorderAssignee={onReorderAssignee} onReorderProject={onReorderProject} onReassignViewpoint={onReassignViewpoint} />
-      )}
+      {inputTab === 'calendar' && <CalendarView />}
       {inputTab === 'assignee' && (
-        <AssigneeView scheduled={scheduled} selectedAssignee={selectedAssignee} setSelectedAssignee={setSelectedAssignee} now={now} caseEditMode={caseEditMode} assigneeOrder={assigneeOrder} vpDeliveryCount={vpDeliveryCount}
-          companyOrder={companyOrder} companyList={companyList} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline}
-          projectOrder={projectOrder} saveProjectOrder={saveProjectOrder}
-          handleEdit={handleEdit} handleEditProject={handleEditProject} handleEditViewpoint={handleEditViewpoint}
-          handleAddViewpointToProject={handleAddViewpointToProject}
-          handleDeleteViewpoint={handleDeleteViewpoint}
-          handleDelete={handleDelete} toggleStatus={toggleStatus}
-          moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={onDragTask} onDropTask={onDropTask} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} setTaskAssignee={setTaskAssignee} completeProject={completeProject} cancelProject={cancelProject} suspendProject={suspendProject} completeViewpoint={completeViewpoint}
-          handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} setViewpointMeta={setViewpointMeta} setStepMeta={setStepMeta} createBillingFromViewpoint={createBillingFromViewpoint} offshoreCompanies={offshoreCompanies} assigneeList={assigneeList}
-          colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
+        <AssigneeView selectedAssignee={selectedAssignee} setSelectedAssignee={setSelectedAssignee} />
       )}
     </div>
   );

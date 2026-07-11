@@ -1,7 +1,8 @@
 // アプリ本体：状態管理・Firestore購読・タスク操作ハンドラ・画面切替。
 // 各ビュー・部品・ロジックは src/lib, src/components, src/views に分割済み。
 // ============ メイン ============
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { AppCtx } from './appContext.js';
 import { COMPANY_PRESETS, DEFAULT_SETTINGS, VIEWPOINT_PRESETS, assignProjectColors, dateToDtLocal, expandHolidayDates, fmtHM, fmtYMD, genId, getHoursPerDay, makeEmptyStep, makeViewpointFromPreset, normalizeCustomerMaster, parseHM, startOfDay, syncHolidays } from './lib/utils.js';
 import { DEFAULT_STEP_TYPES, deliveryBaseName, findStepType, normalizeHistory, normalizeStepTypes, num as vpNum, resolveViewpointSteps, roundTypeOf, stepDeliveryName } from './viewpoint/viewpointUtils.js';
 import { billingStore, memberList, salesStore, signIn, signOutUser, storage, subscribeAuth, tasksStore } from './firebase.js';
@@ -12,17 +13,16 @@ import { CheckCircle2, ClipboardList, FileText, Folder, MessageSquare, Plus, Rot
 import { CompleteDialog, DeadlineConfirmModal, NavButton, TimeSelect } from './components/common.jsx';
 import { MemberSettings } from './components/MemberSettings.jsx';
 import { InputView } from './views/InputView.jsx';
-import { CalendarView } from './views/CalendarView.jsx';
-import { AssigneeView } from './views/AssigneeView.jsx';
-import { MessageView } from './views/MessageView.jsx';
-import { DoneView } from './views/DoneView.jsx';
-import { MasterView } from './views/MasterView.jsx';
-import { MemoView } from './views/MemoView.jsx';
-import BillingView from './billing/BillingView.jsx';
-import SalesView from './sales/SalesView.jsx';
-import ProjectSheetView from './project/ProjectSheetView.jsx';
-import CompanySummaryView from './sales/CompanySummaryView.jsx';
 import { EndPromptModal } from './components/modals.jsx';
+// 毎日使う「案件」タブ以外のビューは、開いたときに読み込む（初回ロードを軽くする）
+const MessageView = lazy(() => import('./views/MessageView.jsx').then(m => ({ default: m.MessageView })));
+const DoneView = lazy(() => import('./views/DoneView.jsx').then(m => ({ default: m.DoneView })));
+const MasterView = lazy(() => import('./views/MasterView.jsx').then(m => ({ default: m.MasterView })));
+const MemoView = lazy(() => import('./views/MemoView.jsx').then(m => ({ default: m.MemoView })));
+const BillingView = lazy(() => import('./billing/BillingView.jsx'));
+const SalesView = lazy(() => import('./sales/SalesView.jsx'));
+const ProjectSheetView = lazy(() => import('./project/ProjectSheetView.jsx'));
+const CompanySummaryView = lazy(() => import('./sales/CompanySummaryView.jsx'));
 export default function App() {
   const [tasks, setTasks] = useState([]);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
@@ -51,8 +51,6 @@ export default function App() {
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }));
   }, [editMode]);
-  // カレンダーから案件編集を開いた場合 true（入力へ遷移せず、カレンダーのすぐ下にフォームを表示）
-  const [calendarEdit, setCalendarEdit] = useState(false);
   // 案件の並び順（ドラッグ＆ドロップ用）。Firestore に projectOrder として保存
   const [projectOrder, setProjectOrder] = useState([]);
   // お客様マスタ（[{ id, company, contact }]）・従業員マスタ（[{ id, name, role }]）
@@ -1092,7 +1090,6 @@ export default function App() {
       setEditMode(null);
       setEditingId(null);
       setForm(emptyForm);
-      setCalendarEdit(false);
       return true;
     }
 
@@ -1163,7 +1160,7 @@ export default function App() {
   };
 
   // 案件を編集：新規登録フォームに案件全体（全視点・全ステップ、完了済み含む）を pre-populate
-  const handleEditProject = (projectName, fromCalendar = false) => {
+  const handleEditProject = (projectName) => {
     const projectTasks = tasksRef.current.filter(t => t.projectName === projectName);
     if (projectTasks.length === 0) { alert('この案件には編集できるタスクがありません'); return; }
     // 視点ごとにグループ化（出現順）→ 各視点内は stepOrder 順
@@ -1235,15 +1232,9 @@ export default function App() {
     });
     setEditingId(null);
     setEditMode({ type: 'project', projectName: first.projectName });
-    if (fromCalendar) {
-      // カレンダーのすぐ下にインライン表示（入力タブへは遷移しない）
-      setCalendarEdit(true);
-    } else {
-      setCalendarEdit(false);
-      editReturnProject.current = first.projectName; // 編集後に元の位置へ戻す
-      setView('input');
-      if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
-    }
+    editReturnProject.current = first.projectName; // 編集後に元の位置へ戻す
+    setView('input');
+    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   // 視点を削除（ぶら下がる全ステップ＝アクティブ＋完了済みを一括削除）
@@ -2031,6 +2022,42 @@ export default function App() {
     );
   }
 
+  // ビュー・カード類が useApp()（src/appContext.js）で参照する共有データ＋タスク操作ハンドラ。
+  // コンポーネント固有の値（form・group・task など）は従来どおり props で渡す。
+  const appValue = {
+    // UIテーマ
+    colors, fontJP, fontDisplay,
+    // 共有データ
+    tasks, scheduled, settings, now, memos,
+    projectOrder, projectList, projectInternalList, viewpointList,
+    assigneeList, assigneeOrder, companyList, customerMaster, employeeMaster,
+    stepTypeMaster, vpDeliveryCount, offshoreCompanies,
+    companyOrder: settings.companyOrder || [],
+    usedCompanies: [...new Set(tasks.map(t => (t.companyName || '').trim()).filter(Boolean))],
+    caseEditMode,
+    dragTaskId,
+    // タスク・案件・視点の操作
+    handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject,
+    handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority,
+    addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd,
+    setTaskAssignee, completeProject, cancelProject, suspendProject, completeViewpoint,
+    handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, setViewpointMeta,
+    setStepMeta, createBillingFromViewpoint, saveProjectInfo, setProjectDeadline,
+    finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, resumeProject,
+    registerDraftAndEdit, setActualEnd,
+    onDragTask: setDragTaskId, onDropTask: reorderTaskPriority,
+    saveProjectOrder: saveProjectOrderPartial,
+    onReorderAssignee: reorderAssigneeFromCalendar,
+    onReorderProject: reorderProjectFromCalendar,
+    onReassignViewpoint: reassignViewpointFromCalendar,
+    // マスタ管理
+    saveCustomerMaster, saveEmployeeMaster, saveStepTypeMaster,
+    addOvertime, removeOvertime, addAbsence, removeAbsence, addHolidays, removeHoliday,
+    saveCompanyOrder,
+    // タスクメモ
+    upsertMemo, deleteMemo,
+  };
+
   const navItems = [
     { id: 'input', icon: <Plus size={15} />, label: '入力' },
     { id: 'message', icon: <MessageSquare size={15} />, label: 'サマリー' },
@@ -2044,6 +2071,7 @@ export default function App() {
   ];
 
   return (
+    <AppCtx.Provider value={appValue}>
     <div style={{ minHeight: '100vh', background: colors.bg, fontFamily: fontJP, color: colors.text }}>
       {/* 一番上：案件編集モードのトグル（ON中は納期の警告を一時的に非表示） */}
       <div style={{ background: caseEditMode ? '#fff4d6' : colors.surface, borderBottom: `1px solid ${caseEditMode ? '#e8d089' : colors.border}` }}>
@@ -2127,89 +2155,17 @@ export default function App() {
       </header>
 
       <main style={{ maxWidth: 1600, margin: '0 auto', padding: '28px' }}>
+        <Suspense fallback={<div style={{ padding: 60, textAlign: 'center', color: colors.textMute, fontFamily: fontJP, fontSize: 13 }}>読み込み中...</div>}>
         {view === 'input' && (
-          <InputView form={form} setForm={setForm} stepTypeMaster={stepTypeMaster} handleSubmit={handleSubmit} registerDraftAndEdit={registerDraftAndEdit} editingId={editingId} editMode={editMode} caseEditMode={caseEditMode} vpDeliveryCount={vpDeliveryCount}
+          <InputView form={form} setForm={setForm} handleSubmit={handleSubmit}
+            editingId={editingId} editMode={editMode}
             cancelEdit={() => { setEditingId(null); setEditMode(null); setForm(emptyForm); }}
-            tasks={tasks} scheduled={scheduled}
-            projectOrder={projectOrder} saveProjectOrder={saveProjectOrderPartial}
-            companyList={companyList} customerMaster={customerMaster}
-            handleEdit={handleEdit} handleEditProject={handleEditProject} handleEditViewpoint={handleEditViewpoint}
-            handleAddViewpointToProject={handleAddViewpointToProject}
-            handleDeleteViewpoint={handleDeleteViewpoint}
-            handleDelete={handleDelete} toggleStatus={toggleStatus}
-            moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={setDragTaskId} onDropTask={reorderTaskPriority} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} setTaskAssignee={setTaskAssignee} completeProject={completeProject} cancelProject={cancelProject} suspendProject={suspendProject} completeViewpoint={completeViewpoint}
-            handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} setViewpointMeta={setViewpointMeta} setStepMeta={setStepMeta} createBillingFromViewpoint={createBillingFromViewpoint} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline}
-            finalizeReview={finalizeReview} reopenReview={reopenReview} setReviewNote={setReviewNote} setReviewActualEnd={setReviewActualEnd} resumeProject={resumeProject}
-            projectList={projectList} projectInternalList={projectInternalList} viewpointList={viewpointList} assigneeList={assigneeList} assigneeOrder={assigneeOrder}
-            settings={settings} now={now}
-            selectedAssignee={selectedAssignee} setSelectedAssignee={setSelectedAssignee} companyOrder={settings.companyOrder || []}
-            onReorderAssignee={reorderAssigneeFromCalendar} onReorderProject={reorderProjectFromCalendar} onReassignViewpoint={reassignViewpointFromCalendar}
-            colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
+            selectedAssignee={selectedAssignee} setSelectedAssignee={setSelectedAssignee} />
         )}
-        {view === 'calendar' && (
-          <>
-          <CalendarView scheduled={scheduled} settings={settings} now={now} colors={colors} fontDisplay={fontDisplay} fontJP={fontJP}
-            onEditProject={(p) => handleEditProject(p, true)} assigneeOrder={assigneeOrder}
-            onReorderAssignee={reorderAssigneeFromCalendar} onReorderProject={reorderProjectFromCalendar} onReassignViewpoint={reassignViewpointFromCalendar} />
-          {/* カレンダーから案件編集を開いた場合、入力へ遷移せずスケジュールのすぐ下にフォームを表示 */}
-          {calendarEdit && editMode && (
-            <div style={{ marginTop: 24 }}>
-              <InputView embedded form={form} setForm={setForm} stepTypeMaster={stepTypeMaster} handleSubmit={handleSubmit} registerDraftAndEdit={registerDraftAndEdit} editingId={editingId} editMode={editMode} caseEditMode={caseEditMode} vpDeliveryCount={vpDeliveryCount}
-                cancelEdit={() => { setEditingId(null); setEditMode(null); setForm(emptyForm); setCalendarEdit(false); }}
-                tasks={tasks} scheduled={scheduled}
-                projectOrder={projectOrder} saveProjectOrder={saveProjectOrderPartial}
-                companyList={companyList} customerMaster={customerMaster}
-                handleEdit={handleEdit} handleEditProject={handleEditProject} handleEditViewpoint={handleEditViewpoint}
-                handleAddViewpointToProject={handleAddViewpointToProject}
-                handleDeleteViewpoint={handleDeleteViewpoint}
-                handleDelete={handleDelete} toggleStatus={toggleStatus}
-                moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={setDragTaskId} onDropTask={reorderTaskPriority} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} setTaskAssignee={setTaskAssignee} completeProject={completeProject} cancelProject={cancelProject} suspendProject={suspendProject} completeViewpoint={completeViewpoint}
-                handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} setViewpointMeta={setViewpointMeta} setStepMeta={setStepMeta} createBillingFromViewpoint={createBillingFromViewpoint} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline}
-                finalizeReview={finalizeReview} reopenReview={reopenReview} setReviewNote={setReviewNote} setReviewActualEnd={setReviewActualEnd} resumeProject={resumeProject}
-                projectList={projectList} projectInternalList={projectInternalList} viewpointList={viewpointList} assigneeList={assigneeList} assigneeOrder={assigneeOrder}
-                settings={settings} now={now}
-                colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
-            </div>
-          )}
-          </>
-        )}
-        {view === 'byAssignee' && (
-          <AssigneeView scheduled={scheduled} selectedAssignee={selectedAssignee} setSelectedAssignee={setSelectedAssignee} now={now} caseEditMode={caseEditMode} assigneeOrder={assigneeOrder} vpDeliveryCount={vpDeliveryCount}
-            companyOrder={settings.companyOrder || []} companyList={companyList} saveProjectInfo={saveProjectInfo} setProjectDeadline={setProjectDeadline}
-            projectOrder={projectOrder} saveProjectOrder={saveProjectOrderPartial}
-            handleEdit={handleEdit} handleEditProject={handleEditProject} handleEditViewpoint={handleEditViewpoint}
-            handleAddViewpointToProject={handleAddViewpointToProject}
-            handleDeleteViewpoint={handleDeleteViewpoint}
-            handleDelete={handleDelete} toggleStatus={toggleStatus}
-            moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={setDragTaskId} onDropTask={reorderTaskPriority} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} setTaskAssignee={setTaskAssignee} completeProject={completeProject} cancelProject={cancelProject} suspendProject={suspendProject} completeViewpoint={completeViewpoint}
-            handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline} assigneeList={assigneeList}
-            colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
-        )}
-        {view === 'message' && (
-          <MessageView scheduled={scheduled} settings={settings} colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} assigneeOrder={assigneeOrder} vpDeliveryCount={vpDeliveryCount} />
-        )}
-        {view === 'done' && (
-          <DoneView scheduled={scheduled} tasks={tasks} toggleStatus={toggleStatus} handleDelete={handleDelete}
-            setActualEnd={setActualEnd} handleEditProject={handleEditProject}
-            colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
-        )}
-        {view === 'master' && (
-          <MasterView
-            customerMaster={customerMaster} saveCustomerMaster={saveCustomerMaster}
-            employeeMaster={employeeMaster} saveEmployeeMaster={saveEmployeeMaster}
-            stepTypeMaster={stepTypeMaster} saveStepTypeMaster={saveStepTypeMaster}
-            settings={settings} assigneeList={assigneeList}
-            addOvertime={addOvertime} removeOvertime={removeOvertime}
-            addAbsence={addAbsence} removeAbsence={removeAbsence}
-            addHolidays={addHolidays} removeHoliday={removeHoliday}
-            saveCompanyOrder={saveCompanyOrder}
-            usedCompanies={[...new Set(tasks.map(t => (t.companyName || '').trim()).filter(Boolean))]}
-            colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
-        )}
-        {view === 'memo' && (
-          <MemoView memos={memos} upsertMemo={upsertMemo} deleteMemo={deleteMemo} now={now}
-            colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
-        )}
+        {view === 'message' && <MessageView />}
+        {view === 'done' && <DoneView />}
+        {view === 'master' && <MasterView />}
+        {view === 'memo' && <MemoView />}
         {view === 'billing' && (
           <BillingView customerMaster={customerMaster} tasks={tasks} now={now}
             colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
@@ -2227,6 +2183,7 @@ export default function App() {
           <CompanySummaryView tasks={tasks} now={now}
             colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
         )}
+        </Suspense>
       </main>
 
       {completeTarget && (
@@ -2270,6 +2227,7 @@ export default function App() {
       )}
 
     </div>
+    </AppCtx.Provider>
   );
 }
 

@@ -1,10 +1,18 @@
 // マスタ管理ビュー（お客様・従業員・ステップ種類・残業・欠勤・祝日・会社表示順）。App.jsx から分割。
 import { useState, useEffect, useRef } from 'react';
+import { useApp } from '../appContext.js';
 import { ChevronDown, ChevronUp, GripVertical, Plus, Search, Trash2, X } from 'lucide-react';
 import { VN_LUNAR_HOLIDAYS, dayName, expandHolidayDates, fmtMD, fmtYMD, getProjectColor, vietnamHolidayCandidates } from '../lib/utils.js';
 import { TimeSelect } from '../components/common.jsx';
 
-function MasterView({ customerMaster, saveCustomerMaster, employeeMaster, saveEmployeeMaster, stepTypeMaster, saveStepTypeMaster, settings, assigneeList, addOvertime, removeOvertime, addAbsence, removeAbsence, addHolidays, removeHoliday, saveCompanyOrder, usedCompanies, colors, fontJP, fontDisplay }) {
+function MasterView() {
+  const {
+    colors, fontJP, fontDisplay, settings, assigneeList, usedCompanies,
+    customerMaster, saveCustomerMaster, employeeMaster, saveEmployeeMaster,
+    stepTypeMaster, saveStepTypeMaster,
+    addOvertime, removeOvertime, addAbsence, removeAbsence, addHolidays, removeHoliday,
+    saveCompanyOrder,
+  } = useApp();
   // ローカル下書き（入力中の値）。props が更新されたら同期する
   const [customers, setCustomers] = useState(customerMaster);
   const [employees, setEmployees] = useState(employeeMaster);

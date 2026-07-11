@@ -1,12 +1,18 @@
 // 進行中案件一覧（視点グループ・視点カード・ステップ行・請求パネル）。App.jsx から分割。
 import { useState, useEffect, useMemo, useRef } from 'react';
+import { useApp } from '../../appContext.js';
 import { dateToDtLocal, dayName, fmtHM, fmtMD, fmtYMD, getProjectColor, isSameDay, minToTime, parseHM, priorityColor, startOfDay } from '../../lib/utils.js';
 import { compareCompanyDisplay, computeProjectOrder, elapsedHoursForSlots } from '../../lib/schedule.js';
 import { Check, CheckCircle2, ChevronDown, ChevronUp, Clock, Edit2, FileText, GripVertical, PauseCircle, Plus, Trash2, User, X, Zap } from 'lucide-react';
 import { ROUND_TYPES, deliveryBaseName, num as vpNum, roundTypeOf, stepDeliveryName } from '../../viewpoint/viewpointUtils.js';
 import { iconBtnStyle, miniBtnStyle, progressBtnStyle } from '../../components/common.jsx';
 
-function ViewpointGroupList({ groups, allActive, now, caseEditMode, companyOrder, projectOrder, saveProjectOrder, sortMode, handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, setTaskAssignee, completeProject, cancelProject, suspendProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, setViewpointMeta, setStepMeta, createBillingFromViewpoint, saveProjectInfo, setProjectDeadline, companyList, assigneeList, offshoreCompanies, defaultCollapsed, colors, fontJP }) {
+function ViewpointGroupList({ groups, allActive, sortMode, defaultCollapsed }) {
+  const {
+    colors, fontJP, now, caseEditMode, companyOrder, projectOrder, saveProjectOrder,
+    offshoreCompanies, handleEditProject, completeProject, cancelProject,
+    suspendProject, setProjectDeadline,
+  } = useApp();
   // 契約形態「オフショア」の会社（お客様マスタ由来）。会社別表示で「オフショア（その他）」へ集約する。
   // 渡されない（担当者別など）場合は集約しない。
   const isOffshore = (c) => !!offshoreCompanies && offshoreCompanies.has(c || '');
@@ -539,17 +545,9 @@ function ViewpointGroupList({ groups, allActive, now, caseEditMode, companyOrder
             {!isCollapsed && pg.viewpointGroups.map(group => (
               // 視点カードは案件ヘッダーから1段インデント（全視点同じ深さで揃える）
               <div key={group.key} style={{ marginLeft: 22 }}>
-              <ViewpointCard group={group} now={now} caseEditMode={caseEditMode}
+              <ViewpointCard group={group}
                 allSortedIds={allSortedIds}
-                companyFirstIds={companyFirstIds} companyLastIds={companyLastIds}
-                handleEdit={handleEdit} handleEditViewpoint={handleEditViewpoint}
-                handleDeleteViewpoint={handleDeleteViewpoint}
-                handleDelete={handleDelete} toggleStatus={toggleStatus}
-                moveUp={moveUp} moveDown={moveDown} changePriority={changePriority} dragTaskId={dragTaskId} onDragTask={onDragTask} onDropTask={onDropTask} addProgress={addProgress} setTaskHours={setTaskHours} setTaskCompletedHours={setTaskCompletedHours} setTaskManualStart={setTaskManualStart} setTaskManualEnd={setTaskManualEnd} setTaskAssignee={setTaskAssignee} completeProject={completeProject} cancelProject={cancelProject} suspendProject={suspendProject} completeViewpoint={completeViewpoint}
-                handleAddStepToViewpoint={handleAddStepToViewpoint} reassignViewpoint={reassignViewpoint} setViewpointDeadline={setViewpointDeadline}
-                setViewpointMeta={setViewpointMeta} setStepMeta={setStepMeta} offshoreCompanies={offshoreCompanies} createBillingFromViewpoint={createBillingFromViewpoint}
-                assigneeList={assigneeList}
-                colors={colors} fontJP={fontJP} />
+                companyFirstIds={companyFirstIds} companyLastIds={companyLastIds} />
               </div>
             ))}
           </div>
@@ -563,7 +561,8 @@ function ViewpointGroupList({ groups, allActive, now, caseEditMode, companyOrder
 
 // 視点の「制作・納品」パネル：納品名（自動/上書き）・納品集計・制作履歴（初回/追加/修正の依頼日）・
 // オフショア金額・外注情報。売上登録表へは自動同期（金額の入ったラウンドが売上行になる）。
-function ViewpointMetaPanel({ group, setViewpointMeta, setStepMeta, isOffshore, createBillingFromViewpoint, colors, fontJP }) {
+function ViewpointMetaPanel({ group, isOffshore }) {
+  const { colors, fontJP, setViewpointMeta, setStepMeta, createBillingFromViewpoint } = useApp();
   const [open, setOpen] = useState(false);
   const base = group.deliveryBaseName || deliveryBaseName(group.projectName, group.viewpointNameExternal || group.viewpointName, group.deliveryNameOverride);
   const countAs = group.countAsDelivery !== false;
@@ -692,7 +691,14 @@ function ViewpointMetaPanel({ group, setViewpointMeta, setStepMeta, isOffshore, 
   );
 }
 
-function ViewpointCard({ group, now, caseEditMode, allSortedIds, companyFirstIds, companyLastIds, handleEdit, handleEditViewpoint, handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, setTaskAssignee, completeProject, completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, setViewpointMeta, setStepMeta, offshoreCompanies, createBillingFromViewpoint, assigneeList, colors, fontJP }) {
+function ViewpointCard({ group, allSortedIds, companyFirstIds, companyLastIds }) {
+  const {
+    colors, fontJP, now, caseEditMode, assigneeList, offshoreCompanies,
+    handleEdit, handleEditViewpoint, handleDeleteViewpoint, handleDelete, toggleStatus,
+    moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress,
+    setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, setTaskAssignee,
+    completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline,
+  } = useApp();
   const projectColor = getProjectColor(group.projectName);
   const progressPct = group.totalHours > 0 ? (group.completedHours / group.totalHours) * 100 : 0;
   // 経過進捗（時間経過ベース・表示用）
@@ -883,12 +889,8 @@ function ViewpointCard({ group, now, caseEditMode, allSortedIds, companyFirstIds
       </div>
 
       {/* 制作・納品パネル（納品名・制作履歴・金額・外注） */}
-      {setViewpointMeta && (
-        <ViewpointMetaPanel group={group} setViewpointMeta={setViewpointMeta} setStepMeta={setStepMeta}
-          isOffshore={!!offshoreCompanies && offshoreCompanies.has(group.companyName || '')}
-          createBillingFromViewpoint={createBillingFromViewpoint}
-          colors={colors} fontJP={fontJP} />
-      )}
+      <ViewpointMetaPanel group={group}
+        isOffshore={!!offshoreCompanies && offshoreCompanies.has(group.companyName || '')} />
 
       {/* ステップリスト */}
       {group.tasks.map((task, idx) => {

@@ -1,5 +1,6 @@
 // サマリービュー（会社別の業務連絡文・本日の納品まとめ）。App.jsx から分割。
 import { useState, useMemo } from 'react';
+import { useApp } from '../appContext.js';
 import { addDays, dayName, fmtMD, fmtYMD, fmtYMDJP, getProjectColor, isSameDay, minToTime, priorityColor, sheetsLabel, startOfDay } from '../lib/utils.js';
 import { buildDoneSlots, companySequence, groupByViewpoint, sortAssigneesByMaster } from '../lib/schedule.js';
 import { Check, MessageSquare, TrendingUp } from 'lucide-react';
@@ -34,7 +35,8 @@ const NO_PROJECT_GREETINGS_EVENING = [
 ];
 
 // ============ メッセージビュー ============
-function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigneeOrder, vpDeliveryCount }) {
+function MessageView() {
+  const { colors, fontJP, fontDisplay, scheduled, settings, assigneeOrder, vpDeliveryCount } = useApp();
   const today = startOfDay(new Date());
   const weekEnd = addDays(today, 7);
 
