@@ -793,10 +793,10 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
           </div>
           <div>
             <label style={labelStyle}>依頼日（案件共通・任意）</label>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap' }}>
               <input type="date" value={form.projectRequestDate || ''}
                 onChange={(e) => setForm({ ...form, projectRequestDate: e.target.value })}
-                style={{ ...inputStyle, flex: '1 1 150px', minWidth: 150, width: 'auto' }} />
+                style={{ ...inputStyle, flex: '1 1 0', minWidth: 0, width: 'auto' }} />
               {form.projectRequestDate && (
                 <button type="button" onClick={() => setForm({ ...form, projectRequestDate: '' })}
                   style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '6px 10px', borderRadius: 3, fontSize: 11, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP, whiteSpace: 'nowrap', flexShrink: 0 }}>
@@ -807,10 +807,10 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
           </div>
           <div>
             <label style={labelStyle}>全体納期（案件共通・任意）</label>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap' }}>
               <input type="date" value={form.projectDeadline || ''}
                 onChange={(e) => setForm({ ...form, projectDeadline: e.target.value })}
-                style={{ ...inputStyle, flex: '1 1 150px', minWidth: 150, width: 'auto' }} />
+                style={{ ...inputStyle, flex: '1 1 0', minWidth: 0, width: 'auto' }} />
               {form.projectDeadline && (
                 <button type="button" onClick={() => setForm({ ...form, projectDeadline: '' })}
                   style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '6px 10px', borderRadius: 3, fontSize: 11, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP, whiteSpace: 'nowrap', flexShrink: 0 }}>
