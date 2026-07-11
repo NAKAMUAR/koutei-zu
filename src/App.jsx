@@ -6047,7 +6047,16 @@ function ViewpointGroupList({ groups, allActive, now, caseEditMode, companyOrder
       }
     }
     const arr = Array.from(map.values());
-    for (const pg of arr) pg.assignees = [...pg.assigneeSet];
+    // 案件内の視点は「社内視点名の数字が小さい順」で表示する（例：IN1→IN2→IN4）。
+    // 数字を含まない視点は末尾（元の相対順を維持）。
+    const vpNumOf = (name) => { const m = String(name || '').match(/\d+/); return m ? parseInt(m[0], 10) : Number.POSITIVE_INFINITY; };
+    for (const pg of arr) {
+      pg.assignees = [...pg.assigneeSet];
+      pg.viewpointGroups = pg.viewpointGroups
+        .map((g, i) => ({ g, i }))
+        .sort((a, b) => (vpNumOf(a.g.viewpointName) - vpNumOf(b.g.viewpointName)) || (a.i - b.i))
+        .map(x => x.g);
+    }
     return arr;
   }, [groups]);
 
