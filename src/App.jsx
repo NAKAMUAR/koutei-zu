@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useLayoutEffect } from 'react';
-import { Plus, Trash2, Edit2, Calendar as CalIcon, MessageSquare, Settings as SettingsIcon, Check, X, Clock, Folder, User, ChevronUp, ChevronDown, Users, CheckCircle2, RotateCcw, TrendingUp, ArrowRight, GripVertical, Search, AlertTriangle, StickyNote, Bell, BellOff, Zap, PauseCircle, PlayCircle, FileText, Table, ClipboardList } from 'lucide-react';
+import { Plus, Trash2, Edit2, Calendar as CalIcon, MessageSquare, Settings as SettingsIcon, Check, X, Clock, Folder, User, ChevronUp, ChevronDown, Users, CheckCircle2, RotateCcw, TrendingUp, ArrowRight, GripVertical, Search, AlertTriangle, StickyNote, Bell, BellOff, Zap, Menu, PauseCircle, PlayCircle, FileText, Table, ClipboardList } from 'lucide-react';
 import { storage, tasksStore, billingStore, salesStore, memberList, signIn, signOutUser, subscribeAuth } from './firebase.js';
 import BillingView from './billing/BillingView.jsx';
 import SalesView from './sales/SalesView.jsx';
@@ -17,6 +17,7 @@ import { blankDoc, blankItem } from './billing/billingUtils.js';
 import { notify, ToastHost } from './ui/toast.jsx';
 import { confirmDialog, ConfirmHost } from './ui/confirmDialog.jsx';
 import { useEscKey } from './ui/useEscKey.js';
+import { useMediaQuery } from './ui/useMediaQuery.js';
 import MemoView from './views/MemoView.jsx';
 import { ConfirmModal, TimeSelect, DurationSelect, NavButton, NavDropdown, Combobox } from './ui/controls.jsx';
 import { kanaNormalize } from './lib/text.js';
@@ -2416,6 +2417,22 @@ export default function App() {
   };
   const fontJP = "'Noto Sans JP', sans-serif";
   const fontDisplay = "'Shippori Mincho', serif";
+  // 狭い画面（タブレット縦・スマホ）ではナビをメニューにまとめ、余白を詰める
+  const isNarrow = useMediaQuery('(max-width: 900px)');
+
+  // グローバル検索からのジャンプ：進行中案件は入力ページの一覧へスクロール、完了案件は完了タブへ
+  const jumpToProject = (name, hasActive) => {
+    if (hasActive) {
+      setView('input');
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        const el = document.querySelector(`[data-project-name="${(window.CSS && CSS.escape) ? CSS.escape(name) : name}"]`);
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }));
+    } else {
+      setView('done');
+      notify(`「${name}」は完了案件のため、完了タブに表示しています`, 'info');
+    }
+  };
 
   if (!auth.ready) {
     return (
@@ -2489,7 +2506,7 @@ export default function App() {
       <ToastHost fontJP={fontJP} />
       <ConfirmHost fontJP={fontJP} fontDisplay={fontDisplay} />
       <header style={{ borderBottom: `1px solid ${colors.border}`, background: colors.surface }}>
-        <div style={{ maxWidth: 1600, margin: '0 auto', padding: '20px 28px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16 }}>
+        <div style={{ maxWidth: 1600, margin: '0 auto', padding: isNarrow ? '12px 14px' : '20px 28px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: isNarrow ? 10 : 16 }}>
           <div>
             <h1 style={{ fontFamily: fontDisplay, fontSize: 26, fontWeight: 700, letterSpacing: '0.05em', margin: 0, lineHeight: 1 }}>
               工程<span style={{ color: colors.accent }}>図</span>
@@ -2497,6 +2514,11 @@ export default function App() {
             <p style={{ fontSize: 10, color: colors.textMute, margin: '6px 0 0 0', letterSpacing: '0.15em' }}>SCHEDULE VISUALIZER</p>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <GlobalSearch tasks={tasks} onJump={jumpToProject} colors={colors} fontJP={fontJP} isNarrow={isNarrow} />
+            {isNarrow ? (
+              <NavDropdown label="メニュー" icon={<Menu size={15} />} view={view} setView={setView}
+                items={[...navDaily, ...navAccounting, ...navAdmin]} />
+            ) : (<>
             {navDaily.map(item => (
               <NavButton key={item.id} active={view === item.id} onClick={() => setView(item.id)} icon={item.icon} label={item.label}
                 badge={item.id === 'done' ? scheduled.doneFinal.length : null} />
@@ -2504,6 +2526,7 @@ export default function App() {
             <NavDropdown label="経理" icon={<FileText size={15} />} items={navAccounting} view={view} setView={setView} />
             <NavDropdown label="管理" icon={<Folder size={15} />} items={navAdmin} view={view} setView={setView} />
             <span style={{ width: 1, height: 22, background: colors.border, margin: '0 4px' }} />
+            </>)}
             <button onClick={toggleCaseEditMode}
               title="ON中は納期の警告（一覧の納期バッジ・上部バナー）を一時的に隠します。操作から30分で自動解除されます。"
               style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 11px', borderRadius: 999, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, fontWeight: 600, border: `1px solid ${caseEditMode ? '#d9a93a' : colors.border}`, background: caseEditMode ? '#f2b705' : 'transparent', color: caseEditMode ? '#3a2d00' : colors.textMute }}>
@@ -2511,7 +2534,7 @@ export default function App() {
               案件編集
             </button>
             <style>{`@keyframes kz-spin { to { transform: rotate(360deg); } }`}</style>
-            {lastSync && (
+            {!isNarrow && lastSync && (
               <span title="データベースと最後に同期した時刻（手動の再取得は設定パネルから）"
                 style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', padding: '0 2px' }}>
                 最終同期 {String(lastSync.getHours()).padStart(2, '0')}:{String(lastSync.getMinutes()).padStart(2, '0')}
@@ -2519,7 +2542,7 @@ export default function App() {
             )}
             <button onClick={() => setShowSettings(!showSettings)}
               style={{ padding: '7px 9px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', color: colors.textMute }}
-              title="設定"><SettingsIcon size={15} /></button>
+              title="設定" aria-label="設定"><SettingsIcon size={15} /></button>
             <button onClick={() => signOutUser()}
               title={auth.user?.email ? `${auth.user.email} からサインアウト` : 'サインアウト'}
               style={{ padding: '6px 10px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', color: colors.textMute, fontFamily: fontJP, fontSize: 11 }}>
@@ -2576,7 +2599,7 @@ export default function App() {
         )}
       </header>
 
-      <main style={{ maxWidth: 1600, margin: '0 auto', padding: '28px' }}>
+      <main style={{ maxWidth: 1600, margin: '0 auto', padding: isNarrow ? '14px 10px' : '28px' }}>
         {view === 'input' && (
           <InputView form={form} setForm={setForm} stepTypeMaster={stepTypeMaster} handleSubmit={handleSubmit} registerDraftAndEdit={registerDraftAndEdit} editingId={editingId} editMode={editMode} caseEditMode={caseEditMode} vpDeliveryCount={vpDeliveryCount}
             cancelEdit={() => { setEditingId(null); setEditMode(null); setForm(emptyForm); }}
@@ -2724,9 +2747,97 @@ export default function App() {
 }
 
 
+// ============ グローバル検索（案件・会社を横断検索して該当案件へジャンプ） ============
+function GlobalSearch({ tasks, onJump, colors, fontJP, isNarrow }) {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEscKey(() => { setOpen(false); setQuery(''); }, open);
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDown = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('pointerdown', onDown, true);
+    return () => document.removeEventListener('pointerdown', onDown, true);
+  }, [open]);
+
+  // 案件単位のインデックス（進行中を優先し、次に完了。かな・全半角ゆらぎを無視して照合）
+  const index = useMemo(() => {
+    const map = new Map();
+    for (const t of (tasks || [])) {
+      const p = (t.projectName || '').trim();
+      if (!p) continue;
+      if (!map.has(p)) map.set(p, { projectName: p, projectNameInternal: '', companyName: '', viewpoints: new Set(), hasActive: false });
+      const e = map.get(p);
+      if (t.projectNameInternal) e.projectNameInternal = t.projectNameInternal;
+      if (t.companyName) e.companyName = t.companyName;
+      if (t.viewpointName) e.viewpoints.add(t.viewpointName);
+      if (t.status !== 'done') e.hasActive = true;
+    }
+    return [...map.values()];
+  }, [tasks]);
+
+  const q = kanaNormalize(query.trim());
+  const results = useMemo(() => {
+    if (!q) return [];
+    const hit = index.filter(e =>
+      kanaNormalize(e.projectName).includes(q) ||
+      kanaNormalize(e.projectNameInternal).includes(q) ||
+      kanaNormalize(e.companyName).includes(q) ||
+      [...e.viewpoints].some(v => kanaNormalize(v).includes(q)));
+    return hit.sort((a, b) => (b.hasActive - a.hasActive) || a.projectName.localeCompare(b.projectName, 'ja')).slice(0, 8);
+  }, [index, q]);
+
+  const select = (e) => { setOpen(false); setQuery(''); onJump(e.projectName, e.hasActive); };
+  return (
+    <div ref={ref} style={{ position: 'relative', flex: isNarrow ? '1 1 160px' : '0 1 200px', minWidth: 130 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, border: `1px solid ${colors.border}`, borderRadius: 4, padding: '6px 9px', background: '#fff' }}>
+        <Search size={14} style={{ color: colors.textMute, flexShrink: 0 }} aria-hidden="true" />
+        <input type="search" value={query} aria-label="案件・会社を検索"
+          onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+          onFocus={() => query && setOpen(true)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && results.length > 0) select(results[0]); }}
+          placeholder="案件・会社を検索"
+          style={{ border: 'none', outline: 'none', fontFamily: fontJP, fontSize: 12.5, width: '100%', background: 'transparent', color: colors.text }} />
+      </div>
+      {open && q && (
+        <div style={{
+          position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 1500,
+          background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 6,
+          boxShadow: '0 8px 28px rgba(0,0,0,0.14)', padding: 6, minWidth: 260,
+          display: 'flex', flexDirection: 'column', gap: 2, maxHeight: 320, overflowY: 'auto',
+        }}>
+          {results.length === 0 ? (
+            <div style={{ padding: '10px 12px', fontSize: 12, color: colors.textMute, fontFamily: fontJP }}>該当する案件がありません</div>
+          ) : results.map(e => (
+            <button key={e.projectName} type="button" onClick={() => select(e)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', textAlign: 'left',
+                background: 'transparent', border: 'none', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP,
+              }}>
+              <span style={{
+                flexShrink: 0, fontSize: 11, fontWeight: 700, borderRadius: 3, padding: '2px 7px',
+                background: e.hasActive ? '#eef2ea' : '#f0ede4', color: e.hasActive ? '#3a5a40' : colors.textMute,
+              }}>{e.hasActive ? '進行中' : '完了'}</span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: colors.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {e.projectName}
+              </span>
+              {(e.companyName || e.projectNameInternal) && (
+                <span style={{ marginLeft: 'auto', fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                  {e.companyName || e.projectNameInternal}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ============ 登録確認モーダル（開始移動・納期超過＋繰り上げ提案） ============
 function DeadlineConfirmModal({ info, onCancel, onSubmit, colors, fontJP, fontDisplay }) {
   useEscKey(onCancel);
+  // 表示中は role="dialog" として扱う（下の stopPropagation 付き div に付与）
   const violations = info.violations || [];
   const hasViolation = violations.length > 0;
   const reorder = info.reorder || {};
@@ -2761,7 +2872,8 @@ function DeadlineConfirmModal({ info, onCancel, onSubmit, colors, fontJP, fontDi
   return (
     <div onClick={onCancel}
       style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}>
-      <div onClick={(e) => e.stopPropagation()}
+      <div role="dialog" aria-modal="true" aria-label="登録内容の確認"
+        onClick={(e) => e.stopPropagation()}
         style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 8, padding: 24, width: '100%', maxWidth: 460, maxHeight: '88vh', overflowY: 'auto', fontFamily: fontJP, boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
         <h3 style={{ fontFamily: fontDisplay, fontSize: 17, margin: '0 0 12px 0', fontWeight: 600 }}>
           {hasViolation ? '納期超過の確認' : 'スケジュールの確認'}
@@ -3466,6 +3578,7 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <button type="button" onClick={() => setFormCollapsed(c => !c)}
             title={formCollapsed ? 'フォームを開く' : 'フォームを折りたたむ'}
+            aria-label={formCollapsed ? 'フォームを開く' : 'フォームを折りたたむ'}
             style={{ background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', color: colors.textMute, padding: '4px 6px', display: 'flex', alignItems: 'center' }}>
             {formCollapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
           </button>
@@ -4044,7 +4157,7 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
                             color: vp.steps.length <= 1 ? '#ccc' : colors.textMute,
                             display: 'flex', alignItems: 'center',
                           }}
-                          title="このステップを削除"><Trash2 size={13} /></button>
+                          title="このステップを削除" aria-label="このステップを削除"><Trash2 size={13} /></button>
                       </div>
                       );
                     })}
@@ -6153,7 +6266,7 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
       </div>
       <div style={{ display: 'flex', gap: 4 }}>
         {/* ステップ単体の編集は「視点編集」に統合（視点編集で各ステップを一括編集できる） */}
-        <button onClick={onDelete} style={iconBtnStyle(colors)} title="削除"><Trash2 size={14} /></button>
+        <button onClick={onDelete} style={iconBtnStyle(colors)} title="削除" aria-label="削除"><Trash2 size={14} /></button>
       </div>
     </div>
   );
@@ -7812,9 +7925,9 @@ function DoneTaskRow({ task, onRestore, onDelete, onSetActualEnd, onEditProject,
         )}
       </div>
       <div style={{ display: 'flex', gap: 4 }}>
-        {onEditProject && <button onClick={onEditProject} style={iconBtnStyle(colors)} title="案件を編集（完了済みの情報も修正できます）"><Edit2 size={14} /></button>}
-        <button onClick={onRestore} style={iconBtnStyle(colors)} title="未完了に戻す"><RotateCcw size={14} /></button>
-        <button onClick={onDelete} style={iconBtnStyle(colors)} title="完全に削除"><Trash2 size={14} /></button>
+        {onEditProject && <button onClick={onEditProject} style={iconBtnStyle(colors)} title="案件を編集（完了済みの情報も修正できます）" aria-label="案件を編集"><Edit2 size={14} /></button>}
+        <button onClick={onRestore} style={iconBtnStyle(colors)} title="未完了に戻す" aria-label="未完了に戻す"><RotateCcw size={14} /></button>
+        <button onClick={onDelete} style={iconBtnStyle(colors)} title="完全に削除" aria-label="完全に削除"><Trash2 size={14} /></button>
       </div>
     </div>
   );
@@ -8343,7 +8456,8 @@ function CompleteDialog({ target, onConfirm, onCancel, colors, fontJP, fontDispl
         position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
         display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16,
       }}>
-      <div onClick={(e) => e.stopPropagation()}
+      <div role="dialog" aria-modal="true" aria-label="完了時間の入力"
+        onClick={(e) => e.stopPropagation()}
         style={{
           background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 8,
           padding: 24, width: '100%', maxWidth: 420, fontFamily: fontJP,
@@ -8629,7 +8743,8 @@ function QuoteModal({ projects, onSelect, onClose, colors, fontJP, fontDisplay }
   return (
     <div onClick={onClose}
       style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}>
-      <div onClick={(e) => e.stopPropagation()}
+      <div role="dialog" aria-modal="true" aria-label="過去案件から引用"
+        onClick={(e) => e.stopPropagation()}
         style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 8, width: '100%', maxWidth: 640, maxHeight: '80vh', display: 'flex', flexDirection: 'column', fontFamily: fontJP, boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
         <div style={{ padding: '18px 22px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
           <h3 style={{ fontFamily: fontDisplay, fontSize: 17, margin: 0, fontWeight: 600 }}>過去案件から引用</h3>

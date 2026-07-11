@@ -7,10 +7,17 @@ import { kanaNormalize } from '../lib/text.js';
 // ============ 確認モーダル（汎用） ============
 function ConfirmModal({ title, children, confirmLabel, cancelLabel, onConfirm, onCancel, colors, fontJP, fontDisplay }) {
   useEscKey(onCancel);
+  // 開いたら実行ボタンへフォーカスし、閉じたら元の位置へ戻す
+  const confirmBtnRef = useRef(null);
+  useEffect(() => {
+    const prev = document.activeElement;
+    confirmBtnRef.current?.focus();
+    return () => { try { prev?.focus(); } catch (e) {} };
+  }, []);
   return (
     <div onClick={onCancel}
       style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}>
-      <div onClick={(e) => e.stopPropagation()}
+      <div onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label={typeof title === 'string' ? title : '確認'}
         style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 8, padding: 24, width: '100%', maxWidth: 440, fontFamily: fontJP, boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
         <h3 style={{ fontFamily: fontDisplay, fontSize: 17, margin: '0 0 12px 0', fontWeight: 600 }}>{title}</h3>
         <div style={{ fontSize: 13, color: colors.text }}>{children}</div>
@@ -19,7 +26,7 @@ function ConfirmModal({ title, children, confirmLabel, cancelLabel, onConfirm, o
             style={{ padding: '8px 16px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13, color: colors.textMute }}>
             {cancelLabel || 'キャンセル'}
           </button>
-          <button type="button" onClick={onConfirm}
+          <button type="button" ref={confirmBtnRef} onClick={onConfirm}
             style={{ padding: '8px 18px', background: colors.text, color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13, fontWeight: 600 }}>
             {confirmLabel || 'OK'}
           </button>
