@@ -177,6 +177,20 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
     updateStep(vi, si, 'completedDate', val);
   };
 
+  // ステップの請求・納品欄（納品名・依頼日・完了日・金額）の開閉。
+  // 値が入っているステップは自動で開く。手動開閉はそれを上書きする。
+  const [billingOpenMap, setBillingOpenMap] = useState({}); // 'vi:si' -> bool
+  const stepHasBilling = (step) => !!(
+    String(step.amount ?? '').trim() || (step.requestDate || '').trim() ||
+    (step.completedDate || '').trim() || (step.deliveryName || '').trim()
+  );
+  const isBillingOpen = (vi, si, step) => {
+    const v = billingOpenMap[`${vi}:${si}`];
+    return v !== undefined ? v : stepHasBilling(step);
+  };
+  const toggleBillingOpen = (vi, si, step) =>
+    setBillingOpenMap(prev => ({ ...prev, [`${vi}:${si}`]: !isBillingOpen(vi, si, step) }));
+
   // 開始・終了予定のプレビュー：実データ（他タスク）に混ぜて実スケジュールと同じ計算をする
   const previewSchedule = useMemo(
     () => simulateFormSchedule(form, tasks, settings, projectOrder, now),
@@ -1023,12 +1037,15 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                       const amtDefault = (!isNaN(hNum) && hNum > 0) ? String(Math.round(hNum * STEP_AMOUNT_RATE)) : '';
                       const vpBase = deliveryBaseName(form.projectName, vp.viewpointNameExternal || vp.viewpointName, vp.deliveryName);
                       const stepDelivery = stepDeliveryName(vpBase, resolved.deliverySuffix || step.name);
+                      const billingOpen = isBillingOpen(vi, si, step);
                       return (
                       <div key={si} style={{
-                        display: 'flex', gap: 6, alignItems: 'flex-end',
                         background: '#fbf9f4', border: `1px solid ${colors.border}`,
-                        borderRadius: 4, padding: 10, flexWrap: 'wrap',
+                        borderRadius: 4, padding: 10,
+                        display: 'flex', flexDirection: 'column', gap: 8,
                       }}>
+                        {/* 1行目：進行管理の基本項目（種類・制作時間・完了時間） */}
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end', flexWrap: 'wrap' }}>
                         {/* 番号バッジ ＋ 並び替え（▲▼）。並び順は登録時の順番として保存される。 */}
                         <div style={{ display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0, marginBottom: 1 }}>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -1051,7 +1068,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                           }}>{si + 1}</div>
                         </div>
                         {/* ステップ名称（プルダウン選択式。選択肢は「マスタ」タブで編集可能） */}
-                        <div style={{ flex: '0 1 150px', minWidth: 128 }}>
+                        <div style={{ flex: '1 1 150px', minWidth: 128, maxWidth: 260 }}>
                           <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>ステップ（種類）</label>
                           <select value={selectValue}
                             onChange={(e) => updateStepType(vi, si, e.target.value)}
@@ -1070,8 +1087,52 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                             <div style={{ fontSize: 10, color: colors.textMute, marginTop: 3 }}>→ {resolved.label}</div>
                           )}
                         </div>
+                        {/* 制作時間（変更すると金額を自動算出） */}
+                        <div style={{ flex: '0 0 auto' }}>
+                          <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>制作時間</label>
+                          <DurationSelect value={step.hours}
+                            onChange={(val) => updateStepHours(vi, si, val)}
+                            colors={colors} fontJP={fontJP} maxHours={100} />
+                        </div>
+                        {/* 完了時間 */}
+                        <div style={{ flex: '0 0 auto' }}>
+                          <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>完了時間</label>
+                          <DurationSelect value={step.completedHours}
+                            onChange={(val) => updateStep(vi, si, 'completedHours', val)}
+                            colors={colors} fontJP={fontJP} maxHours={100} />
+                        </div>
+                        {/* 請求・納品欄の開閉。値が入っていれば自動で開く */}
+                        <button type="button" onClick={() => toggleBillingOpen(vi, si, step)}
+                          title="納品名・依頼日・完了日・金額の入力欄を開閉します（値が入っているステップは自動で開きます）"
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: 4,
+                            background: billingOpen ? '#fff' : 'transparent',
+                            border: `1px solid ${colors.border}`, borderRadius: 4,
+                            padding: '7px 10px', marginBottom: 1, flexShrink: 0,
+                            cursor: 'pointer', fontFamily: fontJP, fontSize: 11.5,
+                            color: (!billingOpen && stepHasBilling(step)) ? colors.accent : colors.textMute,
+                            fontWeight: (!billingOpen && stepHasBilling(step)) ? 700 : 400,
+                          }}>
+                          請求・納品{(!billingOpen && stepHasBilling(step)) ? '●' : ''}
+                          {billingOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                        </button>
+                        <button type="button" onClick={() => removeStep(vi, si)}
+                          disabled={vp.steps.length <= 1}
+                          style={{
+                            background: 'transparent', border: `1px solid ${colors.border}`,
+                            padding: 7, borderRadius: 4, marginBottom: 1, flexShrink: 0,
+                            cursor: vp.steps.length <= 1 ? 'not-allowed' : 'pointer',
+                            color: vp.steps.length <= 1 ? '#ccc' : colors.textMute,
+                            display: 'flex', alignItems: 'center',
+                          }}
+                          title="このステップを削除"><Trash2 size={13} /></button>
+                        </div>
+
+                        {/* 2行目（開いたときだけ）：請求・納品の項目（納品名・依頼日・完了日・金額） */}
+                        {billingOpen && (
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end', flexWrap: 'wrap', borderTop: `1px dashed ${colors.border}`, paddingTop: 8 }}>
                         {/* 納品名（ステップごと。空欄なら自動：案件名_社外視点名_納品名サフィックス。例：色付2） */}
-                        <div style={{ flex: '1 1 120px', minWidth: 100 }}>
+                        <div style={{ flex: '1 1 140px', minWidth: 120 }}>
                           <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>納品名</label>
                           <input type="text" value={step.deliveryName || ''}
                             onChange={(e) => updateStep(vi, si, 'deliveryName', e.target.value)}
@@ -1121,30 +1182,8 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                             <div style={{ fontSize: 11, color: colors.textMute, padding: '7px 0' }}>無料</div>
                           </div>
                         )}
-                        {/* 制作時間（変更すると金額を自動算出） */}
-                        <div style={{ flex: '0 0 auto' }}>
-                          <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>制作時間</label>
-                          <DurationSelect value={step.hours}
-                            onChange={(val) => updateStepHours(vi, si, val)}
-                            colors={colors} fontJP={fontJP} maxHours={100} />
                         </div>
-                        {/* 完了時間 */}
-                        <div style={{ flex: '0 0 auto' }}>
-                          <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>完了時間</label>
-                          <DurationSelect value={step.completedHours}
-                            onChange={(val) => updateStep(vi, si, 'completedHours', val)}
-                            colors={colors} fontJP={fontJP} maxHours={100} />
-                        </div>
-                        <button type="button" onClick={() => removeStep(vi, si)}
-                          disabled={vp.steps.length <= 1}
-                          style={{
-                            background: 'transparent', border: `1px solid ${colors.border}`,
-                            padding: 7, borderRadius: 4, marginBottom: 1, flexShrink: 0,
-                            cursor: vp.steps.length <= 1 ? 'not-allowed' : 'pointer',
-                            color: vp.steps.length <= 1 ? '#ccc' : colors.textMute,
-                            display: 'flex', alignItems: 'center',
-                          }}
-                          title="このステップを削除"><Trash2 size={13} /></button>
+                        )}
                       </div>
                       );
                     })}

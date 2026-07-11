@@ -1030,6 +1030,7 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
 
   return (
     <div
+      className="kz-row"
       onDragOver={(e) => { if (onDropTask && dragTaskId && dragTaskId !== task.id) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (!dragHover) setDragHover(true); } }}
       onDragLeave={() => { if (dragHover) setDragHover(false); }}
       onDrop={(e) => {
@@ -1068,7 +1069,7 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
       </button>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <div className="kz-hover-reveal" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           <button onClick={onMoveUp} disabled={!canMoveUp} style={miniBtnStyle(colors, !canMoveUp)} title="上へ">
             <ChevronUp size={11} />
           </button>
@@ -1319,7 +1320,7 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
       </div>
       <div style={{ display: 'flex', gap: 4 }}>
         {/* ステップ単体の編集は「視点編集」に統合（視点編集で各ステップを一括編集できる） */}
-        <button onClick={onDelete} style={iconBtnStyle(colors)} title="削除"><Trash2 size={14} /></button>
+        <button onClick={onDelete} className="kz-hover-reveal" style={iconBtnStyle(colors)} title="削除（直後なら「元に戻す」で復元可）"><Trash2 size={14} /></button>
       </div>
     </div>
   );

@@ -2167,7 +2167,18 @@ export default function App() {
             ))}
             <NavGroup label="集計・帳票" icon={<FileText size={15} />} items={reportNavItems}
               activeId={view} onSelect={setView} />
-            <style>{`@keyframes kz-spin { to { transform: rotate(360deg); } }`}</style>
+            <style>{`
+              @keyframes kz-spin { to { transform: rotate(360deg); } }
+              /* ホバーで現れる副次操作（▲▼・削除・鉛筆アイコンなど）。
+                 タッチ端末（hover無し）では常時表示してタップ可能にする */
+              .kz-row .kz-hover-reveal { opacity: 0; transition: opacity 0.12s; }
+              .kz-row:hover .kz-hover-reveal, .kz-row:focus-within .kz-hover-reveal { opacity: 1; }
+              @media (hover: none) { .kz-row .kz-hover-reveal { opacity: 1; } }
+              /* インライン編集できる値（点線ボタン）：ホバーで鉛筆アイコンを表示 */
+              .kz-inline-edit .kz-pencil { opacity: 0; transition: opacity 0.12s; margin-left: 3px; }
+              .kz-inline-edit:hover .kz-pencil { opacity: 0.9; }
+              @media (hover: none) { .kz-inline-edit .kz-pencil { opacity: 0.55; } }
+            `}</style>
             <button onClick={refreshData} disabled={refreshing}
               title={lastSync
                 ? `データベースから最新データを再取得（最終更新 ${String(lastSync.getHours()).padStart(2, '0')}:${String(lastSync.getMinutes()).padStart(2, '0')}）`
