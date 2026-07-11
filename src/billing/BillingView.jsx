@@ -4,6 +4,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Plus, Trash2, Edit2, Copy, Printer, X, FileText, Search, Building2 } from 'lucide-react';
 import { storage, billingStore } from '../firebase.js';
+import { notify } from '../ui/toast.jsx';
 import BillingDocument from './BillingDocument.jsx';
 import {
   DOC_TYPES, docTypeOf, blankDoc, blankItem, formatYen, formatJDate, computeTotals,
@@ -239,7 +240,7 @@ function IssuerSettings({ issuer, onClose, colors, fontJP }) {
       onClose();
     } catch (e) {
       console.error('自社情報の保存エラー:', e);
-      alert('保存に失敗しました');
+      notify('保存に失敗しました', 'error');
     } finally { setSaving(false); }
   };
   const sideForm = (side, title) => (

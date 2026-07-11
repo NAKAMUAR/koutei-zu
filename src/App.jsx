@@ -14,6 +14,11 @@ import {
 } from './viewpoint/viewpointUtils.js';
 import { collectSalesSyncRows, reconcileLedger } from './viewpoint/salesSync.js';
 import { blankDoc, blankItem } from './billing/billingUtils.js';
+import { notify, ToastHost } from './ui/toast.jsx';
+import { useEscKey } from './ui/useEscKey.js';
+import MemoView from './views/MemoView.jsx';
+import { ConfirmModal, TimeSelect, DurationSelect, NavButton, NavDropdown, Combobox } from './ui/controls.jsx';
+import { kanaNormalize } from './lib/text.js';
 
 // ============ 定数・ユーティリティ ============
 const PRIORITY_COLORS = ['#c1272d', '#d4a017', '#7a8471', '#5d4037', '#37474f'];
@@ -112,13 +117,6 @@ const fmtHM = (h) => {
 // 全角/半角（NFKC）・大文字小文字を揃え、カタカナ→ひらがなに統一する。
 // これにより「りのべる」「リノベル」「ﾘﾉﾍﾞﾙ」などスクリプト違いを同一視できる。
 // （漢字→読みの変換は読み仮名データが無いため対象外）
-const kanaNormalize = (s) => {
-  if (s == null) return '';
-  let r = String(s).normalize('NFKC').toLowerCase();
-  // カタカナ（ァ-ヶ）→ ひらがな
-  r = r.replace(/[ァ-ヶ]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0x60));
-  return r;
-};
 // "HH:MM" / "H:MM" / 素の数値（時間）→ 小数時間。入力用。無効なら NaN。
 const parseHM = (str) => {
   if (str == null) return NaN;
@@ -1686,7 +1684,7 @@ export default function App() {
       setLastSync(new Date());
     } catch (e) {
       console.error('データ更新エラー:', e);
-      alert('データの更新に失敗しました。通信状況を確認して、もう一度お試しください。\n' + (e?.message || e));
+      notify('データの更新に失敗しました。通信状況を確認して、もう一度お試しください。\n' + (e?.message || e), 'error');
     } finally {
       setRefreshing(false);
     }
@@ -1816,7 +1814,7 @@ export default function App() {
     const si = employeeMaster.findIndex(e => e.name === srcName);
     const ti = employeeMaster.findIndex(e => e.name === targetName);
     if (si < 0 || ti < 0) {
-      alert('担当者の並び替えは、従業員マスタに登録されている担当者同士でのみ行えます。\nマスタタブで従業員を登録してください。');
+      notify('担当者の並び替えは、従業員マスタに登録されている担当者同士でのみ行えます。\nマスタタブで従業員を登録してください。');
       return;
     }
     const src = employeeMaster[si];
@@ -2013,7 +2011,7 @@ export default function App() {
   // opts.orderOverride: 納期超過時の繰り上げで採用する案件並び順（完全な案件名リスト）
   const performSubmit = async (opts = {}) => {
     if (!form.projectName.trim()) {
-      alert('案件名を入力してください');
+      notify('案件名を入力してください');
       return false;
     }
     // 優先順位は廃止。編集時は既存の順位（form.priority）を保持し、
@@ -2178,9 +2176,9 @@ export default function App() {
       const originalById = new Map(originalTasks.map(t => [t.id, t]));
 
       const result = buildRecords(originalById);
-      if (result.error) { alert(result.error); return; }
+      if (result.error) { notify(result.error); return; }
       const upserts = result.upserts;
-      if (upserts.length === 0) { alert('少なくとも1つの視点とステップを入力してください'); return; }
+      if (upserts.length === 0) { notify('少なくとも1つの視点とステップを入力してください'); return; }
 
       // スコープ内で「元あったが form に残っていない」タスクは削除
       const keptIds = new Set(upserts.filter(u => originalById.has(u.id)).map(u => u.id));
@@ -2256,7 +2254,7 @@ export default function App() {
       tasksRef.current = normalized;
       syncAssigneesToMaster(finalUpserts);
       try { await tasksStore.batch(finalUpserts, deletedIds); }
-      catch (e) { console.error('編集保存エラー:', e); alert('保存に失敗しました：' + (e?.message || e)); }
+      catch (e) { console.error('編集保存エラー:', e); notify('保存に失敗しました：' + (e?.message || e), 'error'); }
 
       if (opts.orderOverride) saveProjectOrder(opts.orderOverride);
       setEditMode(null);
@@ -2268,9 +2266,9 @@ export default function App() {
 
     // 新規登録
     const result = buildRecords(null);
-    if (result.error) { alert(result.error); return false; }
+    if (result.error) { notify(result.error); return false; }
     const records = result.upserts;
-    if (records.length === 0) { alert('少なくとも1つの視点とステップを入力してください'); return false; }
+    if (records.length === 0) { notify('少なくとも1つの視点とステップを入力してください'); return false; }
     saveTasks(prev => normalizePriorities([...prev, ...records]));
     syncAssigneesToMaster(records);
     if (opts.orderOverride) saveProjectOrder(opts.orderOverride);
@@ -2284,7 +2282,7 @@ export default function App() {
   const registerDraftAndEdit = async () => {
     const projName = (form.projectName || '').trim();
     if (!projName) {
-      alert('入力中の案件名がないため、進行中タスクとして登録できません。案件名を入力してください。');
+      notify('入力中の案件名がないため、進行中タスクとして登録できません。案件名を入力してください。');
       return false;
     }
     // performSubmit を直接呼び、スケジュール調整モーダルを挟まずそのまま保存する
@@ -2335,7 +2333,7 @@ export default function App() {
   // 案件を編集：新規登録フォームに案件全体（全視点・全ステップ、完了済み含む）を pre-populate
   const handleEditProject = (projectName, fromCalendar = false) => {
     const projectTasks = tasksRef.current.filter(t => t.projectName === projectName);
-    if (projectTasks.length === 0) { alert('この案件には編集できるタスクがありません'); return; }
+    if (projectTasks.length === 0) { notify('この案件には編集できるタスクがありません'); return; }
     // 視点ごとにグループ化（出現順）→ 各視点内は stepOrder 順
     const vpMap = new Map();
     for (const t of projectTasks) {
@@ -2456,7 +2454,7 @@ export default function App() {
     setTasks(normalized);
     tasksRef.current = normalized;
     try { await tasksStore.batch([], deletedIds); }
-    catch (e) { console.error('視点削除エラー:', e); alert('削除に失敗しました：' + (e?.message || e)); }
+    catch (e) { console.error('視点削除エラー:', e); notify('削除に失敗しました：' + (e?.message || e), 'error'); }
   };
 
   // 案件に新しい視点を追加（新規登録フォームを案件名・コード入りで開く）
@@ -2494,7 +2492,7 @@ export default function App() {
       t.assignee === group.assignee &&
       t.status !== 'done'
     ).slice().sort((a, b) => (a.stepOrder ?? 0) - (b.stepOrder ?? 0));
-    if (tasksOfVp.length === 0) { alert('この視点には編集できるタスクがありません'); return; }
+    if (tasksOfVp.length === 0) { notify('この視点には編集できるタスクがありません'); return; }
     const first = tasksOfVp[0];
     const last = tasksOfVp[tasksOfVp.length - 1];
     const viewpoints = [{
@@ -2628,7 +2626,7 @@ export default function App() {
       setView('billing');
     } catch (e) {
       console.error('帳票の自動作成に失敗:', e);
-      alert('帳票の作成に失敗しました');
+      notify('帳票の作成に失敗しました', 'error');
     }
   };
 
@@ -2644,7 +2642,7 @@ export default function App() {
   // 戻り値：保存したら true、バリデーションエラーなら false（呼び出し側でパネルを閉じる判定に使う）
   const saveProjectInfo = (oldProjectName, info) => {
     const newName = (info.projectName || '').trim();
-    if (!newName) { alert('社外案件名を入力してください'); return false; }
+    if (!newName) { notify('社外案件名を入力してください'); return false; }
     saveTasks(prev => normalizePriorities(prev.map(t =>
       t.projectName === oldProjectName
         ? {
@@ -2732,7 +2730,7 @@ export default function App() {
   const completeViewpoint = (group) => {
     if (!group || !group.tasks) return;
     const activeTasks = group.tasks.filter(t => t.status !== 'done');
-    if (activeTasks.length === 0) { alert('この視点には未完了のタスクがありません'); return; }
+    if (activeTasks.length === 0) { notify('この視点には未完了のタスクがありません'); return; }
     setCompleteTarget({
       kind: 'viewpoint',
       label: `視点「${group.projectName} ／ ${group.viewpointName}」`,
@@ -2745,7 +2743,7 @@ export default function App() {
   const completeProject = (projectName) => {
     if (!projectName) return;
     const activeTasks = scheduled.active.filter(t => t.projectName === projectName);
-    if (activeTasks.length === 0) { alert('この案件には未完了のタスクがありません'); return; }
+    if (activeTasks.length === 0) { notify('この案件には未完了のタスクがありません'); return; }
     setCompleteTarget({
       kind: 'project',
       label: `案件「${projectName}」`,
@@ -2777,7 +2775,7 @@ export default function App() {
   const cancelProject = (projectName) => {
     if (!projectName) return;
     const activeTasks = scheduled.active.filter(t => t.projectName === projectName);
-    if (activeTasks.length === 0) { alert('この案件には未完了のタスクがありません'); return; }
+    if (activeTasks.length === 0) { notify('この案件には未完了のタスクがありません'); return; }
     if (!confirm(`案件「${projectName}」を中止にしますか？\n未完了のタスク ${activeTasks.length}件が「中止」として完了タブへ移動します。\n（完了タブの「戻す」で復元できます）`)) return;
     const idSet = new Set(activeTasks.map(t => t.id));
     const nowMs = Date.now();
@@ -2795,7 +2793,7 @@ export default function App() {
   const suspendProject = (projectName) => {
     if (!projectName) return;
     const activeTasks = scheduled.active.filter(t => t.projectName === projectName);
-    if (activeTasks.length === 0) { alert('この案件には未完了のタスクがありません'); return; }
+    if (activeTasks.length === 0) { notify('この案件には未完了のタスクがありません'); return; }
     if (!confirm(`案件「${projectName}」を制作中断にしますか？\nスケジュールから一旦外れ、「制作中断」一覧へ移動します。\n（制作再開でいつでも進行中へ戻せます）`)) return;
     const idSet = new Set(activeTasks.map(t => t.id));
     const nowMs = Date.now();
@@ -2890,9 +2888,9 @@ export default function App() {
   const endPromptAddRevision = (vp, stepName, hours) => {
     const projectName = vp.projectName, viewpointName = vp.viewpointName;
     const h = Math.max(0, parseHM(hours) || 0);
-    if (h <= 0) { alert('追加時間を入力してください'); return; }
+    if (h <= 0) { notify('追加時間を入力してください'); return; }
     const vpTasks = tasksRef.current.filter(t => t.projectName === projectName && t.viewpointName === viewpointName && t.assignee === vp.assignee);
-    if (vpTasks.length === 0) { alert('対象の視点が見つかりません'); return; }
+    if (vpTasks.length === 0) { notify('対象の視点が見つかりません'); return; }
     const ref = vpTasks.reduce((a, b) => ((b.createdAt || 0) > (a.createdAt || 0) ? b : a), vpTasks[0]);
     const maxOrder = vpTasks.reduce((m, t) => Math.max(m, t.stepOrder ?? 0), 0);
     const base = Date.now();
@@ -2916,12 +2914,12 @@ export default function App() {
   // ③ 遅延（この視点の最後のステップの終了時間指定を新しい終了予定へ動かし、
   //    差分の稼働時間ぶん制作時間を加算＋遅延履歴を記録）
   const endPromptDelay = (vp, currentEndTs, newEndTs) => {
-    if (newEndTs <= currentEndTs) { alert('新しい終了予定は現在の終了予定より後にしてください'); return; }
+    if (newEndTs <= currentEndTs) { notify('新しい終了予定は現在の終了予定より後にしてください'); return; }
     const scheduledById = new Map(scheduled.active.map(t => [t.id, t]));
     const active = tasksRef.current
       .map(t => scheduledById.get(t.id) || t)
       .filter(t => t.projectName === vp.projectName && t.viewpointName === vp.viewpointName && t.assignee === vp.assignee && t.status !== 'done' && t.scheduledEnd);
-    if (active.length === 0) { alert('対象の進行中案件がありません'); return; }
+    if (active.length === 0) { notify('対象の進行中案件がありません'); return; }
     // 終了予定を決めている最後のステップ
     const last = active.reduce((a, b) => {
       const ta = startOfDay(a.scheduledEnd).getTime() + (a.scheduledEndMin || 0) * 60000;
@@ -2949,12 +2947,12 @@ export default function App() {
   // ④ 終了予定時間の修正（遅延とは別：作業時間を加算せず・遅延履歴も残さず、
   //    終了予定の指定（manualEnd）だけを新しい時刻に直す。前倒し＝早め／遅め どちらも可）
   const endPromptAdjustEnd = (vp, newEndTs) => {
-    if (!newEndTs) { alert('新しい終了予定時間を入力してください'); return; }
+    if (!newEndTs) { notify('新しい終了予定時間を入力してください'); return; }
     const scheduledById = new Map(scheduled.active.map(t => [t.id, t]));
     const active = tasksRef.current
       .map(t => scheduledById.get(t.id) || t)
       .filter(t => t.projectName === vp.projectName && t.viewpointName === vp.viewpointName && t.assignee === vp.assignee && t.status !== 'done' && t.scheduledEnd);
-    if (active.length === 0) { alert('対象の進行中案件がありません'); return; }
+    if (active.length === 0) { notify('対象の進行中案件がありません'); return; }
     // 終了予定を決めている最後のステップ
     const last = active.reduce((a, b) => {
       const ta = startOfDay(a.scheduledEnd).getTime() + (a.scheduledEndMin || 0) * 60000;
@@ -3037,7 +3035,7 @@ export default function App() {
     const tgt = tasksRef.current.find(t => t.id === targetId);
     if (!src || !tgt) return;
     if ((src.companyName || '') !== (tgt.companyName || '')) {
-      alert('優先順位は会社ごとの番号のため、同じ会社のタスク同士でのみ並び替えできます');
+      notify('優先順位は会社ごとの番号のため、同じ会社のタスク同士でのみ並び替えできます');
       return;
     }
     saveTasks(prev => {
@@ -3201,34 +3199,26 @@ export default function App() {
     );
   }
 
-  const navItems = [
+  // ナビゲーション：毎日使う画面はフラットに並べ、経理・管理系はドロップダウンへまとめる
+  const navDaily = [
     { id: 'input', icon: <Plus size={15} />, label: '入力' },
     { id: 'message', icon: <MessageSquare size={15} />, label: 'サマリー' },
     { id: 'done', icon: <CheckCircle2 size={15} />, label: '完了' },
-    { id: 'master', icon: <Folder size={15} />, label: 'マスタ' },
     { id: 'memo', icon: <StickyNote size={15} />, label: 'タスクメモ' },
+  ];
+  const navAccounting = [
     { id: 'billing', icon: <FileText size={15} />, label: '帳票' },
     { id: 'sales', icon: <Table size={15} />, label: '売上登録' },
-    { id: 'projectSheet', icon: <ClipboardList size={15} />, label: '案件整理' },
     { id: 'companySummary', icon: <TrendingUp size={15} />, label: '会社別集計' },
+  ];
+  const navAdmin = [
+    { id: 'master', icon: <Folder size={15} />, label: 'マスタ' },
+    { id: 'projectSheet', icon: <ClipboardList size={15} />, label: '案件整理' },
   ];
 
   return (
     <div style={{ minHeight: '100vh', background: colors.bg, fontFamily: fontJP, color: colors.text }}>
-      {/* 一番上：案件編集モードのトグル（ON中は納期の警告を一時的に非表示） */}
-      <div style={{ background: caseEditMode ? '#fff4d6' : colors.surface, borderBottom: `1px solid ${caseEditMode ? '#e8d089' : colors.border}` }}>
-        <div style={{ maxWidth: 1600, margin: '0 auto', padding: '6px 28px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <button onClick={toggleCaseEditMode}
-            title="ON中は納期の警告（一覧の納期バッジ・上部バナー）を一時的に隠します。操作から30分で自動解除されます。"
-            style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '5px 12px', borderRadius: 999, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, fontWeight: 700, border: `1px solid ${caseEditMode ? '#d9a93a' : colors.border}`, background: caseEditMode ? '#f2b705' : 'transparent', color: caseEditMode ? '#3a2d00' : colors.textMute }}>
-            <span style={{ width: 9, height: 9, borderRadius: '50%', background: caseEditMode ? '#1f8a3b' : '#bbb', display: 'inline-block' }} />
-            案件編集モード：{caseEditMode ? 'ON' : 'OFF'}
-          </button>
-          {caseEditMode && (
-            <span style={{ fontSize: 11, color: '#9a7b1f' }}>納期の警告を一時的に非表示中（操作から30分で自動解除）</span>
-          )}
-        </div>
-      </div>
+      <ToastHost fontJP={fontJP} />
       <header style={{ borderBottom: `1px solid ${colors.border}`, background: colors.surface }}>
         <div style={{ maxWidth: 1600, margin: '0 auto', padding: '20px 28px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16 }}>
           <div>
@@ -3238,19 +3228,26 @@ export default function App() {
             <p style={{ fontSize: 10, color: colors.textMute, margin: '6px 0 0 0', letterSpacing: '0.15em' }}>SCHEDULE VISUALIZER</p>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-            {navItems.map(item => (
+            {navDaily.map(item => (
               <NavButton key={item.id} active={view === item.id} onClick={() => setView(item.id)} icon={item.icon} label={item.label}
                 badge={item.id === 'done' ? scheduled.doneFinal.length : null} />
             ))}
-            <style>{`@keyframes kz-spin { to { transform: rotate(360deg); } }`}</style>
-            <button onClick={refreshData} disabled={refreshing}
-              title={lastSync
-                ? `データベースから最新データを再取得（最終更新 ${String(lastSync.getHours()).padStart(2, '0')}:${String(lastSync.getMinutes()).padStart(2, '0')}）`
-                : 'データベースから最新データを再取得します（更新後にデータが表示されないときに押してください）'}
-              style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '6px 10px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: refreshing ? 'default' : 'pointer', color: colors.textMute, fontFamily: fontJP, fontSize: 11, opacity: refreshing ? 0.6 : 1 }}>
-              <RotateCcw size={14} style={{ animation: refreshing ? 'kz-spin 0.8s linear infinite' : 'none' }} />
-              {refreshing ? '更新中…' : 'データ更新'}
+            <NavDropdown label="経理" icon={<FileText size={15} />} items={navAccounting} view={view} setView={setView} />
+            <NavDropdown label="管理" icon={<Folder size={15} />} items={navAdmin} view={view} setView={setView} />
+            <span style={{ width: 1, height: 22, background: colors.border, margin: '0 4px' }} />
+            <button onClick={toggleCaseEditMode}
+              title="ON中は納期の警告（一覧の納期バッジ・上部バナー）を一時的に隠します。操作から30分で自動解除されます。"
+              style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 11px', borderRadius: 999, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, fontWeight: 600, border: `1px solid ${caseEditMode ? '#d9a93a' : colors.border}`, background: caseEditMode ? '#f2b705' : 'transparent', color: caseEditMode ? '#3a2d00' : colors.textMute }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: caseEditMode ? '#1f8a3b' : '#bbb', display: 'inline-block' }} />
+              案件編集
             </button>
+            <style>{`@keyframes kz-spin { to { transform: rotate(360deg); } }`}</style>
+            {lastSync && (
+              <span title="データベースと最後に同期した時刻（手動の再取得は設定パネルから）"
+                style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', padding: '0 2px' }}>
+                最終同期 {String(lastSync.getHours()).padStart(2, '0')}:{String(lastSync.getMinutes()).padStart(2, '0')}
+              </span>
+            )}
             <button onClick={() => setShowSettings(!showSettings)}
               style={{ padding: '7px 9px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', color: colors.textMute }}
               title="設定"><SettingsIcon size={15} /></button>
@@ -3261,6 +3258,14 @@ export default function App() {
             </button>
           </div>
         </div>
+        {/* 案件編集モード ON のときだけ表示する細いバナー */}
+        {caseEditMode && (
+          <div style={{ background: '#fff4d6', borderTop: '1px solid #e8d089' }}>
+            <div style={{ maxWidth: 1600, margin: '0 auto', padding: '5px 28px', fontSize: 12, color: '#9a7b1f' }}>
+              案件編集モード ON：納期の警告を一時的に非表示中（操作から30分で自動解除）
+            </div>
+          </div>
+        )}
 
         {showSettings && (
           <div style={{ borderTop: `1px solid ${colors.border}`, background: '#fbf9f4', padding: '16px 28px' }}>
@@ -3287,6 +3292,12 @@ export default function App() {
                 <TimeSelect value={settings.afternoonEnd} onChange={(val) => saveSettings({ ...settings, afternoonEnd: val })} colors={colors} fontJP={fontJP} />
               </div>
               <span style={{ fontSize: 11, color: colors.textMute, marginLeft: 'auto' }}>1日 {hoursPerDay}時間 ・ 土日除外</span>
+              <button onClick={refreshData} disabled={refreshing}
+                title="データベースから最新データを再取得します（更新後にデータが表示されないときに押してください）"
+                style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '6px 10px', background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: refreshing ? 'default' : 'pointer', color: colors.textMute, fontFamily: fontJP, fontSize: 12, opacity: refreshing ? 0.6 : 1 }}>
+                <RotateCcw size={14} style={{ animation: refreshing ? 'kz-spin 0.8s linear infinite' : 'none' }} />
+                {refreshing ? '更新中…' : 'データ更新'}
+              </button>
             </div>
             <MemberSettings memberEmails={memberEmails} isOwner={!!auth.user?.isOwner} colors={colors} fontJP={fontJP} />
             <div style={{ maxWidth: 1600, margin: '16px auto 0', borderTop: `1px solid ${colors.border}`, paddingTop: 12, fontSize: 11, color: colors.textMute }}>
@@ -3443,32 +3454,10 @@ export default function App() {
   );
 }
 
-// ============ 確認モーダル（汎用） ============
-function ConfirmModal({ title, children, confirmLabel, cancelLabel, onConfirm, onCancel, colors, fontJP, fontDisplay }) {
-  return (
-    <div onClick={onCancel}
-      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}>
-      <div onClick={(e) => e.stopPropagation()}
-        style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 8, padding: 24, width: '100%', maxWidth: 440, fontFamily: fontJP, boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
-        <h3 style={{ fontFamily: fontDisplay, fontSize: 17, margin: '0 0 12px 0', fontWeight: 600 }}>{title}</h3>
-        <div style={{ fontSize: 13, color: colors.text }}>{children}</div>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 22 }}>
-          <button type="button" onClick={onCancel}
-            style={{ padding: '8px 16px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13, color: colors.textMute }}>
-            {cancelLabel || 'キャンセル'}
-          </button>
-          <button type="button" onClick={onConfirm}
-            style={{ padding: '8px 18px', background: colors.text, color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13, fontWeight: 600 }}>
-            {confirmLabel || 'OK'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ============ 登録確認モーダル（開始移動・納期超過＋繰り上げ提案） ============
 function DeadlineConfirmModal({ info, onCancel, onSubmit, colors, fontJP, fontDisplay }) {
+  useEscKey(onCancel);
   const violations = info.violations || [];
   const hasViolation = violations.length > 0;
   const reorder = info.reorder || {};
@@ -3581,384 +3570,8 @@ function DeadlineConfirmModal({ info, onCancel, onSubmit, colors, fontJP, fontDi
   );
 }
 
-// ============ 時刻選択（時・分プルダウン） ============
-// どの環境でも確実に入力できるよう、ネイティブの time 入力ではなくプルダウンを使う
-function TimeSelect({ value, onChange, colors, fontJP, allowEmpty = false }) {
-  const parts = value ? value.split(':') : ['', ''];
-  const h = parts[0] || '';
-  const m = parts[1] || '';
-  const hours = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'));
-  const mins = ['00', '15', '30', '45'];
-  // 現在の分が候補にない場合（例: 08:05）も選べるよう補完
-  if (m && !mins.includes(m)) mins.push(m);
-  mins.sort();
 
-  const update = (nh, nm) => {
-    if (allowEmpty && !nh && !nm) { onChange(''); return; }
-    const hh = nh || '08';
-    const mm = nm || '00';
-    onChange(`${hh}:${mm}`);
-  };
-  const selectStyle = {
-    padding: '6px 4px', border: `1px solid ${colors.border}`, borderRadius: 3,
-    fontFamily: fontJP, fontSize: 13, background: '#fff', color: colors.text, cursor: 'pointer', flexShrink: 0,
-  };
-  const lbl = { color: colors.textMute, fontSize: 13, whiteSpace: 'nowrap', flexShrink: 0 };
-  return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, whiteSpace: 'nowrap' }}>
-      <select value={h} onChange={(e) => update(e.target.value, m)} style={selectStyle}>
-        {allowEmpty && <option value="">--</option>}
-        {hours.map(hr => <option key={hr} value={hr}>{hr}</option>)}
-      </select>
-      <span style={lbl}>時</span>
-      <select value={m} onChange={(e) => update(h, e.target.value)} style={selectStyle}>
-        {allowEmpty && <option value="">--</option>}
-        {mins.map(mn => <option key={mn} value={mn}>{mn}</option>)}
-      </select>
-      <span style={lbl}>分</span>
-    </span>
-  );
-}
 
-// 所要時間（制作時間・完了時間など）を「時間」「分（5分刻み）」のプルダウンで選ぶ。
-// 値は parseHM/fmtHM と同じ "HH:MM" 文字列。空（未選択）も許容する。
-function DurationSelect({ value, onChange, colors, fontJP, maxHours = 24 }) {
-  const v = (value == null ? '' : String(value)).trim();
-  let h = '', m = '';
-  if (v) {
-    if (v.includes(':')) {
-      const p = v.split(':');
-      h = p[0] !== '' && !isNaN(parseInt(p[0], 10)) ? String(parseInt(p[0], 10)) : '';
-      m = (p[1] || '').padStart(2, '0');
-    } else if (!isNaN(parseInt(v, 10))) {
-      h = String(parseInt(v, 10)); m = '00';
-    }
-  }
-  const hours = Array.from({ length: maxHours + 1 }, (_, i) => String(i));
-  // 範囲外の既存値（例: 30時間）も選べるよう補完
-  if (h && !hours.includes(h)) hours.push(h);
-  hours.sort((a, b) => Number(a) - Number(b));
-  const mins = ['00', '05', '10', '15', '20', '25', '30', '35', '40', '45', '50', '55'];
-  // 5分刻みに無い既存値（例: 08）も選べるよう補完
-  if (m && !mins.includes(m)) { mins.push(m); mins.sort(); }
-
-  const update = (nh, nm) => {
-    if (!nh && !nm) { onChange(''); return; }
-    const hh = (nh || '0').padStart(2, '0');
-    const mm = nm || '00';
-    onChange(`${hh}:${mm}`);
-  };
-  const selectStyle = {
-    padding: '6px 4px', border: `1px solid ${colors.border}`, borderRadius: 3,
-    fontFamily: fontJP, fontSize: 13, background: '#fff', color: colors.text, cursor: 'pointer', flexShrink: 0,
-  };
-  const lbl = { color: colors.textMute, fontSize: 13, whiteSpace: 'nowrap', flexShrink: 0 };
-  return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, whiteSpace: 'nowrap' }}>
-      <select value={h} onChange={(e) => update(e.target.value, m)} style={selectStyle}>
-        <option value="">--</option>
-        {hours.map(hr => <option key={hr} value={hr}>{hr}</option>)}
-      </select>
-      <span style={lbl}>時間</span>
-      <select value={m} onChange={(e) => update(h, e.target.value)} style={selectStyle}>
-        <option value="">--</option>
-        {mins.map(mn => <option key={mn} value={mn}>{mn}</option>)}
-      </select>
-      <span style={lbl}>分</span>
-    </span>
-  );
-}
-
-// ============ ナビボタン ============
-function NavButton({ active, onClick, icon, label, badge }) {  return (
-    <button onClick={onClick}
-      style={{
-        display: 'flex', alignItems: 'center', gap: 6,
-        padding: '7px 12px',
-        background: active ? '#1a1a1a' : 'transparent',
-        color: active ? '#fff' : '#1a1a1a',
-        border: `1px solid ${active ? '#1a1a1a' : '#e8e3d6'}`,
-        borderRadius: 4, cursor: 'pointer',
-        fontFamily: "'Noto Sans JP', sans-serif",
-        fontSize: 13, fontWeight: 500,
-      }}>
-      {icon}{label}
-      {badge != null && badge > 0 && (
-        <span style={{
-          background: active ? '#fff' : '#1a1a1a', color: active ? '#1a1a1a' : '#fff',
-          fontSize: 10, padding: '1px 5px', borderRadius: 8, marginLeft: 2, fontWeight: 600,
-        }}>{badge}</span>
-      )}
-    </button>
-  );
-}
-
-// ============ タスクメモビュー（Apple カレンダー風：スケジュール＋メモ） ============
-const MEMO_COLORS = ['#c1272d', '#bc6c25', '#3a5a40', '#1d3557', '#6a4c93', '#00838f', '#ad1457', '#5d4037'];
-function pad2(n) { return String(n).padStart(2, '0'); }
-function todayStr(now) {
-  const d = now instanceof Date ? now : new Date();
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-}
-function formatMemoDate(dateStr) {
-  // 'YYYY-MM-DD' → '6月15日（月）' 形式
-  const [y, m, d] = (dateStr || '').split('-').map(Number);
-  if (!y || !m || !d) return dateStr || '';
-  const dt = new Date(y, m - 1, d);
-  const wd = ['日', '月', '火', '水', '木', '金', '土'][dt.getDay()];
-  return `${m}月${d}日（${wd}）`;
-}
-
-function MemoView({ memos, upsertMemo, deleteMemo, now, colors, fontJP, fontDisplay }) {
-  const blankMemo = () => ({
-    id: null, title: '', date: todayStr(now), startTime: '09:00', endTime: '10:00',
-    allDay: false, note: '', color: MEMO_COLORS[0],
-  });
-  const [editing, setEditing] = useState(null); // 編集中メモ（null=非表示）
-  const [search, setSearch] = useState('');
-  // 通知許可の状態（'granted'/'default'/'denied'/'unsupported'）
-  const [notifPerm, setNotifPerm] = useState(() => (typeof Notification !== 'undefined' ? Notification.permission : 'unsupported'));
-  const requestNotif = async () => {
-    if (typeof Notification === 'undefined') { setNotifPerm('unsupported'); return; }
-    try { const p = await Notification.requestPermission(); setNotifPerm(p); } catch (e) {}
-  };
-
-  const today = todayStr(now);
-
-  // 検索フィルタ → 日付・開始時刻順にソート
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const rows = (memos || []).filter(m => {
-      if (!q) return true;
-      return (m.title || '').toLowerCase().includes(q) || (m.note || '').toLowerCase().includes(q);
-    });
-    return rows.slice().sort((a, b) => {
-      if ((a.date || '') !== (b.date || '')) return (a.date || '').localeCompare(b.date || '');
-      const at = a.allDay ? '' : (a.startTime || '');
-      const bt = b.allDay ? '' : (b.startTime || '');
-      return at.localeCompare(bt);
-    });
-  }, [memos, search]);
-
-  // 日付ごとにグルーピング
-  const grouped = useMemo(() => {
-    const map = new Map();
-    for (const m of filtered) {
-      const key = m.date || '(日付なし)';
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push(m);
-    }
-    return [...map.entries()];
-  }, [filtered]);
-
-  const startNew = () => setEditing(blankMemo());
-  const startEdit = (m) => setEditing({ ...m });
-
-  const handleSave = () => {
-    const e = editing;
-    if (!(e.title || '').trim() && !(e.note || '').trim()) { setEditing(null); return; }
-    const ts = Date.now();
-    const memo = {
-      ...e,
-      title: (e.title || '').trim(),
-      note: e.note || '',
-      id: e.id || `memo_${ts}_${Math.random().toString(36).slice(2, 8)}`,
-      createdAt: e.createdAt || ts,
-      updatedAt: ts,
-    };
-    upsertMemo(memo);
-    setEditing(null);
-  };
-
-  const handleDelete = () => {
-    if (editing?.id) deleteMemo(editing.id);
-    setEditing(null);
-  };
-
-  const inputStyle = {
-    padding: '8px 10px', border: `1px solid ${colors.border}`, borderRadius: 4,
-    fontFamily: fontJP, fontSize: 14, color: colors.text, background: '#fff', width: '100%', boxSizing: 'border-box',
-  };
-  const labelStyle = { fontSize: 11, color: colors.textMute, marginBottom: 4, display: 'block', letterSpacing: '0.04em' };
-
-  return (
-    <div style={{ display: 'flex', gap: 24, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-      {/* 左：アジェンダ（日付別リスト） */}
-      <div style={{ flex: '1 1 460px', minWidth: 320 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18, gap: 12, flexWrap: 'wrap' }}>
-          <h2 style={{ fontFamily: fontDisplay, fontSize: 20, fontWeight: 700, margin: 0, letterSpacing: '0.04em' }}>タスクメモ</h2>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {/* 通知の有効化 */}
-            {notifPerm === 'granted' ? (
-              <span title="このブラウザでメモの通知が有効です（アプリを開いている間に通知します）"
-                style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 10px', border: `1px solid ${colors.border}`, borderRadius: 4, fontFamily: fontJP, fontSize: 12, color: colors.progress, fontWeight: 600 }}>
-                <Bell size={14} /> 通知ON
-              </span>
-            ) : notifPerm === 'denied' ? (
-              <span title="ブラウザの設定で通知がブロックされています。サイトの通知を許可に変更してください。"
-                style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 10px', border: `1px solid ${colors.border}`, borderRadius: 4, fontFamily: fontJP, fontSize: 12, color: colors.textMute }}>
-                <BellOff size={14} /> 通知ブロック中
-              </span>
-            ) : notifPerm === 'unsupported' ? null : (
-              <button onClick={requestNotif} title="メモの開始時刻に通知します（アプリを開いている間）"
-                style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '6px 11px', background: '#fff', color: colors.text, border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, fontWeight: 500 }}>
-                <Bell size={14} /> 通知を有効にする
-              </button>
-            )}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, border: `1px solid ${colors.border}`, borderRadius: 4, padding: '5px 9px', background: '#fff' }}>
-              <Search size={14} color={colors.textMute} />
-              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="検索"
-                style={{ border: 'none', outline: 'none', fontFamily: fontJP, fontSize: 13, width: 110, color: colors.text }} />
-            </div>
-            <button onClick={startNew}
-              style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '7px 13px', background: '#1a1a1a', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13, fontWeight: 500 }}>
-              <Plus size={15} />新規メモ
-            </button>
-          </div>
-        </div>
-
-        {grouped.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '60px 20px', color: colors.textMute, fontSize: 14, border: `1px dashed ${colors.border}`, borderRadius: 8 }}>
-            <StickyNote size={32} color={colors.border} style={{ marginBottom: 12 }} />
-            <div>{search ? '該当するメモがありません' : 'メモはまだありません。「新規メモ」から追加できます。'}</div>
-          </div>
-        ) : (
-          grouped.map(([date, items]) => (
-            <div key={date} style={{ marginBottom: 24 }}>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '0 0 8px 0', borderBottom: `1px solid ${colors.border}`, marginBottom: 10 }}>
-                <span style={{ fontFamily: fontDisplay, fontSize: 16, fontWeight: 700, color: date === today ? colors.accent : colors.text }}>
-                  {formatMemoDate(date)}
-                </span>
-                {date === today && <span style={{ fontSize: 10, color: colors.accent, fontWeight: 600, letterSpacing: '0.08em' }}>今日</span>}
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {items.map(m => {
-                  const selected = editing && editing.id === m.id;
-                  return (
-                    <div key={m.id} onClick={() => startEdit(m)}
-                      style={{
-                        display: 'flex', gap: 12, padding: '12px 14px', cursor: 'pointer',
-                        background: selected ? colors.accentSoft : '#fff',
-                        border: `1px solid ${selected ? colors.accent : colors.border}`, borderRadius: 6,
-                        transition: 'border-color .12s',
-                      }}>
-                      {/* 時刻列 */}
-                      <div style={{ width: 56, flexShrink: 0, textAlign: 'right', paddingTop: 1 }}>
-                        {m.allDay ? (
-                          <span style={{ fontSize: 11, color: colors.textMute, fontWeight: 600 }}>終日</span>
-                        ) : (
-                          <>
-                            <div style={{ fontSize: 13, fontWeight: 600, color: colors.text, fontFamily: fontDisplay }}>{m.startTime || ''}</div>
-                            {m.endTime && <div style={{ fontSize: 11, color: colors.textMute }}>{m.endTime}</div>}
-                          </>
-                        )}
-                      </div>
-                      {/* カラーバー */}
-                      <div style={{ width: 4, borderRadius: 2, background: m.color || MEMO_COLORS[0], flexShrink: 0 }} />
-                      {/* 本文 */}
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 14, fontWeight: 600, color: colors.text, marginBottom: m.note ? 3 : 0 }}>
-                          {m.title || '（無題）'}
-                        </div>
-                        {m.note && (
-                          <div style={{ fontSize: 12, color: colors.textMute, whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.5 }}>
-                            {m.note}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ))
-        )}
-      </div>
-
-      {/* 右：編集パネル（Apple カレンダーのイベント編集風） */}
-      {editing && (
-        <div style={{ flex: '0 0 320px', position: 'sticky', top: 20, background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 8, padding: 20 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-            <h3 style={{ fontFamily: fontDisplay, fontSize: 16, fontWeight: 700, margin: 0 }}>{editing.id ? 'メモを編集' : '新規メモ'}</h3>
-            <button onClick={() => setEditing(null)} title="閉じる"
-              style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: colors.textMute, padding: 2, display: 'flex' }}>
-              <X size={18} />
-            </button>
-          </div>
-
-          <div style={{ marginBottom: 14 }}>
-            <label style={labelStyle}>タイトル</label>
-            <input value={editing.title} autoFocus
-              onChange={(e) => setEditing({ ...editing, title: e.target.value })}
-              placeholder="予定・タスク名" style={inputStyle} />
-          </div>
-
-          <div style={{ marginBottom: 14 }}>
-            <label style={labelStyle}>日付</label>
-            <input type="date" value={editing.date}
-              onChange={(e) => setEditing({ ...editing, date: e.target.value })} style={inputStyle} />
-          </div>
-
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, fontSize: 13, color: colors.text, cursor: 'pointer' }}>
-            <input type="checkbox" checked={!!editing.allDay}
-              onChange={(e) => setEditing({ ...editing, allDay: e.target.checked })} />
-            終日
-          </label>
-
-          {!editing.allDay && (
-            <div style={{ display: 'flex', gap: 10, marginBottom: 14 }}>
-              <div style={{ flex: 1 }}>
-                <label style={labelStyle}>開始</label>
-                <input type="time" value={editing.startTime || ''}
-                  onChange={(e) => setEditing({ ...editing, startTime: e.target.value })} style={inputStyle} />
-              </div>
-              <div style={{ flex: 1 }}>
-                <label style={labelStyle}>終了</label>
-                <input type="time" value={editing.endTime || ''}
-                  onChange={(e) => setEditing({ ...editing, endTime: e.target.value })} style={inputStyle} />
-              </div>
-            </div>
-          )}
-
-          <div style={{ marginBottom: 14 }}>
-            <label style={labelStyle}>カラー</label>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              {MEMO_COLORS.map(c => (
-                <button key={c} onClick={() => setEditing({ ...editing, color: c })} title={c}
-                  style={{
-                    width: 24, height: 24, borderRadius: '50%', background: c, cursor: 'pointer',
-                    border: editing.color === c ? `2px solid ${colors.text}` : '2px solid transparent',
-                    boxShadow: editing.color === c ? `0 0 0 2px #fff inset` : 'none',
-                  }} />
-              ))}
-            </div>
-          </div>
-
-          <div style={{ marginBottom: 18 }}>
-            <label style={labelStyle}>メモ</label>
-            <textarea value={editing.note}
-              onChange={(e) => setEditing({ ...editing, note: e.target.value })}
-              placeholder="詳細・メモを入力" rows={5}
-              style={{ ...inputStyle, resize: 'vertical', lineHeight: 1.5 }} />
-          </div>
-
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={handleSave}
-              style={{ flex: 1, padding: '9px 14px', background: '#1a1a1a', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13, fontWeight: 600 }}>
-              保存
-            </button>
-            {editing.id && (
-              <button onClick={handleDelete} title="削除"
-                style={{ padding: '9px 12px', background: 'transparent', color: colors.accent, border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13, display: 'flex', alignItems: 'center', gap: 5 }}>
-                <Trash2 size={15} />削除
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ============ 入力ビュー ============
 // メンバー管理（設定パネル内）。オーナー以外のアクセス許可 Gmail を data/allowedEmails で管理する。
@@ -3972,13 +3585,13 @@ function MemberSettings({ memberEmails, isOwner, colors, fontJP }) {
     try { await memberList.set(emails); }
     catch (e) {
       console.error('メンバーリスト保存エラー:', e);
-      alert('メンバーリストの保存に失敗しました。変更できるのはオーナーのみです。');
+      notify('メンバーリストの保存に失敗しました。変更できるのはオーナーのみです。', 'error');
     }
     finally { setBusy(false); }
   };
   const add = () => {
     const email = input.trim().toLowerCase();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { alert('メールアドレスの形式が正しくありません'); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { notify('メールアドレスの形式が正しくありません'); return; }
     if (!memberEmails.includes(email)) save([...memberEmails, email]);
     setInput('');
   };
@@ -4013,7 +3626,7 @@ function MemberSettings({ memberEmails, isOwner, colors, fontJP }) {
           </span>
         )}
       </div>
-      <div style={{ fontSize: 10.5, color: colors.textMute, marginTop: 6 }}>
+      <div style={{ fontSize: 11, color: colors.textMute, marginTop: 6 }}>
         ここに追加した Google アカウントはサインインしてアプリの全データを読み書きできます。オーナー（firestore.rules に記載）は常にアクセス可能。
         ※この機能を有効にするには、最新の firestore.rules を Firebase コンソールへデプロイしてください。
       </div>
@@ -4139,7 +3752,7 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
     const vps = [...form.viewpoints];
     const vp = vps[vi];
     const base = deliveryBaseName(form.projectName, vp.viewpointName, vp.deliveryName);
-    if (!base) { alert('案件名と視点名を入力すると納品名を自動生成できます'); return; }
+    if (!base) { notify('案件名と視点名を入力すると納品名を自動生成できます'); return; }
     vps[vi] = { ...vp, steps: vp.steps.map(s => ({ ...s, name: stepDeliveryName(base, s.name) })) };
     setForm({ ...form, viewpoints: vps });
   };
@@ -4205,7 +3818,7 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
   useEffect(() => { setAssigneeSuggestions(null); }, [editingId]); // 対象が変わったら閉じる
   const suggestAssignees = () => {
     const candidates = [...new Set((assigneeList || []).map(a => (a || '').trim()).filter(Boolean))];
-    if (candidates.length === 0) { alert('担当者の候補がありません。従業員マスタに担当者を登録してください。'); return; }
+    if (candidates.length === 0) { notify('担当者の候補がありません。従業員マスタに担当者を登録してください。'); return; }
     const out = [];
     for (const a of candidates) {
       const f2 = { ...form, assignee: a, viewpoints: (form.viewpoints || []).map(vp => ({ ...vp, assignee: a })) };
@@ -4457,7 +4070,7 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
         completedHours: t.completedHours,
       });
     }
-    if (byVp.size === 0) { alert('過去案件に視点が見つかりませんでした'); return; }
+    if (byVp.size === 0) { notify('過去案件に視点が見つかりませんでした'); return; }
     const viewpoints = [...byVp.values()].map(v => {
       // 過去のステップ構成を再現：制作時間・完了時間ともに復元、種類=修正（fix）
       // 種類は修正に統一する（元の種類のままだと納品として二重計上されるため。fix は納品に数えない）
@@ -4692,7 +4305,7 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
                 <button type="button"
                   onClick={() => {
                     const a = (form.assignee || '').trim();
-                    if (!a) { alert('適用する担当者名を入力してください'); return; }
+                    if (!a) { notify('適用する担当者名を入力してください'); return; }
                     if (!confirm(`この案件の全視点（${form.viewpoints.length}件）の担当者を「${a}」に一括変更します。よろしいですか？`)) return;
                     setForm({
                       ...form,
@@ -4721,7 +4334,7 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
             </div>
             {assigneeSuggestions && (
               <div style={{ marginTop: 6, border: `1px solid ${colors.border}`, borderRadius: 5, background: '#fbf9f4', padding: 8 }}>
-                <div style={{ fontSize: 10.5, color: colors.textMute, marginBottom: 5 }}>
+                <div style={{ fontSize: 11, color: colors.textMute, marginBottom: 5 }}>
                   終了予定の早い順（全視点をその担当者にした場合の試算）。クリックで適用
                 </div>
                 {assigneeSuggestions.length === 0 ? (
@@ -4832,7 +4445,7 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
                 同じ案件名の{recallMatch.hasActive ? '進行中案件' : '完了案件'}があります
               </span>
               {recallMatch.hasActive && (
-                <span style={{ fontSize: 10, fontWeight: 700, color: '#fff', background: '#3a7bd5', borderRadius: 8, padding: '1px 8px' }}>進行中</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: '#fff', background: '#3a7bd5', borderRadius: 8, padding: '1px 8px' }}>進行中</span>
               )}
               <span style={{ fontSize: 11, color: colors.textMute }}>
                 {recallMatch.projectNameInternal ? `社内: ${recallMatch.projectNameInternal} ・ ` : ''}
@@ -4917,7 +4530,7 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
                       </button>
                     </div>
                     <div style={{ flex: '1 1 160px' }}>
-                      <label style={{ ...labelStyle, fontSize: 10, marginBottom: 3 }}>社内視点名</label>
+                      <label style={{ ...labelStyle, fontSize: 11, marginBottom: 3 }}>社内視点名</label>
                       <input type="text" list="viewpoint-list" value={vp.viewpointName}
                         onChange={(e) => updateViewpointName(vi, e.target.value)}
                         placeholder="例: 外観昼景"
@@ -4925,7 +4538,7 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
                         style={{ ...inputStyle, padding: '8px 10px', fontSize: 14, fontWeight: 500 }} />
                     </div>
                     <div style={{ flex: '1 1 160px' }}>
-                      <label style={{ ...labelStyle, fontSize: 10, marginBottom: 3 }}>社外視点名</label>
+                      <label style={{ ...labelStyle, fontSize: 11, marginBottom: 3 }}>社外視点名</label>
                       <input type="text" value={vp.viewpointNameExternal || ''}
                         onChange={(e) => updateViewpointField(vi, 'viewpointNameExternal', e.target.value)}
                         placeholder="お客様向け（任意）"
@@ -4933,7 +4546,7 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
                         style={{ ...inputStyle, padding: '8px 10px', fontSize: 13 }} />
                     </div>
                     <div style={{ flex: '0 1 120px' }}>
-                      <label style={{ ...labelStyle, fontSize: 10, marginBottom: 3 }}>内観/外観</label>
+                      <label style={{ ...labelStyle, fontSize: 11, marginBottom: 3 }}>内観/外観</label>
                       <select value={vp.viewpointCategory || ''}
                         onChange={(e) => updateViewpointField(vi, 'viewpointCategory', e.target.value)}
                         style={{ ...inputStyle, padding: '8px 8px', fontSize: 13, cursor: 'pointer' }}>
@@ -4943,7 +4556,7 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
                       </select>
                     </div>
                     <div style={{ flex: '1 1 140px' }}>
-                      <label style={{ ...labelStyle, fontSize: 10, marginBottom: 3 }}>担当者</label>
+                      <label style={{ ...labelStyle, fontSize: 11, marginBottom: 3 }}>担当者</label>
                       <Combobox value={vp.assignee || ''} onChange={(v) => updateViewpointAssignee(vi, v)}
                         options={assigneeList}
                         placeholder={form.assignee ? `既定: ${form.assignee}` : '担当者'}
@@ -4954,7 +4567,7 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
                     {/* 視点の統合：他の視点を選ぶと、その視点のステップをこの視点の末尾へ統合し、元の視点は消える */}
                     {form.viewpoints.length > 1 && (
                       <div style={{ flexShrink: 0, marginBottom: 1 }}>
-                        <label style={{ ...labelStyle, fontSize: 10, marginBottom: 3 }}>統合（取り込み）</label>
+                        <label style={{ ...labelStyle, fontSize: 11, marginBottom: 3 }}>統合（取り込み）</label>
                         <select value="" title="選んだ視点のステップを、この視点に統合します（元の視点は削除されます）"
                           onChange={(e) => {
                             const src = parseInt(e.target.value, 10);
@@ -5000,7 +4613,7 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
                         colors={colors} fontJP={fontJP} allowEmpty />
                       {vp.manualStart && (
                         <button type="button" onClick={() => setVpManualStart(vi, '', '')}
-                          style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '5px 8px', borderRadius: 3, fontSize: 10, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP, whiteSpace: 'nowrap', flexShrink: 0 }}>クリア</button>
+                          style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '5px 8px', borderRadius: 3, fontSize: 11, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP, whiteSpace: 'nowrap', flexShrink: 0 }}>クリア</button>
                       )}
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap' }} title="任意・作業終了予定。この視点の最後の未完了ステップに適用・次のタスクはこの時刻以降に開始">
@@ -5013,7 +4626,7 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
                         colors={colors} fontJP={fontJP} allowEmpty />
                       {vp.manualEnd && (
                         <button type="button" onClick={() => setVpManualEnd(vi, '', '')}
-                          style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '5px 8px', borderRadius: 3, fontSize: 10, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP, whiteSpace: 'nowrap', flexShrink: 0 }}>クリア</button>
+                          style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '5px 8px', borderRadius: 3, fontSize: 11, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP, whiteSpace: 'nowrap', flexShrink: 0 }}>クリア</button>
                       )}
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap' }} title={`任意・この視点の個別納期。未設定なら全体納期${form.projectDeadline ? `（${form.projectDeadline}）` : ''}を使用`}>
@@ -5023,7 +4636,7 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
                         style={{ ...inputStyle, width: 'auto', flex: '0 0 140px', padding: '6px 8px', fontSize: 12 }} />
                       {vp.deadline && (
                         <button type="button" onClick={() => setVpDeadline(vi, '')}
-                          style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '5px 8px', borderRadius: 3, fontSize: 10, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP, whiteSpace: 'nowrap', flexShrink: 0 }}>クリア</button>
+                          style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '5px 8px', borderRadius: 3, fontSize: 11, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP, whiteSpace: 'nowrap', flexShrink: 0 }}>クリア</button>
                       )}
                     </div>
                   </div>
@@ -5070,7 +4683,7 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
                         </div>
                         {/* ステップ名称（プルダウン選択式。選択肢は「マスタ」タブで編集可能） */}
                         <div style={{ flex: '0 1 150px', minWidth: 128 }}>
-                          <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>ステップ（種類）</label>
+                          <label style={{ ...labelStyle, fontSize: 11, marginBottom: 4 }}>ステップ（種類）</label>
                           <select value={selectValue}
                             onChange={(e) => updateStepType(vi, si, e.target.value)}
                             style={{ ...inputStyle, padding: '7px 8px', fontSize: 13, cursor: 'pointer' }}
@@ -5085,12 +4698,12 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
                           </select>
                           {/* 回数付きの解決後の名称（例：カラー変更1回目（有料））を表示 */}
                           {resolved.label && resolved.label !== step.name && (
-                            <div style={{ fontSize: 10, color: colors.textMute, marginTop: 3 }}>→ {resolved.label}</div>
+                            <div style={{ fontSize: 11, color: colors.textMute, marginTop: 3 }}>→ {resolved.label}</div>
                           )}
                         </div>
                         {/* 納品名（ステップごと。空欄なら自動：案件名_社外視点名_納品名サフィックス。例：色付2） */}
                         <div style={{ flex: '1 1 120px', minWidth: 100 }}>
-                          <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>納品名</label>
+                          <label style={{ ...labelStyle, fontSize: 11, marginBottom: 4 }}>納品名</label>
                           <input type="text" value={step.deliveryName || ''}
                             onChange={(e) => updateStep(vi, si, 'deliveryName', e.target.value)}
                             placeholder={stepDelivery || '案件名_社外視点名_納品名'}
@@ -5099,7 +4712,7 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
                         </div>
                         {/* 依頼日 */}
                         <div style={{ flex: '0 0 116px' }}>
-                          <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>依頼日</label>
+                          <label style={{ ...labelStyle, fontSize: 11, marginBottom: 4 }}>依頼日</label>
                           <input type="date" value={step.requestDate || ''}
                             onChange={(e) => updateStep(vi, si, 'requestDate', e.target.value)}
                             style={{ ...inputStyle, padding: '6px 6px', fontSize: 12 }}
@@ -5107,7 +4720,7 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
                         </div>
                         {/* 完了日（年月日＋時分）：1行に収める */}
                         <div style={{ flex: '0 0 auto' }}>
-                          <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>完了日</label>
+                          <label style={{ ...labelStyle, fontSize: 11, marginBottom: 4 }}>完了日</label>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'nowrap' }}>
                             <input type="date" value={step.completedDate ? step.completedDate.split('T')[0] : ''}
                               onChange={(e) => setStepCompletedDate(vi, si, e.target.value, step.completedDate ? (step.completedDate.split('T')[1] || '') : '')}
@@ -5117,14 +4730,14 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
                               colors={colors} fontJP={fontJP} allowEmpty />
                             {step.completedDate && (
                               <button type="button" onClick={() => updateStep(vi, si, 'completedDate', '')}
-                                style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '4px 6px', borderRadius: 3, fontSize: 10, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP, flexShrink: 0 }}>×</button>
+                                style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '4px 6px', borderRadius: 3, fontSize: 11, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP, flexShrink: 0 }}>×</button>
                             )}
                           </div>
                         </div>
                         {/* 金額（ラボ会社は対象外。無料ステップも対象外。制作時間×2,500円をデフォルト算出） */}
                         {amountApplicable && isPaid && (
                           <div style={{ flex: '0 0 86px' }}>
-                            <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>金額（円）</label>
+                            <label style={{ ...labelStyle, fontSize: 11, marginBottom: 4 }}>金額（円）</label>
                             <input type="text" inputMode="numeric" value={step.amount ?? ''}
                               onChange={(e) => updateStep(vi, si, 'amount', e.target.value)}
                               placeholder={amtDefault ? `自動 ${Number(amtDefault).toLocaleString('ja-JP')}` : '例: 30000'}
@@ -5135,20 +4748,20 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
                         {/* 無料ステップは金額欄なし（金額を反映しない旨を明示） */}
                         {amountApplicable && !isPaid && (
                           <div style={{ flex: '0 0 86px' }}>
-                            <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>金額（円）</label>
+                            <label style={{ ...labelStyle, fontSize: 11, marginBottom: 4 }}>金額（円）</label>
                             <div style={{ fontSize: 11, color: colors.textMute, padding: '7px 0' }}>無料</div>
                           </div>
                         )}
                         {/* 制作時間（変更すると金額を自動算出） */}
                         <div style={{ flex: '0 0 auto' }}>
-                          <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>制作時間</label>
+                          <label style={{ ...labelStyle, fontSize: 11, marginBottom: 4 }}>制作時間</label>
                           <DurationSelect value={step.hours}
                             onChange={(val) => updateStepHours(vi, si, val)}
                             colors={colors} fontJP={fontJP} maxHours={100} />
                         </div>
                         {/* 完了時間 */}
                         <div style={{ flex: '0 0 auto' }}>
-                          <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>完了時間</label>
+                          <label style={{ ...labelStyle, fontSize: 11, marginBottom: 4 }}>完了時間</label>
                           <DurationSelect value={step.completedHours}
                             onChange={(val) => updateStep(vi, si, 'completedHours', val)}
                             colors={colors} fontJP={fontJP} maxHours={100} />
@@ -5184,7 +4797,7 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
                           borderRadius: 4, padding: '7px 12px',
                         }}>
                           <span style={{ fontSize: 11.5, color: colors.accent, fontWeight: 700 }}>初回依頼 合計</span>
-                          <span style={{ fontSize: 10.5, color: colors.textMute }}>（ホワイト＋カラー 1回目）</span>
+                          <span style={{ fontSize: 11, color: colors.textMute }}>（ホワイト＋カラー 1回目）</span>
                           <span style={{ fontSize: 14, color: colors.text, fontWeight: 700, marginLeft: 'auto' }}>¥{total.toLocaleString('ja-JP')}</span>
                         </div>
                       );
@@ -5199,7 +4812,7 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
                         }}>
                         <Plus size={12} /> ステップを追加
                       </button>
-                      <span style={{ fontSize: 10, color: colors.textMute }}>ステップ（種類）はプルダウンで選択。選択肢は「マスタ」タブのステップ設定で編集できます</span>
+                      <span style={{ fontSize: 11, color: colors.textMute }}>ステップ（種類）はプルダウンで選択。選択肢は「マスタ」タブのステップ設定で編集できます</span>
                     </div>
                   </div>
                 </div>
@@ -5228,12 +4841,24 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
                 <Plus size={13} /> 空の項目
               </button>
             </div>
-            <div style={{ fontSize: 10, color: colors.textMute, marginTop: 8 }}>
+            <div style={{ fontSize: 11, color: colors.textMute, marginTop: 8 }}>
               ※ 空欄の項目・ステップは登録されません ・ 制作時間は HH:MM（時:分）で入力（例 08:00・00:30）・ 制作時間0のステップは登録されません ・ 上から順に作業する想定でスケジュールされます ・ 視点は ▲▼ で並び替え、「統合（取り込み）」で他の視点のステップをこの視点にまとめられます
             </div>
           </div>
 
-        <div style={{ marginTop: 20, display: 'flex', justifyContent: 'flex-end' }}>
+        <div style={{ marginTop: 20, display: 'flex', justifyContent: 'flex-end', gap: 10, flexWrap: 'wrap' }}>
+          {!editMode && (
+            <button type="button" onClick={() => registerDraftAndEdit && registerDraftAndEdit()}
+              title="案件名だけ決まっていればまず登録し、視点やステップの詳細は続けて編集画面で入力できます"
+              style={{
+                padding: '10px 20px', background: '#fff', color: colors.accent,
+                border: `1px solid ${colors.accent}`, borderRadius: 4, cursor: 'pointer',
+                fontFamily: fontJP, fontSize: 14, fontWeight: 600,
+                display: 'flex', alignItems: 'center', gap: 6,
+              }}>
+              <Edit2 size={15} /> 登録して詳細編集へ
+            </button>
+          )}
           <button onClick={handleSubmit}
             style={{
               padding: '10px 24px', background: colors.text, color: '#fff',
@@ -5338,7 +4963,7 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
                 )}
               </span>
             )}
-            <span style={{ marginLeft: 'auto', fontSize: 10.5, color: colors.textMute }}>金額・外注は売上登録表へ自動連携されます</span>
+            <span style={{ marginLeft: 'auto', fontSize: 11, color: colors.textMute }}>金額・外注は売上登録表へ自動連携されます</span>
           </div>
         )}
 
@@ -5371,7 +4996,7 @@ function InputView({ embedded, form, setForm, stepTypeMaster, handleSubmit, regi
                       <button key={a} type="button" onClick={() => setSelectedListAssignee(a)} style={tabStyle(currentA === a, colors, fontJP)}>
                         {a || '（担当者未設定）'}
                         <span style={{
-                          marginLeft: 6, fontSize: 10, opacity: 0.7,
+                          marginLeft: 6, fontSize: 11, opacity: 0.7,
                           padding: '1px 5px', borderRadius: 8,
                           background: currentA === a ? 'rgba(255,255,255,0.2)' : '#f0ebde',
                         }}>{ts.length}件 / 残{fmtHM(remaining)}</span>
@@ -5721,7 +5346,7 @@ function ReviewCard({ g, now, finalizeReview, reopenReview, setReviewNote, setRe
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <span style={{
-          fontSize: 10, fontWeight: 700, color: '#fff',
+          fontSize: 11, fontWeight: 700, color: '#fff',
           background: gray ? '#9aa295' : '#c46a16', borderRadius: 10, padding: '2px 8px', flexShrink: 0,
         }}>確認待ち</span>
         {g.projectNameInternal
@@ -5748,7 +5373,7 @@ function ReviewCard({ g, now, finalizeReview, reopenReview, setReviewNote, setRe
             padding: '6px 8px', border: `1px solid ${colors.border}`, borderRadius: 4,
             fontFamily: fontJP, fontSize: 12, background: '#fff', color: colors.text, outline: 'none',
           }} />
-        <span style={{ fontSize: 10, color: colors.textMute }}>直すとこの時刻を起点に、担当者の残りスケジュールが組み直ります（早く終われば前倒し）</span>
+        <span style={{ fontSize: 11, color: colors.textMute }}>直すとこの時刻を起点に、担当者の残りスケジュールが組み直ります（早く終われば前倒し）</span>
       </div>
 
       <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
@@ -5917,10 +5542,10 @@ function AssigneeBoard({ tasks, now, assigneeOrder, vpDeliveryCount, caseEditMod
               <div style={{ width: 28, height: 28, borderRadius: '50%', background: getProjectColor(a), color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 12, flexShrink: 0 }}>{(a || '?').slice(0, 1)}</div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 13.5, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a || '（担当者未設定）'}</div>
-                <div style={{ fontSize: 10.5, color: colors.textMute }}>{groups.length}視点 ・ 残 {fmtHM(remaining)} ・ 納品{deliveries}</div>
+                <div style={{ fontSize: 11, color: colors.textMute }}>{groups.length}視点 ・ 残 {fmtHM(remaining)} ・ 納品{deliveries}</div>
               </div>
-              {overCount > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: '#fff', background: '#c1272d', borderRadius: 10, padding: '2px 7px' }}>超過{overCount}</span>}
-              {todayCount > 0 && <span style={{ fontSize: 10, fontWeight: 700, color: '#fff', background: '#d9822b', borderRadius: 10, padding: '2px 7px' }}>本日{todayCount}</span>}
+              {overCount > 0 && <span style={{ fontSize: 11, fontWeight: 700, color: '#fff', background: '#c1272d', borderRadius: 10, padding: '2px 7px' }}>超過{overCount}</span>}
+              {todayCount > 0 && <span style={{ fontSize: 11, fontWeight: 700, color: '#fff', background: '#d9822b', borderRadius: 10, padding: '2px 7px' }}>本日{todayCount}</span>}
             </div>
             {/* 視点リスト */}
             <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -5936,7 +5561,7 @@ function AssigneeBoard({ tasks, now, assigneeOrder, vpDeliveryCount, caseEditMod
                         title={`${g.projectNameInternal || g.projectName} ／ ${g.viewpointName}`}>
                         {(g.projectNameInternal || g.projectName)} <span style={{ color: colors.textMute, fontWeight: 400 }}>／ {g.viewpointName}</span>
                       </div>
-                      <div style={{ fontSize: 10, color: colors.textMute, marginTop: 2, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <div style={{ fontSize: 11, color: colors.textMute, marginTop: 2, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
                         {g.companyName && <span>{g.companyName}</span>}
                         <span style={{ color: colors.accent, fontWeight: 600 }}>残 {fmtHM(rem)}</span>
                         {g.scheduledEnd && <span>{fmtMD(g.scheduledEnd)} {minToTime(g.scheduledEndMin)} 完了予定</span>}
@@ -6284,13 +5909,13 @@ function ViewpointGroupList({ groups, allActive, now, caseEditMode, companyOrder
                 </button>
                 {pg.tentative && (
                   <span style={{
-                    fontSize: 10, fontWeight: 700, color: '#fff', background: '#c46a16',
+                    fontSize: 11, fontWeight: 700, color: '#fff', background: '#c46a16',
                     borderRadius: 2, padding: '2px 6px', flexShrink: 0,
                   }} title="仮案件（仮予定）です。編集フォームで本登録に切り替えられます">仮</span>
                 )}
                 {pg.tentative && (pg.tentativeStart || pg.tentativeEnd) && (
                   <span style={{
-                    fontSize: 10, fontWeight: 600, color: '#c46a16', flexShrink: 0, whiteSpace: 'nowrap',
+                    fontSize: 11, fontWeight: 600, color: '#c46a16', flexShrink: 0, whiteSpace: 'nowrap',
                   }} title="仮案件の対応想定期間（開始予定日〜終了予定日）">
                     {pg.tentativeStart ? pg.tentativeStart.slice(5).replace('-', '/') : ''}
                     〜
@@ -6299,7 +5924,7 @@ function ViewpointGroupList({ groups, allActive, now, caseEditMode, companyOrder
                 )}
                 {(sortMode === 'deadline' || isOffshore(pg.companyName)) && pg.companyName && (
                   <span style={{
-                    fontSize: 10, fontWeight: 600, color: '#fff',
+                    fontSize: 11, fontWeight: 600, color: '#fff',
                     background: getProjectColor(pg.companyName), borderRadius: 10,
                     padding: '1px 8px', flexShrink: 0, maxWidth: 90, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                   }} title={pg.companyName}>{pg.companyName}</span>
@@ -6324,7 +5949,7 @@ function ViewpointGroupList({ groups, allActive, now, caseEditMode, companyOrder
               )}
               {pg.registeredDate && (
                 <span title={`登録日 ${pg.registeredDate}（新規登録した日・自動記録）`}
-                  style={{ fontSize: 10.5, color: colors.textMute, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                  style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap', flexShrink: 0 }}>
                   登録 {pg.registeredDate.slice(5).replace('-', '/')}
                 </span>
               )}
@@ -6346,7 +5971,7 @@ function ViewpointGroupList({ groups, allActive, now, caseEditMode, companyOrder
                         background: danger ? '#fbeaea' : '#eef2ea',
                         color: danger ? '#c1272d' : '#5a6a51', cursor: 'pointer',
                       }} />
-                    {d && <span style={{ fontSize: 10, color: colors.textMute }}>（{dayName(d)}）</span>}
+                    {d && <span style={{ fontSize: 11, color: colors.textMute }}>（{dayName(d)}）</span>}
                     {pg.projectDeadline && (
                       <button type="button" title="全体納期をクリア（納期なしにする）"
                         onClick={() => setProjectDeadline(pg.projectName, '')}
@@ -6535,12 +6160,12 @@ function ViewpointMetaPanel({ group, setViewpointMeta, setStepMeta, isOffshore, 
           納品名: {group.deliveryName || base || '—'}
         </span>
         {group.deliveryCount > 1 && (
-          <span style={{ fontSize: 10, color: '#fff', background: '#b07d3c', borderRadius: 10, padding: '1px 7px' }}>納品{group.deliveryCount}回</span>
+          <span style={{ fontSize: 11, color: '#fff', background: '#b07d3c', borderRadius: 10, padding: '1px 7px' }}>納品{group.deliveryCount}回</span>
         )}
-        {steps.length > 0 && <span style={{ fontSize: 10.5, color: colors.textMute }}>ステップ {steps.length}件</span>}
-        {totalAmount > 0 && <span style={{ fontSize: 10.5, color: '#3a7bd5', fontWeight: 600 }}>金額 {yen(totalAmount)}</span>}
-        {totalVND > 0 && <span style={{ fontSize: 10.5, color: '#7a8471' }}>外注 {Math.round(totalVND).toLocaleString('ja-JP')}₫</span>}
-        {!countAs && <span style={{ fontSize: 10, color: '#b00', border: '1px solid #e6b3b3', borderRadius: 3, padding: '0 5px' }}>集計対象外</span>}
+        {steps.length > 0 && <span style={{ fontSize: 11, color: colors.textMute }}>ステップ {steps.length}件</span>}
+        {totalAmount > 0 && <span style={{ fontSize: 11, color: '#3a7bd5', fontWeight: 600 }}>金額 {yen(totalAmount)}</span>}
+        {totalVND > 0 && <span style={{ fontSize: 11, color: '#7a8471' }}>外注 {Math.round(totalVND).toLocaleString('ja-JP')}₫</span>}
+        {!countAs && <span style={{ fontSize: 11, color: '#b00', border: '1px solid #e6b3b3', borderRadius: 3, padding: '0 5px' }}>集計対象外</span>}
       </div>
 
       {open && (
@@ -6561,7 +6186,7 @@ function ViewpointMetaPanel({ group, setViewpointMeta, setStepMeta, isOffshore, 
           </div>
 
           {/* ステップごとの請求情報（種類・依頼日・金額・外注・納品名）。請求はステップが唯一の元データ。 */}
-          <div style={{ ...labelStyle, fontSize: 10.5, marginBottom: 4 }}>
+          <div style={{ ...labelStyle, fontSize: 11, marginBottom: 4 }}>
             ステップごとの請求（種類・依頼日・金額・外注。金額や外注VNDを入力すると売上登録表へ自動連携されます。ステップの追加・削除は「ステップ追加／視点編集」で行います）
           </div>
           {steps.length === 0 ? (
@@ -6676,7 +6301,7 @@ function ViewpointCard({ group, now, caseEditMode, allSortedIds, companyFirstIds
             <span style={{ color: colors.textMute, fontWeight: 400, margin: '0 8px' }}>／</span>
             {group.viewpointName}
             {group.viewpointCategory && (
-              <span style={{ fontSize: 10, fontWeight: 700, color: '#fff', background: group.viewpointCategory === '外観' ? '#3a7bd5' : '#7a8471', borderRadius: 10, padding: '1px 7px', marginLeft: 8, verticalAlign: 'middle' }}>{group.viewpointCategory}</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: '#fff', background: group.viewpointCategory === '外観' ? '#3a7bd5' : '#7a8471', borderRadius: 10, padding: '1px 7px', marginLeft: 8, verticalAlign: 'middle' }}>{group.viewpointCategory}</span>
             )}
             {group.viewpointNameExternal && (
               <span style={{ fontSize: 11, color: colors.textMute, fontWeight: 400, marginLeft: 8 }}>（社外: {group.viewpointNameExternal}）</span>
@@ -6690,7 +6315,7 @@ function ViewpointCard({ group, now, caseEditMode, allSortedIds, companyFirstIds
           <div style={{ fontSize: 11, color: colors.textMute, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             {group.companyName && (
               <span style={{
-                fontSize: 10, fontWeight: 600, color: '#fff',
+                fontSize: 11, fontWeight: 600, color: '#fff',
                 background: getProjectColor(group.companyName), borderRadius: 10,
                 padding: '1px 8px',
               }}>{group.companyName}</span>
@@ -6718,7 +6343,7 @@ function ViewpointCard({ group, now, caseEditMode, allSortedIds, companyFirstIds
                 if (!group.deadline) return null;
                 return (
                   <span title={danger ? 'この視点の納期を過ぎている、または終了予定が納期を超えています' : 'この視点の納期'} style={{
-                    fontSize: 10, fontWeight: 700,
+                    fontSize: 11, fontWeight: 700,
                     color: danger ? '#fff' : '#7a8471',
                     background: danger ? '#c1272d' : '#eef2ea',
                     border: danger ? 'none' : '1px solid #c9d4c2',
@@ -6729,7 +6354,7 @@ function ViewpointCard({ group, now, caseEditMode, allSortedIds, companyFirstIds
               return (
                 <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}
                   title="この視点の個別納期。空にすると全体納期（案件共通）に従います。変更は視点内の全ステップに即反映されます">
-                  <span style={{ fontSize: 10, fontWeight: 700, color: danger ? '#c1272d' : '#7a8471' }}>納期（個別）{danger ? ' ⚠' : ''}</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: danger ? '#c1272d' : '#7a8471' }}>納期（個別）{danger ? ' ⚠' : ''}</span>
                   <input type="date" value={indiv}
                     onChange={(e) => setViewpointDeadline(group, e.target.value)}
                     style={{
@@ -6746,7 +6371,7 @@ function ViewpointCard({ group, now, caseEditMode, allSortedIds, companyFirstIds
                     </button>
                   )}
                   {inherited && dl && (
-                    <span style={{ fontSize: 10, color: danger ? '#c1272d' : colors.textMute }}>
+                    <span style={{ fontSize: 11, color: danger ? '#c1272d' : colors.textMute }}>
                       全体 {fmtMD(dl)}（{dayName(dl)}）を適用中
                     </span>
                   )}
@@ -6912,7 +6537,7 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
       await navigator.clipboard.writeText(t);
       setCopiedDelivery(t);
       setTimeout(() => setCopiedDelivery(c => (c === t ? '' : c)), 1500);
-    } catch (e) { alert('コピーに失敗しました: ' + e); }
+    } catch (e) { notify('コピーに失敗しました: ' + e, 'error'); }
   };
 
   // 開始時間指定の編集を開始（既定値：現在の指定 → 無ければ現在のスケジュール開始）
@@ -7055,7 +6680,7 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
                 <span style={{ fontSize: 13, fontWeight: 500, color: task.status === 'done' ? colors.textMute : 'inherit', textDecoration: task.status === 'done' ? 'line-through' : 'none' }}>
                   {displayName}
                 </span>
-                {task.status === 'done' && <span style={{ fontSize: 10, fontWeight: 700, color: '#fff', background: colors.progress, borderRadius: 8, padding: '1px 7px', textDecoration: 'none' }}>完了</span>}
+                {task.status === 'done' && <span style={{ fontSize: 11, fontWeight: 700, color: '#fff', background: colors.progress, borderRadius: 8, padding: '1px 7px', textDecoration: 'none' }}>完了</span>}
                 {stepDelivery && (
                   <span style={{ fontSize: 13 }} title="納品名（社外視点名ベース／社内視点名ベースを併記）">
                     納品名:{' '}
@@ -7081,7 +6706,7 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
                 )}
               </div>
               {(task.stepRequestDate || cdStr || amt > 0) && (
-                <div style={{ fontSize: 10.5, color: colors.textMute, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 4 }}>
+                <div style={{ fontSize: 11, color: colors.textMute, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 4 }}>
                   {task.stepRequestDate && <span>依頼 {task.stepRequestDate}</span>}
                   {cdStr && <span>完了 {cdStr}</span>}
                   {amt > 0 && <span style={{ color: '#3a7bd5', fontWeight: 600 }}>¥{Math.round(amt).toLocaleString('ja-JP')}</span>}
@@ -7156,12 +6781,12 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
                 onKeyDown={(e) => { if (e.key === 'Enter') commitStart(); if (e.key === 'Escape') setEditingStart(false); }}
                 style={{ padding: '2px 4px', border: `1px solid ${colors.border}`, borderRadius: 3, fontFamily: fontJP, fontSize: 11 }} />
               <button type="button" onMouseDown={(e) => { e.preventDefault(); setStartInput(''); setEditingStart(false); if (onSetManualStart && task.manualStart) onSetManualStart(''); }}
-                style={{ background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 3, padding: '2px 6px', fontSize: 10, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP }}>
+                style={{ background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 3, padding: '2px 6px', fontSize: 11, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP }}>
                 解除
               </button>
             </span>
           ) : task.manualStart ? (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, padding: '1px 5px', background: '#fce8e8', color: colors.accent, borderRadius: 2 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 11, padding: '1px 5px', background: '#fce8e8', color: colors.accent, borderRadius: 2 }}>
               <button type="button" onClick={onSetManualStart ? openStartEditor : undefined}
                 title="クリックで開始時間指定を変更（自動スケジュールより優先）"
                 style={{ background: 'transparent', border: 'none', padding: 0, color: 'inherit', fontSize: 'inherit', fontFamily: fontJP, cursor: onSetManualStart ? 'pointer' : 'default', fontWeight: 600 }}>
@@ -7178,7 +6803,7 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
           ) : onSetManualStart ? (
             <button type="button" onClick={openStartEditor}
               title="このステップの開始時間を指定（自動スケジュールより優先・登録/解除可能）"
-              style={{ background: 'transparent', border: `1px dashed ${colors.border}`, borderRadius: 2, padding: '1px 5px', fontSize: 10, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP }}>
+              style={{ background: 'transparent', border: `1px dashed ${colors.border}`, borderRadius: 2, padding: '1px 5px', fontSize: 11, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP }}>
               ＋開始指定
             </button>
           ) : null}
@@ -7190,7 +6815,7 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
                 }
               }}
               title="現在時刻を開始時間に設定して割り込み開始（作業中の案件は前半・後半に自動分割される）"
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: colors.accentSoft, border: `1px solid ${colors.accent}`, borderRadius: 2, padding: '1px 6px', fontSize: 10, color: colors.accent, cursor: 'pointer', fontFamily: fontJP, fontWeight: 600 }}>
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: colors.accentSoft, border: `1px solid ${colors.accent}`, borderRadius: 2, padding: '1px 6px', fontSize: 11, color: colors.accent, cursor: 'pointer', fontFamily: fontJP, fontWeight: 600 }}>
               <Zap size={10} /> 今から割り込み
             </button>
           )}
@@ -7202,12 +6827,12 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
                 onKeyDown={(e) => { if (e.key === 'Enter') commitEnd(); if (e.key === 'Escape') setEditingEnd(false); }}
                 style={{ padding: '2px 4px', border: `1px solid ${colors.border}`, borderRadius: 3, fontFamily: fontJP, fontSize: 11 }} />
               <button type="button" onMouseDown={(e) => { e.preventDefault(); setEndInput(''); setEditingEnd(false); if (onSetManualEnd && task.manualEnd) onSetManualEnd(''); }}
-                style={{ background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 3, padding: '2px 6px', fontSize: 10, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP }}>
+                style={{ background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 3, padding: '2px 6px', fontSize: 11, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP }}>
                 解除
               </button>
             </span>
           ) : task.manualEnd ? (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10, padding: '1px 5px', background: '#e8eefc', color: '#4a6da8', borderRadius: 2 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 11, padding: '1px 5px', background: '#e8eefc', color: '#4a6da8', borderRadius: 2 }}>
               <button type="button" onClick={onSetManualEnd ? openEndEditor : undefined}
                 title="クリックで終了予定の指定を変更（同じ担当者の次のタスクはこの時刻以降に開始）"
                 style={{ background: 'transparent', border: 'none', padding: 0, color: 'inherit', fontSize: 'inherit', fontFamily: fontJP, cursor: onSetManualEnd ? 'pointer' : 'default', fontWeight: 600 }}>
@@ -7224,12 +6849,12 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
           ) : onSetManualEnd ? (
             <button type="button" onClick={openEndEditor}
               title="このステップの終了予定を指定（同じ担当者の次のタスクはこの時刻以降に開始・登録/解除可能）"
-              style={{ background: 'transparent', border: `1px dashed ${colors.border}`, borderRadius: 2, padding: '1px 5px', fontSize: 10, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP }}>
+              style={{ background: 'transparent', border: `1px dashed ${colors.border}`, borderRadius: 2, padding: '1px 5px', fontSize: 11, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP }}>
               ＋終了指定
             </button>
           ) : null}
           {task.delays && task.delays.length > 0 && (
-            <span title={`遅延 ${task.delays.length}回`} style={{ fontSize: 10, padding: '1px 5px', background: '#fde0c8', color: '#9a5a12', borderRadius: 2, fontWeight: 600 }}>
+            <span title={`遅延 ${task.delays.length}回`} style={{ fontSize: 11, padding: '1px 5px', background: '#fde0c8', color: '#9a5a12', borderRadius: 2, fontWeight: 600 }}>
               遅延履歴あり（{task.delays.length}）
             </span>
           )}
@@ -7278,7 +6903,7 @@ const miniBtnStyle = (colors, disabled) => ({
 const progressBtnStyle = (colors, fontJP) => ({
   background: '#fff', border: `1px solid ${colors.progress}`, color: colors.progress,
   borderRadius: 3, padding: '3px 8px', cursor: 'pointer',
-  fontFamily: fontJP, fontSize: 10, fontWeight: 600,
+  fontFamily: fontJP, fontSize: 11, fontWeight: 600,
   display: 'flex', alignItems: 'center', justifyContent: 'center', minWidth: 44,
 });
 
@@ -7571,7 +7196,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
           <div style={{ border: `1px solid ${colors.border}`, borderRadius: 6, background: '#fff', padding: 12, marginBottom: 14 }}>
             <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>
               空き時間（今後{dayCount}営業日・単位 h）
-              <span style={{ fontSize: 10.5, color: colors.textMute, fontWeight: 400, marginLeft: 8 }}>
+              <span style={{ fontSize: 11, color: colors.textMute, fontWeight: 400, marginLeft: 8 }}>
                 スケジュール済みの予定・休日・不在・残業枠を反映。「-」は空きなし
               </span>
             </div>
@@ -7652,7 +7277,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                 }}>担当</div>
                 {halfHours.map((m, i) => (
                   <div key={m} style={{
-                    width: timeColW, flexShrink: 0, padding: '8px 0 6px', fontSize: 10, color: colors.textMute,
+                    width: timeColW, flexShrink: 0, padding: '8px 0 6px', fontSize: 11, color: colors.textMute,
                     boxSizing: 'border-box',
                     borderRight: i < halfHours.length - 1 ? `1px ${(m + 30) % 60 === 0 ? 'solid' : 'dashed'} ${colors.border}` : 'none',
                   }}>
@@ -7712,7 +7337,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                           background: 'repeating-linear-gradient(45deg, #e3e3e0, #e3e3e0 5px, #efefec 5px, #efefec 10px)',
                           display: 'flex', alignItems: 'center', justifyContent: 'center',
                           color: '#8a8a82', fontWeight: 700, fontSize: 13,
-                        }}>休{absLabel && <span style={{ fontSize: 10, fontWeight: 500 }}>（{absLabel}）</span>}</div>
+                        }}>休{absLabel && <span style={{ fontSize: 11, fontWeight: 500 }}>（{absLabel}）</span>}</div>
                       )}
                       {/* 時間帯不在 */}
                       {!abs.allDay && abs.intervals.map(([s, e], k) => {
@@ -7776,7 +7401,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                   background: isToday ? colors.accentSoft : 'transparent',
                   boxSizing: 'border-box',
                 }}>
-                  <div style={{ fontSize: 10, color: colors.textMute }}>
+                  <div style={{ fontSize: 11, color: colors.textMute }}>
                     {d.getMonth() + 1}/{d.getDate()} ({dayName(d)})
                   </div>
                   <div style={{ display: 'flex', fontSize: 9, color: colors.textMute, marginTop: 2 }}>
@@ -7871,7 +7496,7 @@ function CalendarView({ scheduled, settings, now, colors, fontDisplay, onEditPro
                         display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
                         color: '#8a8a82', fontWeight: 700, fontSize: 13,
                       }}>
-                        休{absLabel && <span style={{ fontSize: 10, fontWeight: 500 }}>（{absLabel}）</span>}
+                        休{absLabel && <span style={{ fontSize: 11, fontWeight: 500 }}>（{absLabel}）</span>}
                       </div>
                     )}
                     {!abs.allDay && overlayRects.map((r, k) => (
@@ -7968,7 +7593,7 @@ function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact
         background: blockBg, color: blockText,
         // 仮案件は斜線ストライプを重ねて区別する（パステル地でも見えるよう薄い濃色）
         backgroundImage: tentative ? 'repeating-linear-gradient(45deg, rgba(110,100,80,0.16) 0, rgba(110,100,80,0.16) 4px, transparent 4px, transparent 9px)' : 'none',
-        fontSize: 10, lineHeight: 1.25, overflow: 'hidden',
+        fontSize: 11, lineHeight: 1.25, overflow: 'hidden',
         cursor: onClick ? 'pointer' : 'default',
         // 案件並び替えドラッグ中の視覚フィードバック
         opacity: projDrag && projDrag === task.projectName ? 0.55 : 1,
@@ -7995,7 +7620,7 @@ function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact
         // 1日表示（横タイムライン）：社内案件名／社外案件名／視点名を縦に表示
         <>
           {internal && (
-            <div style={{ fontSize: 10, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', paddingRight: 18 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', paddingRight: 18 }}>
               {internal}
             </div>
           )}
@@ -8011,7 +7636,7 @@ function TaskBlock({ task, slot, heightPct, projectColor, done, onClick, compact
       ) : (
         // 全期間・簡易表示：1行目＝社内案件名＋視点名、2行目＝社外案件名、3行目＝開始〜終了予定
         <>
-          <div style={{ fontSize: 10, fontWeight: 700, whiteSpace: 'normal', overflow: 'hidden', wordBreak: 'break-word', paddingRight: 18 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, whiteSpace: 'normal', overflow: 'hidden', wordBreak: 'break-word', paddingRight: 18 }}>
             {internal || external}
             <span style={{ fontWeight: 500 }}> / {task.viewpointName}</span>
           </div>
@@ -8071,7 +7696,7 @@ function AssigneeView({ scheduled, selectedAssignee, setSelectedAssignee, now, c
             <button key={a} onClick={() => setSelectedAssignee(a)} style={tabStyle(current === a, colors, fontJP)}>
               {a}
               <span style={{
-                marginLeft: 6, fontSize: 10, opacity: 0.7,
+                marginLeft: 6, fontSize: 11, opacity: 0.7,
                 padding: '1px 5px', borderRadius: 8,
                 background: current === a ? 'rgba(255,255,255,0.2)' : '#f0ebde',
               }}>{tasks.length}件 / 残{remaining}h</span>
@@ -8274,7 +7899,7 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
       await navigator.clipboard.writeText(assigneeMessage);
       setMsgCopied(true);
       setTimeout(() => setMsgCopied(false), 1500);
-    } catch (e) { alert('コピーに失敗しました: ' + e); }
+    } catch (e) { notify('コピーに失敗しました: ' + e, 'error'); }
   };
 
   // ===== 会社別 業務連絡文（挨拶文形式） =====
@@ -8407,7 +8032,7 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
       await navigator.clipboard.writeText(companyText);
       setCompanyCopied(true);
       setTimeout(() => setCompanyCopied(false), 1500);
-    } catch (e) { alert('コピーに失敗しました: ' + e); }
+    } catch (e) { notify('コピーに失敗しました: ' + e, 'error'); }
   };
   const companyLabel = (c) => c || '（会社未設定）';
 
@@ -8490,7 +8115,7 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
             border: `1px solid ${colors.border}`, borderRadius: 4, padding: 14,
             fontFamily: fontJP, fontSize: 13, lineHeight: 1.7, color: colors.text, background: '#fbf9f4', whiteSpace: 'pre-wrap',
           }} />
-        <div style={{ fontSize: 10, color: colors.textMute, marginTop: 8 }}>
+        <div style={{ fontSize: 11, color: colors.textMute, marginTop: 8 }}>
           ※ 「全社まとめ」は全会社の案件を1通にまとめて案件ごとに表示します（会社を選ぶとその会社だけ） ・ 「業務開始（朝）／業務終了（夕）」で挨拶文を切り替えます ・ 制作枚数は視点(依頼項目)を外観(EX)／内観(IN)で分類した件数です ・ 「■納品済み」は本日納品分（実終了日が本日の完了案件）を表示します
         </div>
       </div>
@@ -8533,7 +8158,7 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
               fontFamily: 'monospace', fontSize: 12, lineHeight: 1.6,
               background: '#fbf9f4', color: colors.text, resize: 'vertical', boxSizing: 'border-box',
             }} />
-          <div style={{ fontSize: 10, color: colors.textMute, marginTop: 6 }}>
+          <div style={{ fontSize: 11, color: colors.textMute, marginTop: 6 }}>
             ※ 進行中案件から自動生成。案件識別子は「社内案件名」を優先（無ければ社外案件名）。表示順は登録順。
           </div>
         </Section>
@@ -8547,7 +8172,7 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
                 <li key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, flexWrap: 'wrap' }}>
                   <span style={{
                     background: priorityColor(task.priority), color: '#fff',
-                    padding: '2px 6px', borderRadius: 3, fontSize: 10, fontWeight: 700, minWidth: 24, textAlign: 'center',
+                    padding: '2px 6px', borderRadius: 3, fontSize: 11, fontWeight: 700, minWidth: 24, textAlign: 'center',
                   }}>#{task.priority}</span>
                   <span style={{ width: 4, height: 20, background: getProjectColor(task.projectName), borderRadius: 2 }} />
                   <span style={{ minWidth: 60, color: colors.textMute, fontSize: 12 }}>{task.assignee}</span>
@@ -8570,7 +8195,7 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
                   <li key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, flexWrap: 'wrap' }}>
                     <span style={{
                       background: priorityColor(task.priority), color: '#fff',
-                      padding: '2px 6px', borderRadius: 3, fontSize: 10, fontWeight: 700, minWidth: 24, textAlign: 'center',
+                      padding: '2px 6px', borderRadius: 3, fontSize: 11, fontWeight: 700, minWidth: 24, textAlign: 'center',
                     }}>#{task.priority}</span>
                     <span style={{ width: 4, height: 20, background: getProjectColor(task.projectName), borderRadius: 2 }} />
                     <span>{renderTaskLabel(task)}</span>
@@ -8592,7 +8217,7 @@ function MessageView({ scheduled, settings, colors, fontJP, fontDisplay, assigne
               <div key={assignee} style={{ background: '#fbf9f4', borderRadius: 4, padding: 14 }}>
                 <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <span>{assignee}</span>
-                  <span style={{ fontSize: 10, color: colors.textMute, fontWeight: 400 }}>
+                  <span style={{ fontSize: 11, color: colors.textMute, fontWeight: 400 }}>
                     残 {remainingByAssignee[assignee] || 0}h
                   </span>
                 </div>
@@ -8709,7 +8334,7 @@ function RevisionStatsSection({ tasks, colors, fontJP, fontDisplay }) {
                       <td style={{ ...td, color: colors.textMute, fontSize: 11.5 }}>{s.companyName || '—'}</td>
                       <td style={td}>
                         <span style={{ fontWeight: 600 }}>{s.projectNameInternal || s.projectName}</span>
-                        {s.projectNameInternal && <span style={{ fontSize: 10.5, color: colors.textMute, marginLeft: 6 }}>{s.projectName}</span>}
+                        {s.projectNameInternal && <span style={{ fontSize: 11, color: colors.textMute, marginLeft: 6 }}>{s.projectName}</span>}
                       </td>
                       <td style={td}>{s.viewpointName}</td>
                       <td style={{ ...td, textAlign: 'right', fontWeight: 700, color: s.fixCount > 0 ? '#c46a16' : colors.textMute }}>{s.fixCount}回</td>
@@ -8889,7 +8514,7 @@ function DoneTaskRow({ task, onRestore, onDelete, onSetActualEnd, onEditProject,
           {task.stepName && <><span style={{ margin: '0 6px' }}>／</span>{task.stepName}</>}
           {cancelled && (
             <span style={{
-              marginLeft: 8, fontSize: 10, fontWeight: 700, color: '#a05252',
+              marginLeft: 8, fontSize: 11, fontWeight: 700, color: '#a05252',
               border: '1px solid #a05252', borderRadius: 2, padding: '1px 5px',
               textDecoration: 'none', display: 'inline-block', verticalAlign: 'middle',
             }}>中止</span>
@@ -8910,7 +8535,7 @@ function DoneTaskRow({ task, onRestore, onDelete, onSetActualEnd, onEditProject,
             <EndTimeFields value={task.actualEnd || ''} onChange={onSetActualEnd} colors={colors} fontJP={fontJP} />
             {task.actualEnd && (
               <button type="button" onClick={() => onSetActualEnd('')}
-                style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '4px 8px', borderRadius: 3, fontSize: 10, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP }}>
+                style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '4px 8px', borderRadius: 3, fontSize: 11, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP }}>
                 クリア
               </button>
             )}
@@ -9441,6 +9066,7 @@ function EndTimeFields({ value, onChange, colors, fontJP }) {
 
 // ============ 完了ダイアログ（終了時間を入力して完了） ============
 function CompleteDialog({ target, onConfirm, onCancel, colors, fontJP, fontDisplay }) {
+  useEscKey(onCancel);
   const [end, setEnd] = useState(target.defaultEnd || '');
   return (
     <div onClick={onCancel}
@@ -9478,65 +9104,6 @@ function CompleteDialog({ target, onConfirm, onCancel, colors, fontJP, fontDispl
   );
 }
 
-// ============ コンボボックス（プルダウン＋入力で候補を絞り込み・自由入力も可） ============
-function Combobox({ value, onChange, options, placeholder, inputStyle, colors, fontJP, title, wrapperStyle }) {
-  const [open, setOpen] = useState(false);
-  // 候補リストを下に出すと画面下で見切れる場合があるため、空きが少なければ上向きに開く
-  const [place, setPlace] = useState({ up: false, maxH: 300 });
-  const ref = useRef(null);
-  useEffect(() => {
-    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
-    document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
-  }, []);
-  // 入力欄の上下の空きを測り、下が狭ければ上に開く。表示高さも空きに合わせる。
-  const computePlace = () => {
-    const el = ref.current;
-    if (!el || typeof window === 'undefined') return;
-    const rect = el.getBoundingClientRect();
-    const below = window.innerHeight - rect.bottom - 8;
-    const above = rect.top - 8;
-    const up = below < 220 && above > below;
-    setPlace({ up, maxH: Math.max(140, Math.min(300, Math.floor(up ? above : below))) });
-  };
-  const openMenu = () => { computePlace(); setOpen(true); };
-  const opts = options || [];
-  // 読み仮名ベースで絞り込む：ひらがな/カタカナ/全半角/大小文字の違いを無視する。
-  // 例「りのべる」と打つと「リノベル」も候補に出る。
-  const v = kanaNormalize(value);
-  // 入力中（候補に完全一致しない）は部分一致で絞り込み、空 or 選択済みなら全件表示
-  const filtered = (value && !opts.some(o => o === value))
-    ? opts.filter(o => kanaNormalize(o).includes(v))
-    : opts;
-  const select = (val) => { onChange(val); setOpen(false); };
-  return (
-    <div ref={ref} style={{ position: 'relative', ...(wrapperStyle || {}) }}>
-      <input type="text" value={value || ''} title={title}
-        onChange={(e) => { onChange(e.target.value); openMenu(); }}
-        onFocus={openMenu}
-        placeholder={placeholder}
-        style={{ ...inputStyle, paddingRight: 30 }} />
-      <button type="button" tabIndex={-1}
-        onMouseDown={(e) => { e.preventDefault(); setOpen(o => { const n = !o; if (n) computePlace(); return n; }); }}
-        title="一覧から選ぶ"
-        style={{ position: 'absolute', right: 1, top: 1, bottom: 1, width: 28, background: 'transparent', border: 'none', cursor: 'pointer', color: colors.textMute, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <ChevronDown size={15} />
-      </button>
-      {open && filtered.length > 0 && (
-        <div style={{ position: 'absolute', left: 0, zIndex: 50, background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 4, minWidth: 'max(100%, 200px)', width: 'max-content', maxWidth: 340, maxHeight: place.maxH, overflowY: 'auto', boxShadow: '0 8px 24px rgba(0,0,0,0.18)', ...(place.up ? { bottom: '100%', marginBottom: 2 } : { top: '100%', marginTop: 2 }) }}>
-          {filtered.map(o => (
-            <div key={o} onMouseDown={(e) => { e.preventDefault(); select(o); }}
-              style={{ padding: '10px 14px', fontSize: 15, fontFamily: fontJP, cursor: 'pointer', color: colors.text, background: o === value ? colors.accentSoft : '#fff', whiteSpace: 'nowrap', borderBottom: `1px solid ${colors.border}` }}
-              onMouseEnter={(e) => { if (o !== value) e.currentTarget.style.background = '#f3efe4'; }}
-              onMouseLeave={(e) => { e.currentTarget.style.background = o === value ? colors.accentSoft : '#fff'; }}>
-              {o}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ============ 残業の登録（担当者ごとの稼働枠追加） ============
 function OvertimeManager({ overtimes, assigneeList, settings, onAdd, onRemove, colors, fontJP }) {
@@ -9545,10 +9112,10 @@ function OvertimeManager({ overtimes, assigneeList, settings, onAdd, onRemove, c
   const [o, setO] = useState({ assignee: '', startDate: todayStr, endDate: todayStr, startTime: defaultStart, endTime: '19:00', label: '' });
   const set = (k, v) => setO(p => ({ ...p, [k]: v }));
   const submit = () => {
-    if (!o.assignee) { alert('担当者を選択してください'); return; }
-    if (!o.startDate || !o.endDate) { alert('開始日・終了日を入力してください'); return; }
-    if (o.endDate < o.startDate) { alert('終了日は開始日以降にしてください'); return; }
-    if (!o.startTime || !o.endTime || o.startTime >= o.endTime) { alert('残業の時間帯が正しくありません'); return; }
+    if (!o.assignee) { notify('担当者を選択してください'); return; }
+    if (!o.startDate || !o.endDate) { notify('開始日・終了日を入力してください'); return; }
+    if (o.endDate < o.startDate) { notify('終了日は開始日以降にしてください'); return; }
+    if (!o.startTime || !o.endTime || o.startTime >= o.endTime) { notify('残業の時間帯が正しくありません'); return; }
     onAdd({
       assignee: o.assignee, startDate: o.startDate, endDate: o.endDate,
       startTime: o.startTime, endTime: o.endTime,
@@ -9614,10 +9181,10 @@ function AbsenceManager({ absences, assigneeList, onAdd, onRemove, colors, fontJ
   const [a, setA] = useState({ assignee: '', startDate: todayStr, endDate: todayStr, allDay: true, startTime: '13:00', endTime: '17:00', label: '' });
   const set = (k, v) => setA(p => ({ ...p, [k]: v }));
   const submit = () => {
-    if (!a.assignee) { alert('担当者を選択してください'); return; }
-    if (!a.startDate || !a.endDate) { alert('開始日・終了日を入力してください'); return; }
-    if (a.endDate < a.startDate) { alert('終了日は開始日以降にしてください'); return; }
-    if (!a.allDay && a.startTime >= a.endTime) { alert('不在の時間帯が正しくありません'); return; }
+    if (!a.assignee) { notify('担当者を選択してください'); return; }
+    if (!a.startDate || !a.endDate) { notify('開始日・終了日を入力してください'); return; }
+    if (a.endDate < a.startDate) { notify('終了日は開始日以降にしてください'); return; }
+    if (!a.allDay && a.startTime >= a.endTime) { notify('不在の時間帯が正しくありません'); return; }
     onAdd({
       assignee: a.assignee, startDate: a.startDate, endDate: a.endDate,
       allDay: !!a.allDay,
@@ -9737,7 +9304,7 @@ function HolidayManager({ holidays, onAdd, onRemove, colors, fontJP }) {
                     style={{ ...inputStyle, width: 56 }} /> 日間
                 </span>
                 <span style={{ color: colors.text }}>{c.label}</span>
-                {c.estimated && <span style={{ fontSize: 10, color: '#fff', background: '#c46a16', borderRadius: 8, padding: '1px 6px' }}>要確認</span>}
+                {c.estimated && <span style={{ fontSize: 11, color: '#fff', background: '#c46a16', borderRadius: 8, padding: '1px 6px' }}>要確認</span>}
                 {added
                   ? <span style={{ marginLeft: 'auto', fontSize: 11, color: colors.textMute }}>登録済み</span>
                   : <button type="button" onClick={() => onAdd([c])}
@@ -9784,6 +9351,7 @@ function HolidayManager({ holidays, onAdd, onRemove, colors, fontJP }) {
 
 // ============ 過去案件から引用するモーダル ============
 function QuoteModal({ projects, onSelect, onClose, colors, fontJP, fontDisplay }) {
+  useEscKey(onClose);
   const [query, setQuery] = useState('');
   const q = query.trim().toLowerCase();
   const filtered = q
@@ -9827,7 +9395,7 @@ function QuoteModal({ projects, onSelect, onClose, colors, fontJP, fontDisplay }
                 <span style={{ fontSize: 14, fontWeight: 600, color: colors.text }}>{p.projectNameInternal || p.projectName}</span>
                 {p.projectNameInternal && <span style={{ fontSize: 11, color: colors.textMute }}>{p.projectName}</span>}
                 {p.companyName && (
-                  <span style={{ fontSize: 10, fontWeight: 600, color: '#fff', background: getProjectColor(p.companyName), borderRadius: 10, padding: '1px 8px' }}>{p.companyName}</span>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: '#fff', background: getProjectColor(p.companyName), borderRadius: 10, padding: '1px 8px' }}>{p.companyName}</span>
                 )}
               </div>
               <div style={{ fontSize: 11, color: colors.textMute, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
@@ -9943,7 +9511,7 @@ function EndPromptModal({ viewpoints, now, settings, onComplete, onAddRevision, 
                     <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
                       <button type="button" onClick={() => {
                         const nt = delayEnd ? new Date(delayEnd).getTime() : 0;
-                        if (!nt) { alert('日時を入力してください'); return; }
+                        if (!nt) { notify('日時を入力してください'); return; }
                         onDelay(vp, vp.endTs, nt); close();
                       }} style={btn(colors.text, colors.text, '#fff')}>更新する</button>
                       <button type="button" onClick={close} style={btn('#fff', colors.border, colors.textMute)}>やめる</button>
@@ -9957,7 +9525,7 @@ function EndPromptModal({ viewpoints, now, settings, onComplete, onAddRevision, 
                     <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
                       <button type="button" onClick={() => {
                         const nt = adjustEnd ? new Date(adjustEnd).getTime() : 0;
-                        if (!nt) { alert('日時を入力してください'); return; }
+                        if (!nt) { notify('日時を入力してください'); return; }
                         onAdjustEnd(vp, nt); close();
                       }} style={btn(colors.text, colors.text, '#fff')}>修正する</button>
                       <button type="button" onClick={close} style={btn('#fff', colors.border, colors.textMute)}>やめる</button>
@@ -10001,7 +9569,7 @@ function CompanyOrderView({ companyOrder, saveCompanyOrder, usedCompanies, color
   const add = (name) => {
     const n = (name || '').trim();
     if (!n) return;
-    if (order.includes(n)) { alert('すでに登録されています'); return; }
+    if (order.includes(n)) { notify('すでに登録されています'); return; }
     saveCompanyOrder([...order, n]);
     setNewName('');
   };
@@ -10081,9 +9649,9 @@ function CompanyOrderView({ companyOrder, saveCompanyOrder, usedCompanies, color
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {unregistered.map(c => (
               <div key={c} style={rowBase}>
-                <span style={{ width: 22, height: 22, borderRadius: '50%', flexShrink: 0, background: getProjectColor(c), color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10 }}>—</span>
+                <span style={{ width: 22, height: 22, borderRadius: '50%', flexShrink: 0, background: getProjectColor(c), color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11 }}>—</span>
                 <span style={{ fontSize: 13 }}>{c}</span>
-                <span style={{ fontSize: 10, color: colors.textMute, background: '#eceae3', borderRadius: 8, padding: '1px 7px' }}>未登録</span>
+                <span style={{ fontSize: 11, color: colors.textMute, background: '#eceae3', borderRadius: 8, padding: '1px 7px' }}>未登録</span>
                 <button type="button" onClick={() => add(c)} title="並び順に登録"
                   style={{ marginLeft: 'auto', background: '#fff', border: `1px solid ${colors.accent}`, color: colors.accent, fontWeight: 600, padding: '5px 12px', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12 }}>
                   登録
