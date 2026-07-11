@@ -8,7 +8,7 @@ import {
   SALES_CATEGORIES, catOf, OUTSOURCERS, DEFAULT_SETTINGS,
   blankRow, computeRow, computeSummary, computeCategoryTotal,
   computeDeliverySummary,
-  currentMonth, monthLabel, shiftMonth, num, formatYen, formatVND,
+  currentMonth, monthLabel, shiftMonth, num, formatYen,
 } from './salesUtils.js';
 import { computeRevisionStats } from '../viewpoint/viewpointUtils.js';
 import { collectQuoteCandidates } from '../viewpoint/salesSync.js';

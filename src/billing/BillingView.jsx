@@ -1,7 +1,7 @@
 // 帳票ビュー：一覧・編集・お客様/案件からの自動入力・PDF出力（ブラウザ印刷）。
 // データは 1帳票 = 1 Firestore ドキュメント（billingStore、data/bill_{id}）。
 // 発行元（自社）情報・振込先は storage の 'billingIssuer' キーで編集できる。
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { Plus, Trash2, Edit2, Copy, Printer, X, FileText, Search, Building2 } from 'lucide-react';
 import { storage, billingStore } from '../firebase.js';
 import BillingDocument from './BillingDocument.jsx';

@@ -2,7 +2,7 @@
 // スプレッドシートの「案件情報一覧」を模した読み取り専用ビュー。
 // 1行＝1カット（視点）。列：番号・社内案件名・案件名・担当者名・制作状況・カット名・ご依頼日・納品日。
 // 編集は「入力」タブの案件登録／案件を編集で行う（この表は集計表示）。
-import React, { useState, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { Download, Printer } from 'lucide-react';
 
 const WD = ['日', '月', '火', '水', '木', '金', '土'];
