@@ -19,7 +19,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
     projectOrder, projectList, projectInternalList, viewpointList,
     assigneeList, assigneeOrder, companyList, customerMaster,
     stepTypeMaster, vpDeliveryCount,
-    registerDraftAndEdit,
+    registerDraftAndEdit, confirmDialog, notify,
   } = useApp();
   // お客様担当者の候補：会社名を選んでいればその会社に所属する担当者を表示
   // （会社名はひらがな/カタカナ/全半角の違いを無視して照合）
@@ -190,7 +190,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
   useEffect(() => { setAssigneeSuggestions(null); }, [editingId]); // 対象が変わったら閉じる
   const suggestAssignees = () => {
     const candidates = [...new Set((assigneeList || []).map(a => (a || '').trim()).filter(Boolean))];
-    if (candidates.length === 0) { alert('担当者の候補がありません。従業員マスタに担当者を登録してください。'); return; }
+    if (candidates.length === 0) { notify('担当者の候補がありません。従業員マスタに担当者を登録してください。', { type: 'error' }); return; }
     const out = [];
     for (const a of candidates) {
       const f2 = { ...form, assignee: a, viewpoints: (form.viewpoints || []).map(vp => ({ ...vp, assignee: a })) };
@@ -384,7 +384,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
         if (ok) { setQuoteOpen(false); return; }
       }
       // 登録できなかった場合（案件名・視点未入力など）は従来どおり破棄確認
-      if (!window.confirm('入力中の内容を破棄して引用しますか？')) return;
+      if (!(await confirmDialog({ message: '入力中の内容を破棄して引用しますか？', confirmLabel: '破棄して引用' }))) return;
     }
     applyQuote(proj);
   };
@@ -411,13 +411,13 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
     if (!recallMatch) return [];
     return computeRevisionStats(tasks.filter(t => (t.projectName || '') === recallMatch.projectName));
   }, [recallMatch, tasks]);
-  const applyRecall = () => {
+  const applyRecall = async () => {
     const proj = recallMatch;
     if (!proj) return;
     const vpDirty = (form.viewpoints || []).some(vp =>
       (vp.viewpointNameExternal || '').trim() || (vp.deadline || '').trim() || (vp.assignee || '').trim() ||
       (vp.steps || []).some(s => String(s.hours ?? '').trim() || String(s.completedHours ?? '').trim()));
-    if (vpDirty && !window.confirm('入力中の視点の内容を、過去案件の視点（修正）で置き換えます。よろしいですか？')) return;
+    if (vpDirty && !(await confirmDialog({ message: '入力中の視点の内容を、過去案件の視点（修正）で置き換えます。よろしいですか？', confirmLabel: '置き換える' }))) return;
     // 過去タスクから視点ごとの最新情報（社外視点名・内観/外観・担当者）とステップ構成を拾う
     const projTasks = tasks.filter(t => (t.projectName || '') === proj.projectName)
       .slice().sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
@@ -439,7 +439,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
         completedHours: t.completedHours,
       });
     }
-    if (byVp.size === 0) { alert('過去案件に視点が見つかりませんでした'); return; }
+    if (byVp.size === 0) { notify('過去案件に視点が見つかりませんでした', { type: 'error' }); return; }
     const viewpoints = [...byVp.values()].map(v => {
       // 過去のステップ構成を再現：制作時間・完了時間ともに復元、種類=修正（fix）
       // 種類は修正に統一する（元の種類のままだと納品として二重計上されるため。fix は納品に数えない）
@@ -672,10 +672,10 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                 inputStyle={inputStyle} colors={colors} fontJP={fontJP} wrapperStyle={{ flex: 1 }} />
               {editMode?.type === 'project' && (
                 <button type="button"
-                  onClick={() => {
+                  onClick={async () => {
                     const a = (form.assignee || '').trim();
-                    if (!a) { alert('適用する担当者名を入力してください'); return; }
-                    if (!confirm(`この案件の全視点（${form.viewpoints.length}件）の担当者を「${a}」に一括変更します。よろしいですか？`)) return;
+                    if (!a) { notify('適用する担当者名を入力してください', { type: 'error' }); return; }
+                    if (!(await confirmDialog({ message: `この案件の全視点（${form.viewpoints.length}件）の担当者を「${a}」に一括変更します。よろしいですか？`, confirmLabel: '一括変更' }))) return;
                     setForm({
                       ...form,
                       viewpoints: form.viewpoints.map(vp => ({ ...vp, assignee: a })),
@@ -938,13 +938,13 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                       <div style={{ flexShrink: 0, marginBottom: 1 }}>
                         <label style={{ ...labelStyle, fontSize: 10, marginBottom: 3 }}>統合（取り込み）</label>
                         <select value="" title="選んだ視点のステップを、この視点に統合します（元の視点は削除されます）"
-                          onChange={(e) => {
+                          onChange={async (e) => {
                             const src = parseInt(e.target.value, 10);
                             e.target.value = '';
                             if (isNaN(src) || src === vi) return;
                             const srcName = (form.viewpoints[src]?.viewpointName || '').trim() || `視点 ${src + 1}`;
                             const dstName = (vp.viewpointName || '').trim() || `視点 ${vi + 1}`;
-                            if (!window.confirm(`「${srcName}」のステップを「${dstName}」に統合します。\n元の「${srcName}」は削除されます。よろしいですか？`)) return;
+                            if (!(await confirmDialog({ title: '視点の統合', message: `「${srcName}」のステップを「${dstName}」に統合します。\n元の「${srcName}」は削除されます。よろしいですか？`, confirmLabel: '統合する' }))) return;
                             mergeViewpoint(vi, src);
                           }}
                           style={{ ...inputStyle, padding: '8px 8px', fontSize: 12, cursor: 'pointer', width: 'auto', minWidth: 130 }}>

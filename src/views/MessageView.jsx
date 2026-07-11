@@ -36,7 +36,7 @@ const NO_PROJECT_GREETINGS_EVENING = [
 
 // ============ メッセージビュー ============
 function MessageView() {
-  const { colors, fontJP, fontDisplay, scheduled, settings, assigneeOrder, vpDeliveryCount } = useApp();
+  const { colors, fontJP, fontDisplay, scheduled, settings, assigneeOrder, vpDeliveryCount, notify } = useApp();
   const today = startOfDay(new Date());
   const weekEnd = addDays(today, 7);
 
@@ -119,7 +119,7 @@ function MessageView() {
       await navigator.clipboard.writeText(assigneeMessage);
       setMsgCopied(true);
       setTimeout(() => setMsgCopied(false), 1500);
-    } catch (e) { alert('コピーに失敗しました: ' + e); }
+    } catch (e) { notify('コピーに失敗しました: ' + e, { type: 'error' }); }
   };
 
   // ===== 会社別 業務連絡文（挨拶文形式） =====
@@ -252,7 +252,7 @@ function MessageView() {
       await navigator.clipboard.writeText(companyText);
       setCompanyCopied(true);
       setTimeout(() => setCompanyCopied(false), 1500);
-    } catch (e) { alert('コピーに失敗しました: ' + e); }
+    } catch (e) { notify('コピーに失敗しました: ' + e, { type: 'error' }); }
   };
   const companyLabel = (c) => c || '（会社未設定）';
 

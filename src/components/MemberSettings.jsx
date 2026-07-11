@@ -1,11 +1,13 @@
 // メンバー管理（設定パネル内）。App.jsx から分割。
 import { useState } from 'react';
+import { useApp } from '../appContext.js';
 import { memberList } from '../firebase.js';
 
 // メンバー管理（設定パネル内）。オーナー以外のアクセス許可 Gmail を data/allowedEmails で管理する。
 // Firestore ルールがこのリストを直接参照するため、追加・削除は即時に反映される。
 // リスト自体の書き換えはルール上オーナーのみ可能。
 function MemberSettings({ memberEmails, isOwner, colors, fontJP }) {
+  const { notify, confirmDialog } = useApp();
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const save = async (emails) => {
@@ -13,18 +15,18 @@ function MemberSettings({ memberEmails, isOwner, colors, fontJP }) {
     try { await memberList.set(emails); }
     catch (e) {
       console.error('メンバーリスト保存エラー:', e);
-      alert('メンバーリストの保存に失敗しました。変更できるのはオーナーのみです。');
+      notify('メンバーリストの保存に失敗しました。変更できるのはオーナーのみです。', { type: 'error' });
     }
     finally { setBusy(false); }
   };
   const add = () => {
     const email = input.trim().toLowerCase();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { alert('メールアドレスの形式が正しくありません'); return; }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { notify('メールアドレスの形式が正しくありません', { type: 'error' }); return; }
     if (!memberEmails.includes(email)) save([...memberEmails, email]);
     setInput('');
   };
-  const remove = (email) => {
-    if (!confirm(`${email} のアクセス許可を解除しますか？`)) return;
+  const remove = async (email) => {
+    if (!(await confirmDialog({ message: `${email} のアクセス許可を解除しますか？`, confirmLabel: '解除する' }))) return;
     save(memberEmails.filter(e => e !== email));
   };
   return (

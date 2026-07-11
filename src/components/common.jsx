@@ -1,7 +1,7 @@
 // 共通UI部品（モーダル・時刻選択・ナビボタン・コンボボックス・ボタンスタイル）。App.jsx から分割。
 import { useState, useEffect, useRef } from 'react';
 import { dayName, fmtMD, fmtYMD, kanaNormalize, minToTime } from '../lib/utils.js';
-import { CheckCircle2, ChevronDown } from 'lucide-react';
+import { CheckCircle2, ChevronDown, X } from 'lucide-react';
 
 // ============ 確認モーダル（汎用） ============
 function ConfirmModal({ title, children, confirmLabel, cancelLabel, onConfirm, onCancel, colors, fontJP, fontDisplay }) {
@@ -23,6 +23,69 @@ function ConfirmModal({ title, children, confirmLabel, cancelLabel, onConfirm, o
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+
+// ============ 入力モーダル（prompt の代替：メッセージ＋1行入力） ============
+function PromptModal({ title, message, defaultValue, placeholder, confirmLabel, cancelLabel, onSubmit, onCancel, colors, fontJP, fontDisplay }) {
+  const [value, setValue] = useState(defaultValue || '');
+  const inputRef = useRef(null);
+  useEffect(() => { if (inputRef.current) { inputRef.current.focus(); inputRef.current.select(); } }, []);
+  const submit = () => onSubmit(value);
+  return (
+    <div onClick={onCancel}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}>
+      <div onClick={(e) => e.stopPropagation()}
+        style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 8, padding: 24, width: '100%', maxWidth: 440, fontFamily: fontJP, boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
+        <h3 style={{ fontFamily: fontDisplay, fontSize: 17, margin: '0 0 12px 0', fontWeight: 600 }}>{title || '入力'}</h3>
+        {message && <div style={{ fontSize: 13, color: colors.text, whiteSpace: 'pre-wrap', marginBottom: 12 }}>{message}</div>}
+        <input ref={inputRef} type="text" value={value} placeholder={placeholder || ''}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') onCancel(); }}
+          style={{ width: '100%', boxSizing: 'border-box', padding: '10px 12px', border: `1px solid ${colors.border}`, borderRadius: 4, fontFamily: fontJP, fontSize: 14, outline: 'none' }} />
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 22 }}>
+          <button type="button" onClick={onCancel}
+            style={{ padding: '8px 16px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13, color: colors.textMute }}>
+            {cancelLabel || 'キャンセル'}
+          </button>
+          <button type="button" onClick={submit}
+            style={{ padding: '8px 18px', background: colors.text, color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13, fontWeight: 600 }}>
+            {confirmLabel || 'OK'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============ トースト通知（画面右下・自動で消える・「元に戻す」対応） ============
+// notify(message, { type: 'info'|'success'|'error', undo: () => {...} }) から積まれる。
+function ToastStack({ toasts, onDismiss, onUndo, colors, fontJP }) {
+  if (!toasts || toasts.length === 0) return null;
+  const edge = (t) => t.type === 'error' ? '#c1272d' : t.type === 'success' ? '#3a5a40' : '#6b6b6b';
+  return (
+    <div style={{ position: 'fixed', bottom: 16, right: 16, zIndex: 2100, display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 360 }}>
+      {toasts.map(t => (
+        <div key={t.id}
+          style={{ background: '#fff', border: `1px solid ${colors.border}`, borderLeft: `4px solid ${edge(t)}`,
+            borderRadius: 6, padding: '10px 14px', boxShadow: '0 8px 24px rgba(0,0,0,0.15)',
+            fontFamily: fontJP, display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ fontSize: 13, color: colors.text, whiteSpace: 'pre-wrap', flex: 1 }}>{t.message}</div>
+          {t.undo && (
+            <button type="button" onClick={() => onUndo(t)}
+              style={{ background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, padding: '5px 10px',
+                cursor: 'pointer', fontFamily: fontJP, fontSize: 12, fontWeight: 700, color: '#1d3557', whiteSpace: 'nowrap' }}>
+              元に戻す
+            </button>
+          )}
+          <button type="button" onClick={() => onDismiss(t.id)} title="閉じる"
+            style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: colors.textMute, padding: 2, display: 'flex' }}>
+            <X size={13} />
+          </button>
+        </div>
+      ))}
     </div>
   );
 }
@@ -399,7 +462,7 @@ function Combobox({ value, onChange, options, placeholder, inputStyle, colors, f
 
 
 export {
-  ConfirmModal, DeadlineConfirmModal, TimeSelect, DurationSelect, NavButton,
+  ConfirmModal, PromptModal, ToastStack, DeadlineConfirmModal, TimeSelect, DurationSelect, NavButton,
   iconBtnStyle, miniBtnStyle, progressBtnStyle, tabStyle,
   EndTimeFields, CompleteDialog, Combobox,
 };

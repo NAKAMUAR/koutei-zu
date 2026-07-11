@@ -30,8 +30,8 @@ export default [
       'no-unused-vars': ['warn', { args: 'none', caughtErrors: 'none', varsIgnorePattern: '^_', ignoreRestSiblings: true }],
 
       // --- UI設計原則（docs/07_UI設計原則.md）---
-      // 原則1: ネイティブダイアログ禁止。確認は ConfirmModal / useDialogs、通知はトーストを使う。
-      'no-alert': 'warn', // TODO(改善#1完了時に 'error' へ)
+      // 原則1: ネイティブダイアログ禁止。確認は confirmDialog / promptDialog、通知は notify（トースト）を使う。
+      'no-alert': 'error',
       // 原則5: 日時入力は共通 DateTimeField に統一（datetime-local は入力しづらい環境があるため禁止）。
       'no-restricted-syntax': [
         'warn', // TODO(改善#5完了時に 'error' へ)

@@ -698,6 +698,7 @@ function ViewpointCard({ group, allSortedIds, companyFirstIds, companyLastIds })
     moveUp, moveDown, changePriority, dragTaskId, onDragTask, onDropTask, addProgress,
     setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd, setTaskAssignee,
     completeViewpoint, handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline,
+    promptDialog,
   } = useApp();
   const projectColor = getProjectColor(group.projectName);
   const progressPct = group.totalHours > 0 ? (group.completedHours / group.totalHours) * 100 : 0;
@@ -709,9 +710,9 @@ function ViewpointCard({ group, allSortedIds, companyFirstIds, companyLastIds })
   const elapsedPct = group.totalHours > 0 ? Math.min(100, (workedHours / group.totalHours) * 100) : 0;
   const isMulti = group.tasks.some(t => t.stepName);
 
-  const handleAssigneeChange = (val) => {
+  const handleAssigneeChange = async (val) => {
     if (val === '__new__') {
-      const name = window.prompt('振り分け先の担当者名を入力してください');
+      const name = await promptDialog({ title: '担当者の変更', message: '振り分け先の担当者名を入力してください' });
       if (name && name.trim()) reassignViewpoint(group, name.trim());
     } else if (val && val !== group.assignee) {
       reassignViewpoint(group, val);
@@ -920,6 +921,7 @@ function ViewpointCard({ group, allSortedIds, companyFirstIds, companyLastIds })
 }
 
 function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveUp, onMoveDown, onChangePriority, dragTaskId, onDragTask, onDropTask, onAddProgress, onSetHours, onSetCompletedHours, onSetManualStart, onSetManualEnd, onSetAssignee, assigneeList, canMoveUp, canMoveDown, isLast, colors, fontJP }) {
+  const { notify, promptDialog, confirmDialog } = useApp();
   const [editingPriority, setEditingPriority] = useState(false);
   const [priorityInput, setPriorityInput] = useState(String(task.priority));
   const [dragHover, setDragHover] = useState(false);
@@ -970,7 +972,7 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
       await navigator.clipboard.writeText(t);
       setCopiedDelivery(t);
       setTimeout(() => setCopiedDelivery(c => (c === t ? '' : c)), 1500);
-    } catch (e) { alert('コピーに失敗しました: ' + e); }
+    } catch (e) { notify('コピーに失敗しました: ' + e, { type: 'error' }); }
   };
 
   // 開始時間指定の編集を開始（既定値：現在の指定 → 無ければ現在のスケジュール開始）
@@ -1154,10 +1156,10 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
               title="このステップの担当者を変更（このステップだけ別の担当者へ。担当者ごとに視点カードが分かれます）">
               <User size={11} />
               <select value={task.assignee || ''}
-                onChange={(e) => {
+                onChange={async (e) => {
                   const v = e.target.value;
                   if (v === '__new__') {
-                    const name = window.prompt('担当者名を入力してください');
+                    const name = await promptDialog({ title: '担当者の変更', message: '担当者名を入力してください' });
                     if (name && name.trim()) onSetAssignee(name.trim());
                   } else if (v && v !== task.assignee) {
                     onSetAssignee(v);
@@ -1242,8 +1244,8 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
           ) : null}
           {onSetManualStart && (
             <button type="button"
-              onClick={() => {
-                if (window.confirm('この工程を「今」から開始（割り込み）します。\n同じ担当者で作業中の案件は、現在時刻の前後に自動で分割されます。よろしいですか？')) {
+              onClick={async () => {
+                if (await confirmDialog({ title: '今から割り込み', message: 'この工程を「今」から開始（割り込み）します。\n同じ担当者で作業中の案件は、現在時刻の前後に自動で分割されます。よろしいですか？', confirmLabel: '割り込み開始' })) {
                   onSetManualStart(dateToDtLocal(new Date()));
                 }
               }}

@@ -4,6 +4,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Plus, Trash2, Edit2, ChevronLeft, ChevronRight, Printer, Download, FolderOpen, Search, X } from 'lucide-react';
 import { salesStore, storage } from '../firebase.js';
+import { useApp } from '../appContext.js';
 import {
   SALES_CATEGORIES, catOf, OUTSOURCERS, DEFAULT_SETTINGS,
   blankRow, computeRow, computeSummary, computeCategoryTotal,
@@ -14,6 +15,7 @@ import { computeRevisionStats } from '../viewpoint/viewpointUtils.js';
 import { collectQuoteCandidates } from '../viewpoint/salesSync.js';
 
 export default function SalesView({ tasks, customerMaster, now, onEditProject, colors, fontJP, fontDisplay }) {
+  const { confirmDialog } = useApp();
   const [ledger, setLedger] = useState({});      // { ym: { rows, settings, updatedAt } }
   const [loaded, setLoaded] = useState(false);
   const [ym, setYm] = useState(currentMonth(now));
@@ -99,9 +101,9 @@ export default function SalesView({ tasks, customerMaster, now, onEditProject, c
     updRow(editRow.id, patch);
     setEditRow(null);
   };
-  const deleteEditRow = () => {
+  const deleteEditRow = async () => {
     if (!editRow) return;
-    if (!window.confirm('この売上行を削除しますか？')) return;
+    if (!(await confirmDialog({ title: '売上行の削除', message: 'この売上行を削除しますか？', confirmLabel: '削除する' }))) return;
     removeRow(editRow.id);
     setEditRow(null);
   };
@@ -234,6 +236,7 @@ function navBtn(colors) { return { padding: '6px 7px', background: 'transparent'
 // 自動連携行（srcRound あり）は工程図側が元データのため、連携の解除や
 // 案件そのもの（工程図）の編集への遷移もここから行える。
 function RowEditModal({ row, settings, ym, companyList, hasProject, onSave, onDelete, onEditProject, onClose, colors, fontJP }) {
+  const { confirmDialog } = useApp();
   const [d, setD] = useState({ ...row }); // 下書き（保存で確定）
   const set = (k, v) => setD(prev => ({ ...prev, [k]: v }));
   const isLinked = !!row.srcRound;
@@ -278,7 +281,7 @@ function RowEditModal({ row, settings, ym, companyList, hasProject, onSave, onDe
                 )}
                 {d.srcRound !== null && (
                   <button type="button"
-                    onClick={() => { if (window.confirm('自動連携を解除して手動行にしますか？\n以後、工程図側を変更してもこの行には反映されません（行が消えることもなくなります）。')) setD(prev => ({ ...prev, srcRound: null, srcVp: null })); }}
+                    onClick={async () => { if (await confirmDialog({ message: '自動連携を解除して手動行にしますか？\n以後、工程図側を変更してもこの行には反映されません（行が消えることもなくなります）。', confirmLabel: '解除する' })) setD(prev => ({ ...prev, srcRound: null, srcVp: null })); }}
                     style={{ padding: '6px 12px', background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12 }}>
                     連携を解除して手動行にする
                   </button>

@@ -10,7 +10,7 @@ import { computeDeadlineReorder, computeProjectOrder, deadlineInsertPriority, de
 import { collectSalesSyncRows, reconcileLedger } from './viewpoint/salesSync.js';
 import { blankDoc, blankItem } from './billing/billingUtils.js';
 import { CheckCircle2, ClipboardList, FileText, Folder, MessageSquare, Plus, RotateCcw, Settings as SettingsIcon, StickyNote, Table, TrendingUp } from 'lucide-react';
-import { CompleteDialog, DeadlineConfirmModal, NavButton, TimeSelect } from './components/common.jsx';
+import { CompleteDialog, ConfirmModal, DeadlineConfirmModal, NavButton, PromptModal, TimeSelect, ToastStack } from './components/common.jsx';
 import { MemberSettings } from './components/MemberSettings.jsx';
 import { InputView } from './views/InputView.jsx';
 import { EndPromptModal } from './components/modals.jsx';
@@ -138,6 +138,40 @@ export default function App() {
       setTimeout(() => setMemoToasts(prev2 => prev2.filter(t => t.id !== toastId)), 12000);
     }
   }, [now, memos, settings.morningStart]);
+  // ============ ダイアログ・トースト（ネイティブ alert/confirm/prompt の代替） ============
+  // confirmDialog('メッセージ') → Promise<boolean>。promptDialog({...}) → Promise<string|null>。
+  // notify('メッセージ', { type, undo }) → 右下トースト（undo を渡すと「元に戻す」ボタン付き）。
+  const [confirmState, setConfirmState] = useState(null); // { message, title?, confirmLabel?, cancelLabel?, resolve }
+  const confirmDialog = (opts) => new Promise((resolve) => {
+    const o = typeof opts === 'string' ? { message: opts } : (opts || {});
+    setConfirmState({ ...o, resolve });
+  });
+  const closeConfirm = (result) => setConfirmState(s => { if (s) s.resolve(result); return null; });
+  const [promptState, setPromptState] = useState(null); // { message, title?, defaultValue?, resolve }
+  const promptDialog = (opts) => new Promise((resolve) => {
+    const o = typeof opts === 'string' ? { message: opts } : (opts || {});
+    setPromptState({ ...o, resolve });
+  });
+  const closePrompt = (result) => setPromptState(s => { if (s) s.resolve(result); return null; });
+  const [toasts, setToasts] = useState([]); // { id, message, type, undo }
+  const toastTimersRef = useRef(new Map());
+  const dismissToast = (id) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+    const tm = toastTimersRef.current.get(id);
+    if (tm) { clearTimeout(tm); toastTimersRef.current.delete(id); }
+  };
+  const notify = (message, opts = {}) => {
+    const id = genId('toast');
+    setToasts(prev => [...prev, { id, message, type: opts.type || 'info', undo: opts.undo || null }]);
+    const ttl = opts.duration || (opts.undo ? 8000 : opts.type === 'error' ? 6000 : 3500);
+    toastTimersRef.current.set(id, setTimeout(() => dismissToast(id), ttl));
+  };
+  const undoToast = async (t) => {
+    dismissToast(t.id);
+    try { await t.undo(); notify('元に戻しました', { type: 'success' }); }
+    catch (e) { notify('元に戻せませんでした: ' + (e?.message || e), { type: 'error' }); }
+  };
+
   const [showSettings, setShowSettings] = useState(false);
   const [selectedAssignee, setSelectedAssignee] = useState(null);
   const [auth, setAuth] = useState({ user: null, allowed: false, ready: false });
@@ -514,7 +548,7 @@ export default function App() {
       setLastSync(new Date());
     } catch (e) {
       console.error('データ更新エラー:', e);
-      alert('データの更新に失敗しました。通信状況を確認して、もう一度お試しください。\n' + (e?.message || e));
+      notify('データの更新に失敗しました。通信状況を確認して、もう一度お試しください。\n' + (e?.message || e), { type: 'error' });
     } finally {
       setRefreshing(false);
     }
@@ -547,6 +581,22 @@ export default function App() {
     tasksRef.current = filtered;
     try { await tasksStore.remove(id); }
     catch (e) { console.error('タスク削除エラー:', e); }
+  };
+
+  // 削除の取り消し（トーストの「元に戻す」）：削除したタスクを復元し、
+  // シート由来IDの削除記録（deletedExternalIds）も取り消す
+  const restoreTasks = async (list) => {
+    if (!list || list.length === 0) return;
+    const eids = list.filter(t => t.externalId).map(t => t.externalId);
+    if (eids.length > 0) {
+      try {
+        const current = await storage.get('deletedExternalIds');
+        const arr = (current && current.value) ? JSON.parse(current.value) : [];
+        const next = arr.filter(e => !eids.includes(e));
+        if (next.length !== arr.length) await storage.set('deletedExternalIds', JSON.stringify(next));
+      } catch (e) { console.warn('削除済みリストの復元に失敗:', e); }
+    }
+    await saveTasks(prev => normalizePriorities([...prev, ...list]));
   };
 
   const saveSettings = async (newSettings) => {
@@ -644,7 +694,7 @@ export default function App() {
     const si = employeeMaster.findIndex(e => e.name === srcName);
     const ti = employeeMaster.findIndex(e => e.name === targetName);
     if (si < 0 || ti < 0) {
-      alert('担当者の並び替えは、従業員マスタに登録されている担当者同士でのみ行えます。\nマスタタブで従業員を登録してください。');
+      notify('担当者の並び替えは、従業員マスタに登録されている担当者同士でのみ行えます。\nマスタタブで従業員を登録してください。', { type: 'error' });
       return;
     }
     const src = employeeMaster[si];
@@ -800,11 +850,13 @@ export default function App() {
     });
   };
   const deleteMemo = (id) => {
+    const memo = (memos || []).find(m => m.id === id) || null;
     setMemos(prev => {
       const next = prev.filter(m => m.id !== id);
       storage.set('memos', JSON.stringify(next)).catch(e => console.error('タスクメモ削除エラー:', e));
       return next;
     });
+    if (memo) notify(`メモ「${(memo.title || '').trim() || '無題'}」を削除しました`, { undo: () => upsertMemo(memo) });
   };
 
 
@@ -841,7 +893,7 @@ export default function App() {
   // opts.orderOverride: 納期超過時の繰り上げで採用する案件並び順（完全な案件名リスト）
   const performSubmit = async (opts = {}) => {
     if (!form.projectName.trim()) {
-      alert('案件名を入力してください');
+      notify('案件名を入力してください', { type: 'error' });
       return false;
     }
     // 優先順位は廃止。編集時は既存の順位（form.priority）を保持し、
@@ -1006,15 +1058,15 @@ export default function App() {
       const originalById = new Map(originalTasks.map(t => [t.id, t]));
 
       const result = buildRecords(originalById);
-      if (result.error) { alert(result.error); return; }
+      if (result.error) { notify(result.error, { type: 'error' }); return; }
       const upserts = result.upserts;
-      if (upserts.length === 0) { alert('少なくとも1つの視点とステップを入力してください'); return; }
+      if (upserts.length === 0) { notify('少なくとも1つの視点とステップを入力してください', { type: 'error' }); return; }
 
       // スコープ内で「元あったが form に残っていない」タスクは削除
       const keptIds = new Set(upserts.filter(u => originalById.has(u.id)).map(u => u.id));
       const deletedIds = originalTasks.filter(t => !keptIds.has(t.id)).map(t => t.id);
       if (deletedIds.length > 0) {
-        if (!confirm(`${deletedIds.length}件のステップが削除されます。よろしいですか？`)) return;
+        if (!(await confirmDialog({ title: 'ステップの削除', message: `${deletedIds.length}件のステップが削除されます。よろしいですか？`, confirmLabel: '削除して保存' }))) return;
       }
 
       // シート由来タスクの削除を deletedExternalIds に記録
@@ -1066,11 +1118,13 @@ export default function App() {
           const detail = doneOut > 0
             ? `${needsRename.length}件（他視点アクティブ ${activeOut}件・完了済み ${doneOut}件）`
             : `他の視点 ${activeOut}件`;
-          const ok = confirm(
-            `案件名（または案件コード）を変更すると、\n` +
-            `この案件の全タスク（${detail}）にも反映されます。\n` +
-            `よろしいですか？`
-          );
+          const ok = await confirmDialog({
+            title: '案件名の変更',
+            message: `案件名（または案件コード）を変更すると、\n` +
+              `この案件の全タスク（${detail}）にも反映されます。\n` +
+              `よろしいですか？`,
+            confirmLabel: '変更する',
+          });
           if (!ok) return;
         }
         const renames = needsRename.map(t => ({ ...t, projectName: newProjectName, projectNameInternal: newProjectInternal, companyName: newCompany, customerContact: newContact }));
@@ -1084,7 +1138,7 @@ export default function App() {
       tasksRef.current = normalized;
       syncAssigneesToMaster(finalUpserts);
       try { await tasksStore.batch(finalUpserts, deletedIds); }
-      catch (e) { console.error('編集保存エラー:', e); alert('保存に失敗しました：' + (e?.message || e)); }
+      catch (e) { console.error('編集保存エラー:', e); notify('保存に失敗しました：' + (e?.message || e), { type: 'error' }); }
 
       if (opts.orderOverride) saveProjectOrder(opts.orderOverride);
       setEditMode(null);
@@ -1095,9 +1149,9 @@ export default function App() {
 
     // 新規登録
     const result = buildRecords(null);
-    if (result.error) { alert(result.error); return false; }
+    if (result.error) { notify(result.error, { type: 'error' }); return false; }
     const records = result.upserts;
-    if (records.length === 0) { alert('少なくとも1つの視点とステップを入力してください'); return false; }
+    if (records.length === 0) { notify('少なくとも1つの視点とステップを入力してください', { type: 'error' }); return false; }
     saveTasks(prev => normalizePriorities([...prev, ...records]));
     syncAssigneesToMaster(records);
     if (opts.orderOverride) saveProjectOrder(opts.orderOverride);
@@ -1111,7 +1165,7 @@ export default function App() {
   const registerDraftAndEdit = async () => {
     const projName = (form.projectName || '').trim();
     if (!projName) {
-      alert('入力中の案件名がないため、進行中タスクとして登録できません。案件名を入力してください。');
+      notify('入力中の案件名がないため、進行中タスクとして登録できません。案件名を入力してください。', { type: 'error' });
       return false;
     }
     // performSubmit を直接呼び、スケジュール調整モーダルを挟まずそのまま保存する
@@ -1162,7 +1216,7 @@ export default function App() {
   // 案件を編集：新規登録フォームに案件全体（全視点・全ステップ、完了済み含む）を pre-populate
   const handleEditProject = (projectName) => {
     const projectTasks = tasksRef.current.filter(t => t.projectName === projectName);
-    if (projectTasks.length === 0) { alert('この案件には編集できるタスクがありません'); return; }
+    if (projectTasks.length === 0) { notify('この案件には編集できるタスクがありません', { type: 'error' }); return; }
     // 視点ごとにグループ化（出現順）→ 各視点内は stepOrder 順
     const vpMap = new Map();
     for (const t of projectTasks) {
@@ -1253,8 +1307,8 @@ export default function App() {
       : `${activeCount}件`;
     const msg = `視点「${group.projectName} ／ ${group.viewpointName}」を削除しますか？\n` +
       `ぶら下がっているステップ ${detail} も一緒に削除されます。\n` +
-      `この操作は取り消せません。`;
-    if (!confirm(msg)) return;
+      `（削除直後ならトーストの「元に戻す」で復元できます）`;
+    if (!(await confirmDialog({ title: '視点の削除', message: msg, confirmLabel: '削除する' }))) return;
 
     // シート由来タスクの削除を deletedExternalIds に記録（次回同期で復活させない）
     try {
@@ -1272,12 +1326,14 @@ export default function App() {
 
     const deletedIds = targets.map(t => t.id);
     const deletedSet = new Set(deletedIds);
+    const deletedDocs = targets.map(t => ({ ...t }));
     const merged = tasksRef.current.filter(t => !deletedSet.has(t.id));
     const normalized = normalizePriorities(merged);
     setTasks(normalized);
     tasksRef.current = normalized;
     try { await tasksStore.batch([], deletedIds); }
-    catch (e) { console.error('視点削除エラー:', e); alert('削除に失敗しました：' + (e?.message || e)); }
+    catch (e) { console.error('視点削除エラー:', e); notify('削除に失敗しました：' + (e?.message || e), { type: 'error' }); return; }
+    notify(`視点「${group.viewpointName}」を削除しました（${deletedDocs.length}件）`, { undo: () => restoreTasks(deletedDocs) });
   };
 
   // 案件に新しい視点を追加（新規登録フォームを案件名・コード入りで開く）
@@ -1315,7 +1371,7 @@ export default function App() {
       t.assignee === group.assignee &&
       t.status !== 'done'
     ).slice().sort((a, b) => (a.stepOrder ?? 0) - (b.stepOrder ?? 0));
-    if (tasksOfVp.length === 0) { alert('この視点には編集できるタスクがありません'); return; }
+    if (tasksOfVp.length === 0) { notify('この視点には編集できるタスクがありません', { type: 'error' }); return; }
     const first = tasksOfVp[0];
     const last = tasksOfVp[tasksOfVp.length - 1];
     const viewpoints = [{
@@ -1449,7 +1505,7 @@ export default function App() {
       setView('billing');
     } catch (e) {
       console.error('帳票の自動作成に失敗:', e);
-      alert('帳票の作成に失敗しました');
+      notify('帳票の作成に失敗しました', { type: 'error' });
     }
   };
 
@@ -1465,7 +1521,7 @@ export default function App() {
   // 戻り値：保存したら true、バリデーションエラーなら false（呼び出し側でパネルを閉じる判定に使う）
   const saveProjectInfo = (oldProjectName, info) => {
     const newName = (info.projectName || '').trim();
-    if (!newName) { alert('社外案件名を入力してください'); return false; }
+    if (!newName) { notify('社外案件名を入力してください', { type: 'error' }); return false; }
     saveTasks(prev => normalizePriorities(prev.map(t =>
       t.projectName === oldProjectName
         ? {
@@ -1485,8 +1541,8 @@ export default function App() {
   };
 
   const handleDelete = async (id) => {
-    if (!confirm('このタスクを削除しますか？')) return;
     const task = tasksRef.current.find(t => t.id === id);
+    const deletedDoc = task ? { ...task } : null;
     // シート由来タスクは削除済みリストに記録 → 次回同期で復活させない
     if (task && task.externalId) {
       try {
@@ -1501,6 +1557,10 @@ export default function App() {
       }
     }
     await removeTask(id);
+    if (deletedDoc) {
+      const label = deletedDoc.stepName || deletedDoc.viewpointName || 'タスク';
+      notify(`ステップ「${label}」を削除しました`, { undo: () => restoreTasks([deletedDoc]) });
+    }
   };
 
   const toggleStatus = (id) => {
@@ -1553,7 +1613,7 @@ export default function App() {
   const completeViewpoint = (group) => {
     if (!group || !group.tasks) return;
     const activeTasks = group.tasks.filter(t => t.status !== 'done');
-    if (activeTasks.length === 0) { alert('この視点には未完了のタスクがありません'); return; }
+    if (activeTasks.length === 0) { notify('この視点には未完了のタスクがありません', { type: 'error' }); return; }
     setCompleteTarget({
       kind: 'viewpoint',
       label: `視点「${group.projectName} ／ ${group.viewpointName}」`,
@@ -1566,7 +1626,7 @@ export default function App() {
   const completeProject = (projectName) => {
     if (!projectName) return;
     const activeTasks = scheduled.active.filter(t => t.projectName === projectName);
-    if (activeTasks.length === 0) { alert('この案件には未完了のタスクがありません'); return; }
+    if (activeTasks.length === 0) { notify('この案件には未完了のタスクがありません', { type: 'error' }); return; }
     setCompleteTarget({
       kind: 'project',
       label: `案件「${projectName}」`,
@@ -1595,11 +1655,11 @@ export default function App() {
 
   // 「案件中止」：未完了タスクを「中止」として完了タブへ移動する。
   // 実績（completedHours）はそのまま残し、actualEnd は記録しない（後続スケジュールに影響させない）
-  const cancelProject = (projectName) => {
+  const cancelProject = async (projectName) => {
     if (!projectName) return;
     const activeTasks = scheduled.active.filter(t => t.projectName === projectName);
-    if (activeTasks.length === 0) { alert('この案件には未完了のタスクがありません'); return; }
-    if (!confirm(`案件「${projectName}」を中止にしますか？\n未完了のタスク ${activeTasks.length}件が「中止」として完了タブへ移動します。\n（完了タブの「戻す」で復元できます）`)) return;
+    if (activeTasks.length === 0) { notify('この案件には未完了のタスクがありません', { type: 'error' }); return; }
+    if (!(await confirmDialog({ title: '案件の中止', message: `案件「${projectName}」を中止にしますか？\n未完了のタスク ${activeTasks.length}件が「中止」として完了タブへ移動します。\n（完了タブの「戻す」で復元できます）`, confirmLabel: '中止にする' }))) return;
     const idSet = new Set(activeTasks.map(t => t.id));
     const nowMs = Date.now();
     saveTasks(prev => normalizePriorities(prev.map(t =>
@@ -1613,11 +1673,11 @@ export default function App() {
   // 「制作中断」：お客様へ納品後の確認待ちなどで進行できない案件を、一旦スケジュールから外す。
   // 未完了タスクに suspended フラグを立てるだけ（完了にはしない・実績はそのまま）。
   // 「制作中断」一覧へ移り、制作再開でいつでも進行中（スケジュール）へ戻せる。
-  const suspendProject = (projectName) => {
+  const suspendProject = async (projectName) => {
     if (!projectName) return;
     const activeTasks = scheduled.active.filter(t => t.projectName === projectName);
-    if (activeTasks.length === 0) { alert('この案件には未完了のタスクがありません'); return; }
-    if (!confirm(`案件「${projectName}」を制作中断にしますか？\nスケジュールから一旦外れ、「制作中断」一覧へ移動します。\n（制作再開でいつでも進行中へ戻せます）`)) return;
+    if (activeTasks.length === 0) { notify('この案件には未完了のタスクがありません', { type: 'error' }); return; }
+    if (!(await confirmDialog({ title: '制作中断', message: `案件「${projectName}」を制作中断にしますか？\nスケジュールから一旦外れ、「制作中断」一覧へ移動します。\n（制作再開でいつでも進行中へ戻せます）`, confirmLabel: '中断する' }))) return;
     const idSet = new Set(activeTasks.map(t => t.id));
     const nowMs = Date.now();
     saveTasks(prev => prev.map(t =>
@@ -1644,8 +1704,8 @@ export default function App() {
     saveTasks(prev => prev.map(t => reviewMatch(t, g) ? { ...t, reviewState: null } : t));
   };
   // 「進行中に戻す」：確認待ちから進行中へ差し戻す
-  const reopenReview = (g) => {
-    if (!confirm(`「${g.projectName} ／ ${g.viewpointName}」を進行中に戻しますか？`)) return;
+  const reopenReview = async (g) => {
+    if (!(await confirmDialog({ message: `「${g.projectName} ／ ${g.viewpointName}」を進行中に戻しますか？`, confirmLabel: '進行中に戻す' }))) return;
     saveTasks(prev => normalizePriorities(prev.map(t => reviewMatch(t, g)
       ? { ...t, status: 'pending', reviewState: null, reviewAt: null, reviewUpdatedAt: null, completedAt: null, actualEnd: null }
       : t)));
@@ -1711,9 +1771,9 @@ export default function App() {
   const endPromptAddRevision = (vp, stepName, hours) => {
     const projectName = vp.projectName, viewpointName = vp.viewpointName;
     const h = Math.max(0, parseHM(hours) || 0);
-    if (h <= 0) { alert('追加時間を入力してください'); return; }
+    if (h <= 0) { notify('追加時間を入力してください', { type: 'error' }); return; }
     const vpTasks = tasksRef.current.filter(t => t.projectName === projectName && t.viewpointName === viewpointName && t.assignee === vp.assignee);
-    if (vpTasks.length === 0) { alert('対象の視点が見つかりません'); return; }
+    if (vpTasks.length === 0) { notify('対象の視点が見つかりません', { type: 'error' }); return; }
     const ref = vpTasks.reduce((a, b) => ((b.createdAt || 0) > (a.createdAt || 0) ? b : a), vpTasks[0]);
     const maxOrder = vpTasks.reduce((m, t) => Math.max(m, t.stepOrder ?? 0), 0);
     const base = Date.now();
@@ -1737,12 +1797,12 @@ export default function App() {
   // ③ 遅延（この視点の最後のステップの終了時間指定を新しい終了予定へ動かし、
   //    差分の稼働時間ぶん制作時間を加算＋遅延履歴を記録）
   const endPromptDelay = (vp, currentEndTs, newEndTs) => {
-    if (newEndTs <= currentEndTs) { alert('新しい終了予定は現在の終了予定より後にしてください'); return; }
+    if (newEndTs <= currentEndTs) { notify('新しい終了予定は現在の終了予定より後にしてください', { type: 'error' }); return; }
     const scheduledById = new Map(scheduled.active.map(t => [t.id, t]));
     const active = tasksRef.current
       .map(t => scheduledById.get(t.id) || t)
       .filter(t => t.projectName === vp.projectName && t.viewpointName === vp.viewpointName && t.assignee === vp.assignee && t.status !== 'done' && t.scheduledEnd);
-    if (active.length === 0) { alert('対象の進行中案件がありません'); return; }
+    if (active.length === 0) { notify('対象の進行中案件がありません', { type: 'error' }); return; }
     // 終了予定を決めている最後のステップ
     const last = active.reduce((a, b) => {
       const ta = startOfDay(a.scheduledEnd).getTime() + (a.scheduledEndMin || 0) * 60000;
@@ -1770,12 +1830,12 @@ export default function App() {
   // ④ 終了予定時間の修正（遅延とは別：作業時間を加算せず・遅延履歴も残さず、
   //    終了予定の指定（manualEnd）だけを新しい時刻に直す。前倒し＝早め／遅め どちらも可）
   const endPromptAdjustEnd = (vp, newEndTs) => {
-    if (!newEndTs) { alert('新しい終了予定時間を入力してください'); return; }
+    if (!newEndTs) { notify('新しい終了予定時間を入力してください', { type: 'error' }); return; }
     const scheduledById = new Map(scheduled.active.map(t => [t.id, t]));
     const active = tasksRef.current
       .map(t => scheduledById.get(t.id) || t)
       .filter(t => t.projectName === vp.projectName && t.viewpointName === vp.viewpointName && t.assignee === vp.assignee && t.status !== 'done' && t.scheduledEnd);
-    if (active.length === 0) { alert('対象の進行中案件がありません'); return; }
+    if (active.length === 0) { notify('対象の進行中案件がありません', { type: 'error' }); return; }
     // 終了予定を決めている最後のステップ
     const last = active.reduce((a, b) => {
       const ta = startOfDay(a.scheduledEnd).getTime() + (a.scheduledEndMin || 0) * 60000;
@@ -1858,7 +1918,7 @@ export default function App() {
     const tgt = tasksRef.current.find(t => t.id === targetId);
     if (!src || !tgt) return;
     if ((src.companyName || '') !== (tgt.companyName || '')) {
-      alert('優先順位は会社ごとの番号のため、同じ会社のタスク同士でのみ並び替えできます');
+      notify('優先順位は会社ごとの番号のため、同じ会社のタスク同士でのみ並び替えできます', { type: 'error' });
       return;
     }
     saveTasks(prev => {
@@ -2056,6 +2116,8 @@ export default function App() {
     saveCompanyOrder,
     // タスクメモ
     upsertMemo, deleteMemo,
+    // ダイアログ・トースト
+    confirmDialog, promptDialog, notify,
   };
 
   const navItems = [
@@ -2185,6 +2247,25 @@ export default function App() {
         )}
         </Suspense>
       </main>
+
+      {confirmState && (
+        <ConfirmModal title={confirmState.title || '確認'}
+          confirmLabel={confirmState.confirmLabel} cancelLabel={confirmState.cancelLabel}
+          onConfirm={() => closeConfirm(true)} onCancel={() => closeConfirm(false)}
+          colors={colors} fontJP={fontJP} fontDisplay={fontDisplay}>
+          <div style={{ whiteSpace: 'pre-wrap' }}>{confirmState.message}</div>
+        </ConfirmModal>
+      )}
+
+      {promptState && (
+        <PromptModal title={promptState.title} message={promptState.message}
+          defaultValue={promptState.defaultValue} placeholder={promptState.placeholder}
+          confirmLabel={promptState.confirmLabel} cancelLabel={promptState.cancelLabel}
+          onSubmit={(v) => closePrompt(v)} onCancel={() => closePrompt(null)}
+          colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
+      )}
+
+      <ToastStack toasts={toasts} onDismiss={dismissToast} onUndo={undoToast} colors={colors} fontJP={fontJP} />
 
       {completeTarget && (
         <CompleteDialog

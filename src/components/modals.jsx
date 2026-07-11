@@ -1,5 +1,6 @@
 // アプリ全体で使うモーダル（過去案件引用・終了予定超過ポップアップ）。App.jsx から分割。
 import { useState } from 'react';
+import { useApp } from '../appContext.js';
 import { Search, X } from 'lucide-react';
 import { dateToDtLocal, dayName, fmtMD, getProjectColor, minToTime } from '../lib/utils.js';
 import { EndTimeFields } from './common.jsx';
@@ -75,6 +76,7 @@ function fmtOverdue(ms) {
   return m === 0 ? `${h}時間超過` : `${h}時間${m}分超過`;
 }
 function EndPromptModal({ viewpoints, now, settings, onComplete, onAddRevision, onDelay, onAdjustEnd, onSnooze, colors, fontJP, fontDisplay }) {
+  const { notify } = useApp();
   // 展開中のアクション { key, action } と各フォーム値
   const [active, setActive] = useState(null);
   const [completeEnd, setCompleteEnd] = useState('');
@@ -165,7 +167,7 @@ function EndPromptModal({ viewpoints, now, settings, onComplete, onAddRevision, 
                     <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
                       <button type="button" onClick={() => {
                         const nt = delayEnd ? new Date(delayEnd).getTime() : 0;
-                        if (!nt) { alert('日時を入力してください'); return; }
+                        if (!nt) { notify('日時を入力してください', { type: 'error' }); return; }
                         onDelay(vp, vp.endTs, nt); close();
                       }} style={btn(colors.text, colors.text, '#fff')}>更新する</button>
                       <button type="button" onClick={close} style={btn('#fff', colors.border, colors.textMute)}>やめる</button>
@@ -179,7 +181,7 @@ function EndPromptModal({ viewpoints, now, settings, onComplete, onAddRevision, 
                     <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
                       <button type="button" onClick={() => {
                         const nt = adjustEnd ? new Date(adjustEnd).getTime() : 0;
-                        if (!nt) { alert('日時を入力してください'); return; }
+                        if (!nt) { notify('日時を入力してください', { type: 'error' }); return; }
                         onAdjustEnd(vp, nt); close();
                       }} style={btn(colors.text, colors.text, '#fff')}>修正する</button>
                       <button type="button" onClick={close} style={btn('#fff', colors.border, colors.textMute)}>やめる</button>

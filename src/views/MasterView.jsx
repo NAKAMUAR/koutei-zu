@@ -507,15 +507,16 @@ function MasterView() {
 
 // ============ 残業の登録（担当者ごとの稼働枠追加） ============
 function OvertimeManager({ overtimes, assigneeList, settings, onAdd, onRemove, colors, fontJP }) {
+  const { notify } = useApp();
   const todayStr = fmtYMD(new Date());
   const defaultStart = settings?.afternoonEnd || '17:00';
   const [o, setO] = useState({ assignee: '', startDate: todayStr, endDate: todayStr, startTime: defaultStart, endTime: '19:00', label: '' });
   const set = (k, v) => setO(p => ({ ...p, [k]: v }));
   const submit = () => {
-    if (!o.assignee) { alert('担当者を選択してください'); return; }
-    if (!o.startDate || !o.endDate) { alert('開始日・終了日を入力してください'); return; }
-    if (o.endDate < o.startDate) { alert('終了日は開始日以降にしてください'); return; }
-    if (!o.startTime || !o.endTime || o.startTime >= o.endTime) { alert('残業の時間帯が正しくありません'); return; }
+    if (!o.assignee) { notify('担当者を選択してください', { type: 'error' }); return; }
+    if (!o.startDate || !o.endDate) { notify('開始日・終了日を入力してください', { type: 'error' }); return; }
+    if (o.endDate < o.startDate) { notify('終了日は開始日以降にしてください', { type: 'error' }); return; }
+    if (!o.startTime || !o.endTime || o.startTime >= o.endTime) { notify('残業の時間帯が正しくありません', { type: 'error' }); return; }
     onAdd({
       assignee: o.assignee, startDate: o.startDate, endDate: o.endDate,
       startTime: o.startTime, endTime: o.endTime,
@@ -577,14 +578,15 @@ function OvertimeManager({ overtimes, assigneeList, settings, onAdd, onRemove, c
 
 // ============ 欠勤・休日・不在の登録 ============
 function AbsenceManager({ absences, assigneeList, onAdd, onRemove, colors, fontJP }) {
+  const { notify } = useApp();
   const todayStr = fmtYMD(new Date());
   const [a, setA] = useState({ assignee: '', startDate: todayStr, endDate: todayStr, allDay: true, startTime: '13:00', endTime: '17:00', label: '' });
   const set = (k, v) => setA(p => ({ ...p, [k]: v }));
   const submit = () => {
-    if (!a.assignee) { alert('担当者を選択してください'); return; }
-    if (!a.startDate || !a.endDate) { alert('開始日・終了日を入力してください'); return; }
-    if (a.endDate < a.startDate) { alert('終了日は開始日以降にしてください'); return; }
-    if (!a.allDay && a.startTime >= a.endTime) { alert('不在の時間帯が正しくありません'); return; }
+    if (!a.assignee) { notify('担当者を選択してください', { type: 'error' }); return; }
+    if (!a.startDate || !a.endDate) { notify('開始日・終了日を入力してください', { type: 'error' }); return; }
+    if (a.endDate < a.startDate) { notify('終了日は開始日以降にしてください', { type: 'error' }); return; }
+    if (!a.allDay && a.startTime >= a.endTime) { notify('不在の時間帯が正しくありません', { type: 'error' }); return; }
     onAdd({
       assignee: a.assignee, startDate: a.startDate, endDate: a.endDate,
       allDay: !!a.allDay,
@@ -752,6 +754,7 @@ function HolidayManager({ holidays, onAdd, onRemove, colors, fontJP }) {
 
 // ============ 会社の表示順設定ページ（機能③） ============
 function CompanyOrderView({ companyOrder, saveCompanyOrder, usedCompanies, colors, fontJP, fontDisplay }) {
+  const { notify } = useApp();
   const order = (companyOrder || []).map(c => (c || '').trim()).filter(Boolean);
   // タスクに存在するが未登録の会社
   const unregistered = usedCompanies.filter(c => !order.includes(c)).sort((a, b) => a.localeCompare(b, 'ja'));
@@ -778,7 +781,7 @@ function CompanyOrderView({ companyOrder, saveCompanyOrder, usedCompanies, color
   const add = (name) => {
     const n = (name || '').trim();
     if (!n) return;
-    if (order.includes(n)) { alert('すでに登録されています'); return; }
+    if (order.includes(n)) { notify('すでに登録されています', { type: 'error' }); return; }
     saveCompanyOrder([...order, n]);
     setNewName('');
   };

@@ -4,6 +4,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { Plus, Trash2, Edit2, Copy, Printer, X, FileText, Search, Building2 } from 'lucide-react';
 import { storage, billingStore } from '../firebase.js';
+import { useApp } from '../appContext.js';
 import BillingDocument from './BillingDocument.jsx';
 import {
   DOC_TYPES, docTypeOf, blankDoc, blankItem, formatYen, formatJDate, computeTotals,
@@ -14,6 +15,7 @@ import {
 } from './billingUtils.js';
 
 export default function BillingView({ customerMaster, tasks, now, colors, fontJP, fontDisplay }) {
+  const { confirmDialog, notify } = useApp();
   const [docs, setDocs] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [editing, setEditing] = useState(null); // 編集中ドキュメント（null=一覧）
@@ -52,11 +54,15 @@ export default function BillingView({ customerMaster, tasks, now, colors, fontJP
     billingStore.set(stamped.id, stamped).catch(e => console.error('帳票保存エラー:', e));
     return stamped;
   };
-  const deleteDoc = (id) => {
-    if (!confirm('この帳票を削除しますか？この操作は取り消せません。')) return;
+  const deleteDoc = async (id) => {
+    if (!(await confirmDialog({ title: '帳票の削除', message: 'この帳票を削除しますか？\n（削除直後ならトーストの「元に戻す」で復元できます）', confirmLabel: '削除する' }))) return;
+    const doc = docs.find(d => d.id === id);
     setDocs(prev => prev.filter(d => d.id !== id));
     billingStore.remove(id).catch(e => console.error('帳票削除エラー:', e));
     if (editing && editing.id === id) setEditing(null);
+    if (doc) notify(`帳票「${doc.docNo || doc.id}」を削除しました`, {
+      undo: () => { setDocs(prev => [doc, ...prev.filter(d => d.id !== doc.id)]); return billingStore.set(doc.id, doc); },
+    });
   };
   const duplicateDoc = (doc) => {
     const copy = { ...JSON.parse(JSON.stringify(doc)), id: `doc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, no: doc.no + '-copy', createdAt: Date.now(), updatedAt: Date.now() };
@@ -223,6 +229,7 @@ function iconBtn(colors) {
 // storage の 'billingIssuer' キーに { estimate, invoice, bankLines } で保存。
 // 新規作成する帳票に反映される（既存の帳票は変わらない）。
 function IssuerSettings({ issuer, onClose, colors, fontJP }) {
+  const { notify } = useApp();
   const [draft, setDraft] = useState(() => ({
     estimate: { ...REBEG_ESTIMATE, ...(issuer?.estimate || {}) },
     invoice: { ...REBEG_INVOICE, ...(issuer?.invoice || {}) },
@@ -239,7 +246,7 @@ function IssuerSettings({ issuer, onClose, colors, fontJP }) {
       onClose();
     } catch (e) {
       console.error('自社情報の保存エラー:', e);
-      alert('保存に失敗しました');
+      notify('保存に失敗しました', { type: 'error' });
     } finally { setSaving(false); }
   };
   const sideForm = (side, title) => (
@@ -285,6 +292,7 @@ function IssuerSettings({ issuer, onClose, colors, fontJP }) {
 
 // ============ 編集 ============
 function BillingEditor({ initial, customerMaster, tasks, onSave, onSaveClose, onClose, onDelete, existing, colors, fontJP, fontDisplay }) {
+  const { confirmDialog } = useApp();
   const [doc, setDoc] = useState(initial);
   const [tab, setTab] = useState('basic');
   // 未保存変更の検知（保存済みスナップショットとの比較）
@@ -338,8 +346,8 @@ function BillingEditor({ initial, customerMaster, tasks, onSave, onSaveClose, on
 
   const markSaved = (d) => { savedJson.current = JSON.stringify(d); };
   const handleSave = () => { onSave(doc); markSaved(doc); };
-  const handleClose = () => {
-    if (dirty && !confirm('保存されていない変更があります。破棄して一覧へ戻りますか？')) return;
+  const handleClose = async () => {
+    if (dirty && !(await confirmDialog({ message: '保存されていない変更があります。破棄して一覧へ戻りますか？', confirmLabel: '破棄して戻る' }))) return;
     onClose();
   };
 
@@ -352,7 +360,7 @@ function BillingEditor({ initial, customerMaster, tasks, onSave, onSaveClose, on
   }, [dirty]);
 
   // 印刷（PDF出力）。主要項目が空なら確認してから進む
-  const handlePrint = () => {
+  const handlePrint = async () => {
     const missing = [];
     if (!(doc.subject || '').trim()) missing.push('件名');
     if (isOrder) {
@@ -361,7 +369,7 @@ function BillingEditor({ initial, customerMaster, tasks, onSave, onSaveClose, on
       missing.push('宛先 会社名');
     }
     if (isInvoice && !(doc.paymentDeadline || '').trim()) missing.push('支払期限');
-    if (missing.length && !confirm(`「${missing.join('」「')}」が未入力です。このまま印刷しますか？`)) return;
+    if (missing.length && !(await confirmDialog({ message: `「${missing.join('」「')}」が未入力です。このまま印刷しますか？`, confirmLabel: 'このまま印刷' }))) return;
     onSave(doc); markSaved(doc); window.print();
   };
 
