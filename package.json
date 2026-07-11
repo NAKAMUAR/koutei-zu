@@ -6,7 +6,8 @@
   "description": "工程図 - 建築CG制作スケジュール可視化アプリ",
   "scripts": {
     "dev": "vite",
-    "prebuild": "node scripts/check-ui-rules.mjs",
+    "prebuild": "node scripts/check-ui-rules.mjs && npm test",
+    "test": "node --test scripts/tests/*.test.mjs",
     "build": "vite build",
     "preview": "vite preview",
     "deploy": "npm run build && gh-pages -d dist"
