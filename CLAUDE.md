@@ -34,8 +34,23 @@
 - 手順（推奨）: `git revert --no-edit 02faebe` を実行し、コンフリクトが出たら「改善前（ded4cf4 時点）の見た目」を優先して解消する。
   - revert が大きく衝突する場合の代替: `git checkout ded4cf4 -- src/` で src を丸ごと戻す。ただしこの方法は 02faebe より後に入った src の機能修正も消えるため、`git log --oneline 02faebe..HEAD -- src/` で後続コミットを確認し、必要な変更は再適用すること。
 - 戻した後は通常どおりビルド・デプロイ・push（上記の必須運用ルール）を実施する。
+- **注意**: 復元すると下記「UI品質ガード」に違反してビルドが失敗するため、復元時は `scripts/check-ui-rules.mjs` と package.json の `prebuild` も併せて削除（または該当ルールを無効化）すること。復元フレーズによる復元は、ガード解除が許可される唯一のケース。
 
 > UI改善の内容: ナビの3グループ化（経理・管理ドロップダウン）／案件編集モードのヘッダー内トグル化／alert()→トースト通知／データ更新ボタンの設定パネル移動／「登録して詳細編集へ」ボタン／Escでモーダル閉じ／最小フォント11px化／App.jsx の部分分割（src/ui/・src/views/・src/lib/）。
+
+## UI品質ガード（AI・人を問わず全修正に適用）
+
+2026-07 の UI改善（点数評価に基づく改善一式）が今後の修正で後退しないよう、`scripts/check-ui-rules.mjs` が **`npm run build` のたびに自動実行され、違反があるとビルドが失敗する**（package.json の `prebuild`）。どの AI・どの環境で修正しても、必須運用ルール1（ビルドが通ること）を守る限り必ずチェックされる。
+
+守るべきルール（＝チェック内容）：
+
+1. **alert() 禁止** — 通知は `src/ui/toast.jsx` の `notify(message, type)` を使う（type: 'warn' | 'error' | 'info'）
+2. **分割済みモジュールを App.jsx へ再統合しない** — `src/ui/`（toast・controls・useEscKey）、`src/views/MemoView.jsx`、`src/lib/text.js` を維持
+3. **App.jsx の構造維持** — ルートに `<ToastHost />`、ナビは `<NavDropdown>` による経理・管理のグループ化を維持
+4. **最小フォント 11px** — App.jsx で `fontSize: 10.5` 禁止、`fontSize: 10` はロゴ下タグライン2箇所のみ許容
+5. **モーダルの Esc 閉じ** — `src/ui/controls.jsx` の `useEscKey()` を維持。新しいモーダルを作るときも `useEscKey(onCancel)` を入れる
+
+> `scripts/check-ui-rules.mjs` 自体の削除・緩和は禁止。例外は (a) ユーザーが明示的に指示した場合、(b) 復元フレーズ「デザイン復元：design-v1」による正式なデザイン復元の場合のみ。新しい UI 上の約束事ができたら、このガードにルールを**追加**していくのは歓迎。
 
 ## ソースの場所（重要）
 
