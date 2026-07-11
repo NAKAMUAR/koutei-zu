@@ -402,23 +402,30 @@ const tabStyle = (active, colors, fontJP) => ({
 });
 
 // ============ 終了時間の入力フィールド（日付＋時刻プルダウン） ============
-function EndTimeFields({ value, onChange, colors, fontJP }) {
+// 全画面共通の日時入力（日付＋時刻プルダウン）。datetime-local は入力しづらい環境が
+// あるため使用禁止（ESLintで検出）。value は 'YYYY-MM-DDTHH:mm' または ''。
+// 片方だけ入力されたときは、日付=今日・時刻=defaultTime で補完する。
+function DateTimeField({ value, onChange, defaultTime = '17:00', compact = false, colors, fontJP }) {
   const d = value ? value.split('T')[0] : '';
   const t = value ? (value.split('T')[1] || '') : '';
   const set = (nd, nt) => {
     if (!nd && !nt) { onChange(''); return; }
     const dd = nd || fmtYMD(new Date());
-    const tt = nt || '17:00';
+    const tt = nt || defaultTime;
     onChange(`${dd}T${tt}`);
   };
+  const dateStyle = compact
+    ? { padding: '2px 4px', border: `1px solid ${colors.border}`, borderRadius: 3, fontFamily: fontJP, fontSize: 11 }
+    : { padding: '6px 8px', border: `1px solid ${colors.border}`, borderRadius: 3, fontFamily: fontJP, fontSize: 13 };
   return (
     <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-      <input type="date" value={d} onChange={(e) => set(e.target.value, t)}
-        style={{ padding: '6px 8px', border: `1px solid ${colors.border}`, borderRadius: 3, fontFamily: fontJP, fontSize: 13 }} />
-      <TimeSelect value={t || '17:00'} onChange={(val) => set(d, val)} colors={colors} fontJP={fontJP} />
+      <input type="date" value={d} onChange={(e) => set(e.target.value, t)} style={dateStyle} />
+      <TimeSelect value={t || defaultTime} onChange={(val) => set(d, val)} colors={colors} fontJP={fontJP} />
     </span>
   );
 }
+// 旧名（終了時間の入力フィールド）。既存の呼び出し互換のため残す＝実体は DateTimeField。
+const EndTimeFields = DateTimeField;
 
 // ============ 完了ダイアログ（終了時間を入力して完了） ============
 function CompleteDialog({ target, onConfirm, onCancel, colors, fontJP, fontDisplay }) {
@@ -523,5 +530,5 @@ function Combobox({ value, onChange, options, placeholder, inputStyle, colors, f
 export {
   ConfirmModal, PromptModal, ToastStack, DeadlineConfirmModal, TimeSelect, DurationSelect, NavButton, NavGroup,
   iconBtnStyle, miniBtnStyle, progressBtnStyle, tabStyle,
-  EndTimeFields, CompleteDialog, Combobox,
+  DateTimeField, EndTimeFields, CompleteDialog, Combobox,
 };

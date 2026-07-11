@@ -34,7 +34,7 @@ export default [
       'no-alert': 'error',
       // 原則5: 日時入力は共通 DateTimeField に統一（datetime-local は入力しづらい環境があるため禁止）。
       'no-restricted-syntax': [
-        'warn', // TODO(改善#5完了時に 'error' へ)
+        'error',
         {
           selector: "Literal[value='datetime-local']",
           message: '日時入力は components/common.jsx の DateTimeField を使ってください（datetime-local 禁止・UI設計原則5）',

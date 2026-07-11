@@ -5,7 +5,7 @@ import { dateToDtLocal, dayName, fmtHM, fmtMD, fmtYMD, getProjectColor, isSameDa
 import { compareCompanyDisplay, computeProjectOrder, elapsedHoursForSlots } from '../../lib/schedule.js';
 import { Check, CheckCircle2, ChevronDown, ChevronUp, Clock, Edit2, FileText, GripVertical, PauseCircle, Plus, Trash2, User, X, Zap } from 'lucide-react';
 import { ROUND_TYPES, deliveryBaseName, num as vpNum, roundTypeOf, stepDeliveryName } from '../../viewpoint/viewpointUtils.js';
-import { iconBtnStyle, miniBtnStyle, progressBtnStyle } from '../../components/common.jsx';
+import { DateTimeField, iconBtnStyle, miniBtnStyle, progressBtnStyle } from '../../components/common.jsx';
 
 function ViewpointGroupList({ groups, allActive, sortMode, defaultCollapsed }) {
   const {
@@ -1213,13 +1213,13 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
             </span>
           )}
           {editingStart ? (
-            <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <input type="datetime-local" value={startInput} autoFocus
-                onChange={(e) => setStartInput(e.target.value)}
-                onBlur={commitStart}
-                onKeyDown={(e) => { if (e.key === 'Enter') commitStart(); if (e.key === 'Escape') setEditingStart(false); }}
-                style={{ padding: '2px 4px', border: `1px solid ${colors.border}`, borderRadius: 3, fontFamily: fontJP, fontSize: 11 }} />
-              <button type="button" onMouseDown={(e) => { e.preventDefault(); setStartInput(''); setEditingStart(false); if (onSetManualStart && task.manualStart) onSetManualStart(''); }}
+            <span style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+              <DateTimeField value={startInput} onChange={setStartInput} defaultTime="08:00" compact colors={colors} fontJP={fontJP} />
+              <button type="button" onClick={commitStart}
+                style={{ background: colors.text, color: '#fff', border: 'none', borderRadius: 3, padding: '2px 8px', fontSize: 10, cursor: 'pointer', fontFamily: fontJP, fontWeight: 600 }}>
+                確定
+              </button>
+              <button type="button" onClick={() => { setStartInput(''); setEditingStart(false); if (onSetManualStart && task.manualStart) onSetManualStart(''); }}
                 style={{ background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 3, padding: '2px 6px', fontSize: 10, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP }}>
                 解除
               </button>
@@ -1259,13 +1259,13 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
             </button>
           )}
           {editingEnd ? (
-            <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <input type="datetime-local" value={endInput} autoFocus
-                onChange={(e) => setEndInput(e.target.value)}
-                onBlur={commitEnd}
-                onKeyDown={(e) => { if (e.key === 'Enter') commitEnd(); if (e.key === 'Escape') setEditingEnd(false); }}
-                style={{ padding: '2px 4px', border: `1px solid ${colors.border}`, borderRadius: 3, fontFamily: fontJP, fontSize: 11 }} />
-              <button type="button" onMouseDown={(e) => { e.preventDefault(); setEndInput(''); setEditingEnd(false); if (onSetManualEnd && task.manualEnd) onSetManualEnd(''); }}
+            <span style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+              <DateTimeField value={endInput} onChange={setEndInput} defaultTime="17:00" compact colors={colors} fontJP={fontJP} />
+              <button type="button" onClick={commitEnd}
+                style={{ background: colors.text, color: '#fff', border: 'none', borderRadius: 3, padding: '2px 8px', fontSize: 10, cursor: 'pointer', fontFamily: fontJP, fontWeight: 600 }}>
+                確定
+              </button>
+              <button type="button" onClick={() => { setEndInput(''); setEditingEnd(false); if (onSetManualEnd && task.manualEnd) onSetManualEnd(''); }}
                 style={{ background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 3, padding: '2px 6px', fontSize: 10, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP }}>
                 解除
               </button>

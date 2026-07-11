@@ -4,6 +4,7 @@ import { useApp } from '../../appContext.js';
 import { addDays, dayName, fmtHM, fmtMD, fmtYMD, getProjectColor, minToTime } from '../../lib/utils.js';
 import { Check, ChevronDown, ChevronUp, PauseCircle, PlayCircle, User } from 'lucide-react';
 import { groupByViewpoint, sortAssigneesByMaster } from '../../lib/schedule.js';
+import { DateTimeField } from '../../components/common.jsx';
 
 // ============ 制作中断セクション ============
 // 納品後の確認待ちなどで進行できない案件を、一旦スケジュールから外して表示する。
@@ -276,13 +277,9 @@ function ReviewCard({ g }) {
 
       <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <label style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap' }}>完了時刻</label>
-        <input type="datetime-local"
-          value={g.actualEnd || ''}
-          onChange={(e) => setReviewActualEnd(g, e.target.value)}
-          style={{
-            padding: '6px 8px', border: `1px solid ${colors.border}`, borderRadius: 4,
-            fontFamily: fontJP, fontSize: 12, background: '#fff', color: colors.text, outline: 'none',
-          }} />
+        <DateTimeField value={g.actualEnd || ''}
+          onChange={(v) => setReviewActualEnd(g, v)}
+          defaultTime="17:00" colors={colors} fontJP={fontJP} />
         <span style={{ fontSize: 10, color: colors.textMute }}>直すとこの時刻を起点に、担当者の残りスケジュールが組み直ります（早く終われば前倒し）</span>
       </div>
 
