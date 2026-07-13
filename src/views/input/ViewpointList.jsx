@@ -3,7 +3,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { useApp } from '../../appContext.js';
 import { dateToDtLocal, dayName, fmtHM, fmtMD, fmtYMD, getProjectColor, isSameDay, minToTime, parseHM, priorityColor, startOfDay } from '../../lib/utils.js';
 import { compareCompanyDisplay, computeProjectOrder, elapsedHoursForSlots } from '../../lib/schedule.js';
-import { Check, CheckCircle2, ChevronDown, ChevronUp, Clock, Edit2, FileText, GripVertical, PauseCircle, Plus, Trash2, User, X, Zap } from 'lucide-react';
+import { Check, CheckCircle2, ChevronDown, ChevronUp, Clock, Copy, Edit2, FileText, GripVertical, PauseCircle, Plus, Trash2, User, X, Zap } from 'lucide-react';
 import { ROUND_TYPES, deliveryBaseName, num as vpNum, roundTypeOf, stepDeliveryName } from '../../viewpoint/viewpointUtils.js';
 import { DateTimeField, iconBtnStyle, miniBtnStyle, progressBtnStyle } from '../../components/common.jsx';
 
@@ -1126,6 +1126,12 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
                       style={{ background: 'transparent', border: 'none', padding: 0, margin: 0, font: 'inherit', color: '#9c7b3c', fontWeight: 600, cursor: 'pointer' }}>
                       {stepDelivery}
                     </button>
+                    {' '}
+                    <button type="button" onClick={() => copyDelivery(stepDelivery)}
+                      title="納品名をコピー" aria-label="納品名をコピー"
+                      style={{ background: 'transparent', border: 'none', padding: 0, margin: 0, cursor: 'pointer', color: '#9c7b3c', display: 'inline-flex', alignItems: 'center', verticalAlign: 'middle' }}>
+                      {copiedDelivery === stepDelivery ? <Check size={13} /> : <Copy size={13} />}
+                    </button>
                     {stepDeliveryInternal && stepDeliveryInternal !== stepDelivery && (
                       <>
                         <span style={{ color: colors.textMute }}> ／ </span>
@@ -1133,6 +1139,12 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
                           title="クリックでコピー（社内視点名ベース）"
                           style={{ background: 'transparent', border: 'none', padding: 0, margin: 0, font: 'inherit', color: colors.textMute, cursor: 'pointer' }}>
                           {stepDeliveryInternal}
+                        </button>
+                        {' '}
+                        <button type="button" onClick={() => copyDelivery(stepDeliveryInternal)}
+                          title="納品名をコピー（社内視点名ベース）" aria-label="納品名をコピー（社内視点名ベース）"
+                          style={{ background: 'transparent', border: 'none', padding: 0, margin: 0, cursor: 'pointer', color: colors.textMute, display: 'inline-flex', alignItems: 'center', verticalAlign: 'middle' }}>
+                          {copiedDelivery === stepDeliveryInternal ? <Check size={13} /> : <Copy size={13} />}
                         </button>
                       </>
                     )}
