@@ -1197,8 +1197,10 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                         {/* 2行目（開いたときだけ）：請求・納品の項目（納品名・依頼日・完了日・金額） */}
                         {billingOpen && (
                         <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end', flexWrap: 'wrap', borderTop: `1px dashed ${colors.border}`, paddingTop: 8 }}>
+                        {/* 納品名・依頼日・完了日は常に1行にまとめる（金額のみ収まらなければ折り返す） */}
+                        <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end', flexWrap: 'nowrap', flex: '1 1 380px', minWidth: 0 }}>
                         {/* 納品名（ステップごと。空欄なら自動：案件名_社外視点名_納品名サフィックス。例：色付2） */}
-                        <div style={{ flex: '1 1 140px', minWidth: 120 }}>
+                        <div style={{ flex: '1 1 120px', minWidth: 0 }}>
                           <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>納品名</label>
                           <input type="text" value={step.deliveryName || ''}
                             onChange={(e) => updateStep(vi, si, 'deliveryName', e.target.value)}
@@ -1206,13 +1208,13 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                             title="このステップの納品名。空欄なら自動（案件名_社外視点名_白色/色付…）。売上の制作名へ連携されます"
                             style={{ ...inputStyle, padding: '7px 10px', fontSize: 13 }} />
                         </div>
-                        {/* 依頼日 */}
+                        {/* 依頼日（空欄なら登録日が自動で入る） */}
                         <div style={{ flex: '0 0 116px' }}>
                           <label style={{ ...labelStyle, fontSize: 10, marginBottom: 4 }}>依頼日</label>
                           <input type="date" value={step.requestDate || ''}
                             onChange={(e) => updateStep(vi, si, 'requestDate', e.target.value)}
                             style={{ ...inputStyle, padding: '6px 6px', fontSize: 12 }}
-                            title="このステップ（納品）の依頼日。売上の発注/着手日へ連携されます" />
+                            title="このステップ（納品）の依頼日。空欄なら登録日が自動反映されます。売上の発注/着手日へ連携されます" />
                         </div>
                         {/* 完了日（年月日＋時分）：1行に収める */}
                         <div style={{ flex: '0 0 auto' }}>
@@ -1229,6 +1231,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                                 style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '4px 6px', borderRadius: 3, fontSize: 10, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP, flexShrink: 0 }}>×</button>
                             )}
                           </div>
+                        </div>
                         </div>
                         {/* 金額（ラボ会社は対象外。無料ステップも対象外。制作時間×2,500円をデフォルト算出） */}
                         {amountApplicable && isPaid && (
