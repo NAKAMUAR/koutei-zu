@@ -328,7 +328,7 @@ function RowEditModal({ row, settings, ym, companyList, hasProject, onSave, onDe
             {field('制作枚数', 'sheets', 'num')}
           </div>
           <div style={{ fontSize: 11.5, color: colors.textMute, marginTop: 6 }}>
-            自動計算：消費税 {formatYen(c.tax)} ・ 税込合計 {formatYen(c.taxIncl)} ・ 本社受取 {formatYen(c.hqReceive)}
+            自動計算：消費税 {formatYen(c.tax)} ・ 税込合計 {formatYen(c.taxIncl)}
           </div>
 
           <div style={section}>日付・完了</div>
@@ -346,10 +346,6 @@ function RowEditModal({ row, settings, ym, companyList, hasProject, onSave, onDe
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
             {field('請求書送付日', 'invoiceSentDate', 'date')}
             {field('入金確認日', 'paymentConfirmedDate', 'date')}
-            {field('請求対象回', 'billRound')}
-            {field('請求金額', 'billAmount', 'num')}
-            {field('消費税納付', 'taxPayAmount', 'num')}
-            {field('本社請求状態', 'hqStatus')}
           </div>
 
           <div style={section}>備考</div>
@@ -590,11 +586,6 @@ const COLS = [
   { key: 'completed', label: '11.完了', w: 50, type: 'check' },
   { key: 'invoiceSentDate', label: '12.請求書送付日', w: 120, type: 'date' },
   { key: 'paymentConfirmedDate', label: '13.入金確認日', w: 120, type: 'date' },
-  { key: 'billRound', label: '14.請求対象回', w: 80 },
-  { key: 'billAmount', label: '15.請求金額', w: 100, align: 'right' },
-  { key: 'taxPayAmount', label: '16.消費税納付', w: 100, align: 'right' },
-  { key: 'hqReceive', label: '17.本社受取', w: 100, align: 'right', calc: true },
-  { key: 'hqStatus', label: '18.本社請求状態', w: 110 },
   { key: 'note', label: '備考', w: 140 },
 ];
 
@@ -620,7 +611,7 @@ function CategoryTable({ category, rows, settings, total, updRow, removeRow, onE
               <tr><td colSpan={COLS.length + 1} style={{ ...td, padding: 16, textAlign: 'center', color: colors.textMute }}>この区分の行はありません。「行を追加」または「案件から行を追加」で登録してください。</td></tr>
             ) : rows.map((r, i) => {
               const c = computeRow(r, settings);
-              const calcVal = { tax: c.tax, taxIncl: c.taxIncl, hqReceive: c.hqReceive };
+              const calcVal = { tax: c.tax, taxIncl: c.taxIncl };
               return (
                 <tr key={r.id}>
                   {COLS.map(col => {
@@ -656,11 +647,7 @@ function CategoryTable({ category, rows, settings, total, updRow, removeRow, onE
                 <td style={{ ...td, textAlign: 'right', fontWeight: 700, padding: '4px 5px' }}>{formatYen(total.tax)}</td>
                 <td style={{ ...td, textAlign: 'right', fontWeight: 700, padding: '4px 5px' }}>{formatYen(total.taxIncl)}</td>
                 <td style={{ ...td, textAlign: 'right', fontWeight: 700, padding: '4px 5px' }}>{total.sheets}</td>
-                <td style={td} colSpan={6}></td>
-                <td style={{ ...td, textAlign: 'right', fontWeight: 700, padding: '4px 5px' }}>{formatYen(total.billAmount)}</td>
-                <td style={td}></td>
-                <td style={{ ...td, textAlign: 'right', fontWeight: 700, padding: '4px 5px' }}>{formatYen(total.hqReceive)}</td>
-                <td style={td} colSpan={2}></td>
+                <td style={td} colSpan={7}></td>
                 <td style={td} className="kz-no-print"></td>
               </tr>
             </tfoot>
@@ -876,13 +863,13 @@ function csvSafe(v) {
   return /^[=+\-@]/.test(s) && isNaN(Number(s)) ? `'${s}` : s;
 }
 function exportCsv(ym, rows, settings) {
-  const headers = ['区分', '番号', '会社名', '担当者名', '案件名', '制作種類', '制作名', '社内外注者', '社外外注者', '外注金額VND', '制作金額', '消費税', '税込合計', '制作枚数', '発注着手日', '納品予定日', '納品日', '完了', '請求書送付日', '入金確認日', '請求対象回', '請求金額', '消費税納付', '本社受取', '本社請求状態', '備考'];
+  const headers = ['区分', '番号', '会社名', '担当者名', '案件名', '制作種類', '制作名', '社内外注者', '社外外注者', '外注金額VND', '制作金額', '消費税', '税込合計', '制作枚数', '発注着手日', '納品予定日', '納品日', '完了', '請求書送付日', '入金確認日', '備考'];
   const lines = [headers.join(',')];
   let idx = {};
   for (const r of rows) {
     const c = computeRow(r, settings);
     idx[r.category] = (idx[r.category] || 0) + 1;
-    const vals = [catOf(r.category).label, idx[r.category], r.company, r.person, r.projectName, r.prodType, r.prodName, r.inHouseOutsourcer, r.externalOutsourcer, num(r.outsourceVND), num(r.prodAmount), c.tax, c.taxIncl, num(r.sheets), r.orderDate, r.dueDate, r.deliveryDate, r.completed ? '完了' : '', r.invoiceSentDate, r.paymentConfirmedDate, r.billRound, num(r.billAmount), num(r.taxPayAmount), c.hqReceive, r.hqStatus, r.note];
+    const vals = [catOf(r.category).label, idx[r.category], r.company, r.person, r.projectName, r.prodType, r.prodName, r.inHouseOutsourcer, r.externalOutsourcer, num(r.outsourceVND), num(r.prodAmount), c.tax, c.taxIncl, num(r.sheets), r.orderDate, r.dueDate, r.deliveryDate, r.completed ? '完了' : '', r.invoiceSentDate, r.paymentConfirmedDate, r.note];
     lines.push(vals.map(v => `"${csvSafe(v).replace(/"/g, '""')}"`).join(','));
   }
   const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
