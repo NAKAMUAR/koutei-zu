@@ -118,13 +118,29 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
     setForm({ ...form, viewpoints: vps });
   };
   // ステップ種類（プルダウン）の選択。種類IDと表示名（素の名称）を同期し、無料種類なら金額をクリアする。
+  // '__free__'（自由入力）を選ぶと、種類マスタに無い名称を name へ直接入力できる（stepFreeName で入力）。
   const updateStepType = (vi, si, typeId) => {
     const vps = [...form.viewpoints];
     const steps = [...vps[vi].steps];
+    if (typeId === '__free__') {
+      // 自由入力モード：マスタ種類の紐付けを外す（既存 name はそのまま残して編集させる）
+      steps[si] = { ...steps[si], stepTypeId: '__free__' };
+      vps[vi] = { ...vps[vi], steps };
+      setForm({ ...form, viewpoints: vps });
+      return;
+    }
     const t = stepTypeMaster.find(x => x.id === typeId);
     const next = { ...steps[si], stepTypeId: typeId, name: t ? t.label : steps[si].name };
     if (t && t.paid === false) next.amount = ''; // 無料は金額を反映しない
     steps[si] = next;
+    vps[vi] = { ...vps[vi], steps };
+    setForm({ ...form, viewpoints: vps });
+  };
+  // 自由入力ステップの名称を更新（種類マスタに無い任意の名称）。
+  const updateStepFreeName = (vi, si, value) => {
+    const vps = [...form.viewpoints];
+    const steps = [...vps[vi].steps];
+    steps[si] = { ...steps[si], stepTypeId: '__free__', name: value };
     vps[vi] = { ...vps[vi], steps };
     setForm({ ...form, viewpoints: vps });
   };
@@ -1074,7 +1090,8 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                       const resolved = vpResolved[si] || { label: step.name, deliverySuffix: '', typeId: step.stepTypeId || '', paid: true };
                       const stepType = findStepType(stepTypeMaster, step);
                       const isPaid = !stepType || stepType.paid !== false; // 種類未選択・不明は有料扱い（金額欄を出す）
-                      const selectValue = resolved.typeId || (step.name ? '__free__' : '');
+                      const isFreeStep = step.stepTypeId === '__free__' || (!resolved.typeId && !!step.name);
+                      const selectValue = resolved.typeId || (isFreeStep ? '__free__' : '');
                       const hNum = parseHM(step.hours);
                       const amtDefault = (!isNaN(hNum) && hNum > 0) ? String(Math.round(hNum * STEP_AMOUNT_RATE)) : '';
                       const vpBase = deliveryBaseName(form.projectName, vp.viewpointNameExternal || vp.viewpointName, vp.deliveryName);
@@ -1115,15 +1132,22 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                           <select value={selectValue}
                             onChange={(e) => updateStepType(vi, si, e.target.value)}
                             style={{ ...inputStyle, padding: '7px 8px', fontSize: 13, cursor: 'pointer' }}
-                            title="ステップの種類を選択。選択肢は「マスタ」タブのステップ設定で編集できます">
+                            title="ステップの種類を選択。選択肢は「マスタ」タブのステップ設定で編集できます。マスタに無い作業は「自由入力」で名称を直接入力できます">
                             <option value="">選択…</option>
                             {stepTypeMaster.map(t => (
                               <option key={t.id} value={t.id}>{t.label}</option>
                             ))}
-                            {selectValue === '__free__' && (
-                              <option value="__free__">{step.name}（自由入力）</option>
-                            )}
+                            <option value="__free__">自由入力（その他）…</option>
                           </select>
+                          {/* 自由入力：マスタに無い作業名を直接入力（例：現地調査・打合せ など） */}
+                          {selectValue === '__free__' && (
+                            <input type="text" value={step.name || ''}
+                              onChange={(e) => updateStepFreeName(vi, si, e.target.value)}
+                              placeholder="作業名を入力（例：現地調査）"
+                              autoFocus={!step.name}
+                              style={{ ...inputStyle, padding: '7px 8px', fontSize: 13, marginTop: 4 }}
+                              title="このステップの作業名を自由に入力します" />
+                          )}
                           {/* 回数付きの解決後の名称（例：カラー変更1回目（有料））を表示 */}
                           {resolved.label && resolved.label !== step.name && (
                             <div style={{ fontSize: 10, color: colors.textMute, marginTop: 3 }}>→ {resolved.label}</div>
@@ -1262,7 +1286,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                         }}>
                         <Plus size={12} /> ステップを追加
                       </button>
-                      <span style={{ fontSize: 10, color: colors.textMute }}>ステップ（種類）はプルダウンで選択。選択肢は「マスタ」タブのステップ設定で編集できます</span>
+                      <span style={{ fontSize: 10, color: colors.textMute }}>ステップ（種類）はプルダウンで選択。選択肢は「マスタ」タブのステップ設定で編集できます（マスタに無い作業は「自由入力」で名称を直接入力）</span>
                     </div>
                   </div>
                 </div>
