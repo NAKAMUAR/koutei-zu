@@ -945,7 +945,7 @@ export default function App() {
             // 登録日（自動記録・編集しても最初の登録日を維持）。案件の登録日はタスクの最早値
             registeredDate: existing?.registeredDate || fmtYMD(new Date(baseTime)),
             // ステップ種類（プルダウン選択のマスタID）と納品名サフィックス（白色/色付/色付2…）
-            stepTypeId: resolved.typeId || step.stepTypeId || '',
+            stepTypeId: resolved.typeId || (step.stepTypeId === '__free__' ? '' : step.stepTypeId) || '',
             stepDeliverySuffix: resolved.deliverySuffix || '',
             // ステップごとの金額・依頼日・完了日（ステップ＝納品単位。売上へ1ステップ1行で連携）
             // 金額が入るのはオフショア案件のみ。ラボ案件（amountApplicable=false）は0（空）に固定。
