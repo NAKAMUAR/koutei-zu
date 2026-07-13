@@ -810,29 +810,29 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
           <div>
             <label style={labelStyle}>依頼日（案件共通・任意）</label>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              {/* 日付が見切れないよう、入力欄は列いっぱいに広げる（クリアは常時表示で下段へ回り込む） */}
               <input type="date" value={form.projectRequestDate || ''}
                 onChange={(e) => setForm({ ...form, projectRequestDate: e.target.value })}
-                style={{ ...inputStyle, flex: '1 1 150px', minWidth: 150, width: 'auto' }} />
-              {form.projectRequestDate && (
-                <button type="button" onClick={() => setForm({ ...form, projectRequestDate: '' })}
-                  style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '6px 10px', borderRadius: 3, fontSize: 11, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP, whiteSpace: 'nowrap', flexShrink: 0 }}>
-                  クリア
-                </button>
-              )}
+                style={{ ...inputStyle, flex: '1 1 100%', minWidth: 0 }} />
+              <button type="button" onClick={() => setForm({ ...form, projectRequestDate: '' })}
+                disabled={!form.projectRequestDate}
+                style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '6px 10px', borderRadius: 3, fontSize: 11, color: form.projectRequestDate ? colors.textMute : '#ccc', cursor: form.projectRequestDate ? 'pointer' : 'not-allowed', fontFamily: fontJP, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                クリア
+              </button>
             </div>
           </div>
           <div>
             <label style={labelStyle}>全体納期（案件共通・任意）</label>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              {/* 日付が見切れないよう、入力欄は列いっぱいに広げる（クリアは常時表示で下段へ回り込む） */}
               <input type="date" value={form.projectDeadline || ''}
                 onChange={(e) => setForm({ ...form, projectDeadline: e.target.value })}
-                style={{ ...inputStyle, flex: '1 1 150px', minWidth: 150, width: 'auto' }} />
-              {form.projectDeadline && (
-                <button type="button" onClick={() => setForm({ ...form, projectDeadline: '' })}
-                  style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '6px 10px', borderRadius: 3, fontSize: 11, color: colors.textMute, cursor: 'pointer', fontFamily: fontJP, whiteSpace: 'nowrap', flexShrink: 0 }}>
-                  クリア
-                </button>
-              )}
+                style={{ ...inputStyle, flex: '1 1 100%', minWidth: 0 }} />
+              <button type="button" onClick={() => setForm({ ...form, projectDeadline: '' })}
+                disabled={!form.projectDeadline}
+                style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '6px 10px', borderRadius: 3, fontSize: 11, color: form.projectDeadline ? colors.textMute : '#ccc', cursor: form.projectDeadline ? 'pointer' : 'not-allowed', fontFamily: fontJP, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                クリア
+              </button>
             </div>
           </div>
           <div style={{ gridColumn: '1 / -1' }}>
