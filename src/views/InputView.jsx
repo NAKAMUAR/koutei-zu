@@ -809,29 +809,29 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
           </div>
           <div>
             <label style={labelStyle}>依頼日（案件共通・任意）</label>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              {/* 日付が見切れないよう、入力欄は列いっぱいに広げる（クリアは常時表示で下段へ回り込む） */}
+            {/* 日付が見切れないよう入力欄を広げ、クリアはアイコンにして1行に収める */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap' }}>
               <input type="date" value={form.projectRequestDate || ''}
                 onChange={(e) => setForm({ ...form, projectRequestDate: e.target.value })}
-                style={{ ...inputStyle, flex: '1 1 100%', minWidth: 0 }} />
+                style={{ ...inputStyle, flex: '1 1 auto', minWidth: 0 }} />
               <button type="button" onClick={() => setForm({ ...form, projectRequestDate: '' })}
-                disabled={!form.projectRequestDate}
-                style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '6px 10px', borderRadius: 3, fontSize: 11, color: form.projectRequestDate ? colors.textMute : '#ccc', cursor: form.projectRequestDate ? 'pointer' : 'not-allowed', fontFamily: fontJP, whiteSpace: 'nowrap', flexShrink: 0 }}>
-                クリア
+                disabled={!form.projectRequestDate} title="依頼日をクリア" aria-label="依頼日をクリア"
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', border: `1px solid ${colors.border}`, padding: 8, borderRadius: 4, color: form.projectRequestDate ? colors.textMute : '#ccc', cursor: form.projectRequestDate ? 'pointer' : 'not-allowed', flexShrink: 0 }}>
+                <X size={14} />
               </button>
             </div>
           </div>
           <div>
             <label style={labelStyle}>全体納期（案件共通・任意）</label>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              {/* 日付が見切れないよう、入力欄は列いっぱいに広げる（クリアは常時表示で下段へ回り込む） */}
+            {/* 日付が見切れないよう入力欄を広げ、クリアはアイコンにして1行に収める */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap' }}>
               <input type="date" value={form.projectDeadline || ''}
                 onChange={(e) => setForm({ ...form, projectDeadline: e.target.value })}
-                style={{ ...inputStyle, flex: '1 1 100%', minWidth: 0 }} />
+                style={{ ...inputStyle, flex: '1 1 auto', minWidth: 0 }} />
               <button type="button" onClick={() => setForm({ ...form, projectDeadline: '' })}
-                disabled={!form.projectDeadline}
-                style={{ background: 'transparent', border: `1px solid ${colors.border}`, padding: '6px 10px', borderRadius: 3, fontSize: 11, color: form.projectDeadline ? colors.textMute : '#ccc', cursor: form.projectDeadline ? 'pointer' : 'not-allowed', fontFamily: fontJP, whiteSpace: 'nowrap', flexShrink: 0 }}>
-                クリア
+                disabled={!form.projectDeadline} title="全体納期をクリア" aria-label="全体納期をクリア"
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', border: `1px solid ${colors.border}`, padding: 8, borderRadius: 4, color: form.projectDeadline ? colors.textMute : '#ccc', cursor: form.projectDeadline ? 'pointer' : 'not-allowed', flexShrink: 0 }}>
+                <X size={14} />
               </button>
             </div>
           </div>
