@@ -3,7 +3,7 @@
 // ============ メイン ============
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { AppCtx } from './appContext.js';
-import { COMPANY_PRESETS, DEFAULT_SETTINGS, VIEWPOINT_PRESETS, assignProjectColors, dateToDtLocal, expandHolidayDates, fmtHM, fmtYMD, genId, getHoursPerDay, makeEmptyStep, makeViewpointFromPreset, normalizeCustomerMaster, parseHM, startOfDay, syncHolidays } from './lib/utils.js';
+import { COMPANY_PRESETS, DEFAULT_SETTINGS, VIEWPOINT_PRESETS, assignProjectColors, dateToDtLocal, expandHolidayDates, fmtHM, fmtYMD, genId, getHoursPerDay, kanaNormalize, makeEmptyStep, makeViewpointFromPreset, normalizeCustomerMaster, parseHM, startOfDay, syncHolidays } from './lib/utils.js';
 import { DEFAULT_STEP_TYPES, deliveryBaseName, findStepType, normalizeHistory, normalizeStepTypes, num as vpNum, resolveViewpointSteps, roundTypeOf, stepDeliveryName } from './viewpoint/viewpointUtils.js';
 import { billingStore, memberList, salesStore, signIn, signOutUser, storage, subscribeAuth, tasksStore } from './firebase.js';
 import { computeDeadlineReorder, computeProjectOrder, deadlineInsertPriority, deadlineKey, isOnLeaveAt, latestActualEnd, migrateTask, normalizePriorities, projectEndTs, scheduleTasks, simulateFormSchedule, workingHoursBetweenTs } from './lib/schedule.js';
@@ -724,6 +724,31 @@ export default function App() {
     if (additions.length > 0) saveEmployeeMaster([...employeeMaster, ...additions]);
   };
 
+  // 案件登録/更新時、フォームで初めて入力されたお客様担当者をお客様マスタへ自動追加する。
+  // 会社が指定されていればその会社の担当者として、未指定なら会社名が空のエントリへ登録する。
+  // 既に同じ会社の担当者として存在する場合は何もしない（会社名はカナ・全半角の違いを無視して照合）。
+  const syncCustomerContactToMaster = (company, contact) => {
+    const name = (contact || '').trim();
+    if (!name) return;
+    const comp = (company || '').trim();
+    const compKey = kanaNormalize(comp);
+    const rows = customerMaster || [];
+    const idx = comp
+      ? rows.findIndex(r => kanaNormalize(r.company) === compKey)
+      : rows.findIndex(r => !((r.company || '').trim()));
+    if (idx >= 0) {
+      const has = (rows[idx].contacts || []).some(ct => (ct.name || '').trim() === name);
+      if (has) return; // 既存の担当者 → 何もしない
+      const next = rows.map((r, i) => i === idx
+        ? { ...r, contacts: [...(r.contacts || []), { id: genId('cc'), name }] }
+        : r);
+      saveCustomerMaster(next);
+    } else {
+      // 該当する会社エントリが無い → 新規作成して担当者を登録
+      saveCustomerMaster([...rows, { id: genId('cust'), company: comp, contacts: [{ id: genId('cc'), name }] }]);
+    }
+  };
+
   // 会社名の統合（冪等・該当が無ければ何もしない）：
   // 「株式会社オフィスコム」を「オフィスコム」に統一する。Firestore 上の既存データに対して
   // ブラウザ側で一度きり移行する（タスクの会社名・お客様マスタ・会社の表示順を書き換える）。
@@ -1104,6 +1129,7 @@ export default function App() {
       setTasks(normalized);
       tasksRef.current = normalized;
       syncAssigneesToMaster(finalUpserts);
+      syncCustomerContactToMaster(newCompany, newContact);
       try { await tasksStore.batch(finalUpserts, deletedIds); }
       catch (e) { console.error('編集保存エラー:', e); notify('保存に失敗しました：' + (e?.message || e), { type: 'error' }); }
 
@@ -1121,6 +1147,7 @@ export default function App() {
     if (records.length === 0) { notify('少なくとも1つの視点とステップを入力してください', { type: 'error' }); return false; }
     saveTasks(prev => normalizePriorities([...prev, ...records]));
     syncAssigneesToMaster(records);
+    syncCustomerContactToMaster(form.companyName, form.customerContact);
     if (opts.orderOverride) saveProjectOrder(opts.orderOverride);
     setForm(emptyForm);
     return true;
