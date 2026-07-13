@@ -917,6 +917,8 @@ export default function App() {
           // 中止済みタスクは完了時間に関わらず done のまま維持（戻すのは完了タブの「戻す」で行う）
           const isCancelled = !!existing?.cancelled;
           const status = (isCancelled || autoDone) ? 'done' : 'pending';
+          // 登録日（新規は今日・編集は最初の登録日を維持）。依頼日が未指定ならこの日付を自動反映する。
+          const regDate = existing?.registeredDate || fmtYMD(new Date(baseTime));
           const record = {
             id,
             projectName: form.projectName.trim(),
@@ -943,7 +945,7 @@ export default function App() {
             completedAt: status === 'done' ? (existing?.completedAt || (baseTime + seq)) : null,
             createdAt: existing?.createdAt || (baseTime + seq),
             // 登録日（自動記録・編集しても最初の登録日を維持）。案件の登録日はタスクの最早値
-            registeredDate: existing?.registeredDate || fmtYMD(new Date(baseTime)),
+            registeredDate: regDate,
             // ステップ種類（プルダウン選択のマスタID）と納品名サフィックス（白色/色付/色付2…）
             stepTypeId: resolved.typeId || (step.stepTypeId === '__free__' ? '' : step.stepTypeId) || '',
             stepDeliverySuffix: resolved.deliverySuffix || '',
@@ -951,7 +953,7 @@ export default function App() {
             // 金額が入るのはオフショア案件のみ。ラボ案件（amountApplicable=false）は0（空）に固定。
             // 無料ステップ（種類が無料）も金額を反映しない（空に固定）。
             stepAmount: (!amountApplicable || resolved.paid === false) ? '' : ((step.amount === undefined || step.amount === null) ? '' : String(step.amount).trim()),
-            stepRequestDate: (step.requestDate || '').trim(),
+            stepRequestDate: (step.requestDate || '').trim() || regDate,
             stepCompletedDate: (step.completedDate || '').trim(),
             stepDeliveryNameOverride: (step.deliveryName || '').trim(),
             // ステップごとの請求情報（種類・外注）。請求はステップが唯一の元データ。
