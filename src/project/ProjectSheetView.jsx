@@ -5,7 +5,7 @@
 //   ・ご依頼日 → 各ステップの依頼日（stepRequestDate）／・納品日 → 個別納期（deadline）
 //   ・清算月   → その視点の売上行を指定した月の売上登録表へ計上（未指定なら依頼日の月）
 import { useState, useMemo } from 'react';
-import { Download, Printer } from 'lucide-react';
+import { Download, Printer, Plus, X } from 'lucide-react';
 import { useApp } from '../appContext.js';
 
 const WD = ['日', '月', '火', '水', '木', '金', '土'];
@@ -37,9 +37,10 @@ const toDateInput = (s) => {
 };
 
 export default function ProjectSheetView({ tasks, customerMaster, colors, fontJP, fontDisplay }) {
-  const { patchTasksByIds } = useApp();
+  const { patchTasksByIds, addProjectFromSheet, companyList, assigneeList } = useApp();
   const [company, setCompany] = useState('__all__');
   const [includeDone, setIncludeDone] = useState(true);
+  const [addOpen, setAddOpen] = useState(false);
 
   // 1行＝1視点（カット）に集約
   const allRows = useMemo(() => {
@@ -140,6 +141,15 @@ export default function ProjectSheetView({ tasks, customerMaster, colors, fontJP
 
   return (
     <div style={{ fontFamily: fontJP, color: colors.text }}>
+      {addOpen && (
+        <AddProjectModal
+          defaultCompany={company === '__all__' || company === NO_COMPANY ? '' : company}
+          companyList={companyList || []} assigneeList={assigneeList || []}
+          onAdd={addProjectFromSheet} onClose={() => setAddOpen(false)}
+          colors={colors} fontJP={fontJP} />
+      )}
+      <datalist id="kz-ps-company-list">{(companyList || []).map(c => <option key={c} value={c} />)}</datalist>
+      <datalist id="kz-ps-assignee-list">{(assigneeList || []).map(a => <option key={a} value={a} />)}</datalist>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 6, flexWrap: 'wrap' }}>
         <h2 style={{ fontFamily: fontDisplay, fontSize: 20, fontWeight: 700, margin: 0 }}>案件整理</h2>
         <span style={{ fontSize: 12, color: colors.textMute }}>案件登録の内容を会社ごとに一覧集計します（1行＝1カット／視点）。清算月・ご依頼日・納品日はこの表から編集できます（清算月は売上登録へ反映）。</span>
@@ -157,6 +167,10 @@ export default function ProjectSheetView({ tasks, customerMaster, colors, fontJP
           <input type="checkbox" checked={includeDone} onChange={(e) => setIncludeDone(e.target.checked)} />
           完了を含める
         </label>
+        <button type="button" onClick={() => setAddOpen(true)} title="新規案件をこの表に追加する"
+          style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '7px 12px', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, fontWeight: 600, background: colors.text, color: '#fff', border: `1px solid ${colors.text}` }}>
+          <Plus size={14} /> 新規案件
+        </button>
         <button type="button" onClick={exportCsv} title="表示中の表をCSVで書き出す"
           style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '7px 12px', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, background: '#fff', color: colors.text, border: `1px solid ${colors.border}` }}>
           <Download size={14} /> CSV
@@ -216,6 +230,76 @@ export default function ProjectSheetView({ tasks, customerMaster, colors, fontJP
             ))}
           </tbody>
         </table>
+      </div>
+    </div>
+  );
+}
+
+// ===== 新規案件の追加モーダル =====
+// 案件整理タブから、この表の1行（=1カット/視点）に相当する案件を1件だけ登録する。
+// 収集項目：会社名・社内案件名・案件名（必須）・担当者名・カット名（必須）・制作時間・清算月・ご依頼日・納品日。
+function AddProjectModal({ defaultCompany, onAdd, onClose, colors, fontJP }) {
+  const [d, setD] = useState({
+    companyName: defaultCompany || '', projectNameInternal: '', projectName: '', customerContact: '',
+    assignee: '', viewpointName: 'パース', hours: '1:00',
+    settlementMonth: '', requestDate: '', deliveryDate: '',
+  });
+  const set = (k, v) => setD(prev => ({ ...prev, [k]: v }));
+  const submit = () => { if (onAdd(d)) onClose(); };
+  const label = { fontSize: 11, color: colors.textMute, marginBottom: 3, display: 'block' };
+  const input = (props) => ({ padding: '7px 9px', border: `1px solid ${colors.border}`, borderRadius: 4, fontFamily: fontJP, fontSize: 13, color: colors.text, background: '#fff', boxSizing: 'border-box', width: '100%', ...props });
+  const section = { fontSize: 12, fontWeight: 700, color: colors.text, borderBottom: `1px solid ${colors.border}`, paddingBottom: 4, margin: '14px 0 10px' };
+  const field = (lb, key, type, listId) => (
+    <div>
+      <label style={label}>{lb}</label>
+      {type === 'date'
+        ? <input type="date" value={d[key] || ''} onChange={e => set(key, e.target.value)} style={input()} />
+        : type === 'month'
+          ? <input type="month" value={d[key] || ''} onChange={e => set(key, e.target.value)} style={input()} />
+          : <input value={d[key] ?? ''} onChange={e => set(key, e.target.value)} style={input()} list={listId}
+              onKeyDown={e => { if (e.key === 'Enter') submit(); }} />}
+    </div>
+  );
+  return (
+    <div onClick={onClose}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 16 }}>
+      <div onClick={(e) => e.stopPropagation()}
+        style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 8, width: '100%', maxWidth: 620, maxHeight: '90vh', display: 'flex', flexDirection: 'column', fontFamily: fontJP, boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
+        <div style={{ padding: '14px 20px', borderBottom: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: 10 }}>
+          <h3 style={{ fontSize: 16, margin: 0, fontWeight: 700 }}>新規案件を追加</h3>
+          <span style={{ fontSize: 11, color: colors.textMute }}>この表に1行（1カット/視点）を追加します</span>
+          <button type="button" onClick={onClose} style={{ marginLeft: 'auto', background: 'transparent', border: 'none', cursor: 'pointer', color: colors.textMute, display: 'flex' }}><X size={18} /></button>
+        </div>
+        <div style={{ overflowY: 'auto', padding: '4px 20px 16px', flex: 1 }}>
+          <div style={section}>案件情報</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10 }}>
+            {field('会社名', 'companyName', 'text', 'kz-ps-company-list')}
+            {field('社内案件名', 'projectNameInternal')}
+            {field('案件名（必須）', 'projectName')}
+            {field('担当者名', 'assignee', 'text', 'kz-ps-assignee-list')}
+            {field('カット名（視点名・必須）', 'viewpointName')}
+            {field('制作時間（例 1:30）', 'hours')}
+          </div>
+          <div style={section}>清算・日付</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+            {field('清算月', 'settlementMonth', 'month')}
+            {field('ご依頼日', 'requestDate', 'date')}
+            {field('納品日', 'deliveryDate', 'date')}
+          </div>
+          <div style={{ fontSize: 11, color: colors.textMute, marginTop: 10, lineHeight: 1.6 }}>
+            制作時間を省略すると 1:00 で登録します。詳細な工程・金額は「案件」タブの案件を編集から追記できます。
+          </div>
+        </div>
+        <div style={{ padding: '12px 20px', borderTop: `1px solid ${colors.border}`, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <button type="button" onClick={onClose}
+            style={{ marginLeft: 'auto', padding: '8px 16px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13, color: colors.textMute }}>
+            キャンセル
+          </button>
+          <button type="button" onClick={submit}
+            style={{ padding: '8px 20px', background: colors.text, color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13, fontWeight: 600 }}>
+            追加する
+          </button>
+        </div>
       </div>
     </div>
   );

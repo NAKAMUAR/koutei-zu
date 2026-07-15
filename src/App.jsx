@@ -1472,6 +1472,56 @@ export default function App() {
     saveTasks(prev => prev.map(t => idSet.has(t.id) ? { ...t, ...patch } : t));
   };
 
+  // 案件整理タブからの新規案件追加。
+  // 案件登録フォーム（InputView）を通さず、この表の1行（=1カット/視点）に相当する
+  // タスクを1件だけ作成する軽量な登録。制作時間は既定 1:00（省略時）でスケジュール可能な
+  // 有効タスクにする。清算月・ご依頼日（依頼日）・納品日（個別納期）もそのまま保存する。
+  // 戻り値：作成したら true、バリデーションエラーなら false。
+  const addProjectFromSheet = (info) => {
+    const projectName = (info.projectName || '').trim();
+    const viewpointName = (info.viewpointName || '').trim();
+    if (!projectName) { notify('案件名を入力してください', { type: 'error' }); return false; }
+    if (!viewpointName) { notify('カット名（視点名）を入力してください', { type: 'error' }); return false; }
+    const hours = parseHM(String(info.hours ?? '').trim() || '1:00');
+    if (isNaN(hours) || hours <= 0) { notify('制作時間を正しく入力してください（例: 1:30 または 1.5）', { type: 'error' }); return false; }
+    const companyName = (info.companyName || '').trim();
+    const assignee = (info.assignee || '').trim();
+    const requestDate = (info.requestDate || '').trim();
+    const deadline = (info.deliveryDate || '').trim();
+    const settlementMonth = (info.settlementMonth || '').trim();
+    const baseTime = Date.now();
+    const regDate = fmtYMD(new Date(baseTime));
+    const activeSameCompany = tasksRef.current.filter(t => t.status !== 'done' && (t.companyName || '') === companyName);
+    const priority = deadlineInsertPriority(activeSameCompany, deadlineKey(deadline));
+    const record = {
+      id: `task-${baseTime}-0-${Math.random().toString(36).slice(2, 7)}`,
+      projectName,
+      projectNameInternal: (info.projectNameInternal || '').trim(),
+      companyName,
+      customerContact: (info.customerContact || '').trim(),
+      viewpointName, viewpointNameExternal: '', viewpointCategory: '',
+      stepName: '制作', stepOrder: 0,
+      assignee,
+      priority, hours, completedHours: 0,
+      memo: '', tentative: false, tentativeStart: null, tentativeEnd: null,
+      deadline: deadline || null,
+      projectDeadline: null,
+      projectRequestDate: requestDate || null,
+      manualStart: null, manualEnd: null,
+      status: 'pending', completedAt: null, createdAt: baseTime,
+      registeredDate: regDate,
+      stepTypeId: '', stepDeliverySuffix: '',
+      stepAmount: '',
+      stepRequestDate: requestDate || regDate,
+      stepCompletedDate: '', stepDeliveryNameOverride: '',
+      stepRoundType: '', stepOutInHouse: '', stepOutExternal: '', stepOutVND: '',
+      settlementMonth: settlementMonth || '',
+    };
+    saveTasks(prev => normalizePriorities([...prev, record]));
+    notify('新規案件を追加しました', { type: 'success' });
+    return true;
+  };
+
   // 見積書／発注書を視点のステップ（請求の元データ）から自動作成して帳票へ保存し、帳票ビューへ遷移する。
   const createBillingFromViewpoint = async (group, docType) => {
     try {
@@ -2103,7 +2153,7 @@ export default function App() {
     addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd,
     setTaskAssignee, completeProject, cancelProject, suspendProject, completeViewpoint,
     handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, setViewpointMeta,
-    setStepMeta, patchTasksByIds, createBillingFromViewpoint, saveProjectInfo, setProjectDeadline,
+    setStepMeta, patchTasksByIds, addProjectFromSheet, createBillingFromViewpoint, saveProjectInfo, setProjectDeadline,
     finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, resumeProject,
     registerDraftAndEdit, setActualEnd,
     onDragTask: setDragTaskId, onDropTask: reorderTaskPriority,
