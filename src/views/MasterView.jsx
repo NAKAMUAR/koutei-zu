@@ -230,10 +230,18 @@ function MasterView() {
                 <span style={{ fontSize: 11, fontWeight: 700, color: colors.textMute, flexShrink: 0 }}>契約形態</span>
                 <select value={c.contractType || 'labo'}
                   onChange={(e) => commitCustomers(customers.map(x => x.id === c.id ? { ...x, contractType: e.target.value } : x))}
-                  title="ラボ＝会社名でグループ表示／オフショア＝進行中案件一覧で「オフショア（その他）」に集約（会社名は各案件に表示）"
-                  style={{ ...inputStyle, width: 'auto', flex: '0 0 120px', fontWeight: 600 }}>
+                  title="ラボ＝会社名でグループ表示／オフショア＝進行中案件一覧で「オフショア（その他）」に集約（会社名は各案件に表示）。売上区分の①（オフショア/ラボ）にも反映されます。"
+                  style={{ ...inputStyle, width: 'auto', flex: '0 0 110px', fontWeight: 600 }}>
                   <option value="labo">ラボ</option>
                   <option value="offshore">オフショア</option>
+                </select>
+                <span style={{ fontSize: 11, fontWeight: 700, color: colors.textMute, flexShrink: 0 }}>売上区分</span>
+                <select value={c.salesArea || 'domestic'}
+                  onChange={(e) => commitCustomers(customers.map(x => x.id === c.id ? { ...x, salesArea: e.target.value } : x))}
+                  title="売上登録表への自動連携で使う売上区分の②（国内/国際）。契約形態（①オフショア/ラボ）と組み合わせて区分（例：オフショア国内売上）が決まります。既存の売上行の区分は変わりません（新規連携分に反映）。"
+                  style={{ ...inputStyle, width: 'auto', flex: '0 0 100px', fontWeight: 600 }}>
+                  <option value="domestic">国内</option>
+                  <option value="intl">国際</option>
                 </select>
                 {isCollapsed && (
                   <span style={{ fontSize: 11, color: colors.textMute, flexShrink: 0 }}>担当者{(c.contacts || []).length}名</span>

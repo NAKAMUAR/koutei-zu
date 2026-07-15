@@ -198,6 +198,14 @@ export function isOffshoreCompany(company, customerMaster) {
   return (customerMaster || []).some(c => (c.company || '').trim() === name && c.contractType === 'offshore');
 }
 
+// 会社の売上区分エリア（国内 or 国際）。お客様マスタの salesArea='intl' なら国際、既定は国内。
+export function salesAreaOfCompany(company, customerMaster) {
+  const name = (company || '').trim();
+  if (!name) return 'domestic';
+  const c = (customerMaster || []).find(x => (x.company || '').trim() === name);
+  return c && c.salesArea === 'intl' ? 'intl' : 'domestic';
+}
+
 // 見積時間（制作時間 hours）と実績（完了時間 completedHours）の乖離を集計する。
 // 対象：完了済み（status==='done'）かつ 予定・実績とも時間が入っているステップ。
 // groupBy: 'company'（会社別）| 'assignee'（担当者別）| 'prodType'（制作種類別）

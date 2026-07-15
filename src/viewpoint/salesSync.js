@@ -12,7 +12,7 @@
 import { blankRow } from '../sales/salesUtils.js';
 import {
   normalizeHistory, deliveryBaseName, classifyProdType,
-  viewpointKey, isOffshoreCompany, num, roundTypeOf, stepDeliveryName,
+  viewpointKey, isOffshoreCompany, salesAreaOfCompany, num, roundTypeOf, stepDeliveryName,
 } from './viewpointUtils.js';
 
 // source が所有し、同期のたびに上書きするフィールド。
@@ -21,8 +21,14 @@ const SOURCE_FIELDS = [
   'prodAmount', 'inHouseOutsourcer', 'externalOutsourcer', 'outsourceVND', 'orderDate',
 ];
 
+// 売上区分を2つの属性から決める：
+//   ① オフショア or ラボ（お客様マスタの契約形態 contractType）
+//   ② 国内 or 国際（お客様マスタの売上区分 salesArea）
+// → offshore_dom / offshore_intl / lab_dom / lab_intl のいずれか。
 function categoryForCompany(company, customerMaster) {
-  return isOffshoreCompany(company, customerMaster) ? 'offshore_dom' : 'lab_dom';
+  const group = isOffshoreCompany(company, customerMaster) ? 'offshore' : 'lab';
+  const area = salesAreaOfCompany(company, customerMaster) === 'intl' ? 'intl' : 'dom';
+  return `${group}_${area}`;
 }
 
 // tasks → 売上連携すべきラウンドの一覧。
