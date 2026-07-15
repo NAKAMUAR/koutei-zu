@@ -69,12 +69,17 @@ export function collectSalesSyncRows(tasks, customerMaster) {
     const extName = (vp && vp.viewpointNameExternal) || t.viewpointNameExternal || t.viewpointName;
     const base = deliveryBaseName(t.projectName, extName, vp ? vp.deliveryNameOverride : (t.deliveryNameOverride || ''));
     const date = t.stepRequestDate || t.projectRequestDate || '';
-    const month = /^\d{4}-\d{2}/.test(date) ? date.slice(0, 7) : null;
+    const reqMonth = /^\d{4}-\d{2}/.test(date) ? date.slice(0, 7) : null;
+    // 清算月（案件整理タブで入力）が指定されていれば、その月の売上として計上する。
+    // 既存の連携行があってもその月へ移動させる（pinnedMonth）。未指定なら従来どおり依頼日の月。
+    const settle = /^\d{4}-\d{2}$/.test(String(t.settlementMonth || '').trim()) ? t.settlementMonth.trim() : null;
+    const month = settle || reqMonth;
     const deliveryDate = /^\d{4}-\d{2}-\d{2}/.test(t.stepCompletedDate || '') ? t.stepCompletedDate.slice(0, 10) : '';
     out.push({
       srcVp: viewpointKey(t.projectName, t.viewpointName),
       srcRound: `step:${t.id}`,
       month,
+      pinnedMonth: settle,
       category: categoryForCompany(t.companyName, customerMaster),
       // 種類（初回/追加/修正）。空なら初回扱い。判定不能なら従来どおり 'step'。
       roundType: (t.stepRoundType || '').trim() ? roundTypeOf(t.stepRoundType).id : 'step',
@@ -204,13 +209,25 @@ export function reconcileLedger(ledger, syncRows, fallbackMonth) {
     wanted.add(sr.srcRound);
     const existing = index.get(sr.srcRound);
     if (existing) {
-      const row = next[existing.ym].rows.find(r => r.id === existing.id);
+      let row = next[existing.ym].rows.find(r => r.id === existing.id);
       if (!row) continue;
+      // 清算月（pinnedMonth）が指定され、既存行の月と異なる場合はその月へ移動する。
+      // ユーザが編集した項目（区分・納品日・請求/入金・枚数・備考など）は行ごと引き継ぐ。
+      if (sr.pinnedMonth && existing.ym !== sr.pinnedMonth) {
+        next[existing.ym].rows = next[existing.ym].rows.filter(r => r.id !== existing.id);
+        changedMonths.add(existing.ym);
+        const destYm = sr.pinnedMonth;
+        if (!next[destYm]) next[destYm] = { rows: [], settings: null, updatedAt: Date.now() };
+        next[destYm].rows.push(row);
+        index.set(sr.srcRound, { ym: destYm, id: row.id });
+        changedMonths.add(destYm);
+      }
+      const curYm = index.get(sr.srcRound).ym;
       for (const k of (sr.ownFields || SOURCE_FIELDS)) {
         const v = sr.fields[k] ?? '';
-        if ((row[k] ?? '') !== v) { row[k] = v; changedMonths.add(existing.ym); }
+        if ((row[k] ?? '') !== v) { row[k] = v; changedMonths.add(curYm); }
       }
-      if (row.srcVp !== sr.srcVp) { row.srcVp = sr.srcVp; changedMonths.add(existing.ym); }
+      if (row.srcVp !== sr.srcVp) { row.srcVp = sr.srcVp; changedMonths.add(curYm); }
     } else {
       const ym = sr.month || fallbackMonth;
       if (!next[ym]) next[ym] = { rows: [], settings: null, updatedAt: Date.now() };

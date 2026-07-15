@@ -1,9 +1,12 @@
 // 案件整理タブ：登録済みタスク（案件登録）を会社ごとに一覧集計する表。
-// スプレッドシートの「案件情報一覧」を模した読み取り専用ビュー。
-// 1行＝1カット（視点）。列：番号・社内案件名・案件名・担当者名・制作状況・カット名・ご依頼日・納品日。
-// 編集は「案件」タブの案件登録／案件を編集で行う（この表は集計表示）。
+// スプレッドシートの「案件情報一覧」を模した一覧ビュー。
+// 1行＝1カット（視点）。列：番号・社内案件名・案件名・担当者名・制作状況・カット名・清算月・ご依頼日・納品日。
+// 清算月・ご依頼日・納品日はこの表から直接編集できる（視点内の全ステップへ反映。案件タブと同じデータ）。
+//   ・ご依頼日 → 各ステップの依頼日（stepRequestDate）／・納品日 → 個別納期（deadline）
+//   ・清算月   → その視点の売上行を指定した月の売上登録表へ計上（未指定なら依頼日の月）
 import { useState, useMemo } from 'react';
 import { Download, Printer } from 'lucide-react';
+import { useApp } from '../appContext.js';
 
 const WD = ['日', '月', '火', '水', '木', '金', '土'];
 function fmtJDate(s) {
@@ -28,7 +31,13 @@ const STATUS_COLOR = {
 
 const NO_COMPANY = '（会社名なし）';
 
+const toDateInput = (s) => {
+  const str = String(s || '').trim();
+  return /^\d{4}-\d{2}-\d{2}/.test(str) ? str.slice(0, 10) : '';
+};
+
 export default function ProjectSheetView({ tasks, customerMaster, colors, fontJP, fontDisplay }) {
+  const { patchTasksByIds } = useApp();
   const [company, setCompany] = useState('__all__');
   const [includeDone, setIncludeDone] = useState(true);
 
@@ -62,7 +71,9 @@ export default function ProjectSheetView({ tasks, customerMaster, colors, fontJP
       const indiv = g.tasks.map(t => (t.deadline || '').trim()).filter(Boolean).sort()[0] || '';
       const projDl = (g.tasks.find(t => t.projectDeadline) || {}).projectDeadline || '';
       const deliveryDate = indiv || projDl || '';
-      return { ...g, status: rowStatus(g.tasks), requestDate, deliveryDate };
+      const settlementMonth = g.tasks.map(t => (t.settlementMonth || '').trim()).filter(Boolean)[0] || '';
+      const ids = g.tasks.map(t => t.id);
+      return { ...g, status: rowStatus(g.tasks), requestDate, deliveryDate, settlementMonth, ids };
     });
     out.sort((a, b) =>
       a.company.localeCompare(b.company, 'ja') ||
@@ -96,16 +107,17 @@ export default function ProjectSheetView({ tasks, customerMaster, colors, fontJP
   const th = { border: `1px solid ${colors.border}`, padding: '7px 10px', background: '#3a3a3a', color: '#fff', fontSize: 11.5, fontWeight: 600, whiteSpace: 'nowrap', textAlign: 'left', WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' };
   const td = { border: `1px solid ${colors.border}`, padding: '6px 10px', fontSize: 12.5, background: '#fff', whiteSpace: 'nowrap' };
   const tdC = { ...td, textAlign: 'center' };
+  const cellInput = { border: `1px solid ${colors.border}`, borderRadius: 3, padding: '4px 6px', fontFamily: fontJP, fontSize: 12.5, color: colors.text, background: '#fff', cursor: 'pointer', outline: 'none' };
 
   const exportCsv = () => {
-    const header = ['番号', '会社名', '社内案件名', '案件名', '担当者名', '制作状況', 'カット名', 'ご依頼日', '納品日'];
+    const header = ['番号', '会社名', '社内案件名', '案件名', '担当者名', '制作状況', 'カット名', '清算月', 'ご依頼日', '納品日'];
     const esc = (v) => {
       const s = v == null ? '' : String(v);
       return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
     const lines = [header.join(',')];
     visibleRows.forEach((r, i) => {
-      lines.push([i + 1, r.company === NO_COMPANY ? '' : r.company, r.projectNameInternal, r.projectName, r.assignee, r.status, r.viewpointName, fmtJDate(r.requestDate), fmtJDate(r.deliveryDate)].map(esc).join(','));
+      lines.push([i + 1, r.company === NO_COMPANY ? '' : r.company, r.projectNameInternal, r.projectName, r.assignee, r.status, r.viewpointName, r.settlementMonth, fmtJDate(r.requestDate), fmtJDate(r.deliveryDate)].map(esc).join(','));
     });
     const bom = '﻿';
     const blob = new Blob([bom + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
@@ -130,7 +142,7 @@ export default function ProjectSheetView({ tasks, customerMaster, colors, fontJP
     <div style={{ fontFamily: fontJP, color: colors.text }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 6, flexWrap: 'wrap' }}>
         <h2 style={{ fontFamily: fontDisplay, fontSize: 20, fontWeight: 700, margin: 0 }}>案件整理</h2>
-        <span style={{ fontSize: 12, color: colors.textMute }}>案件登録の内容を会社ごとに一覧集計します（1行＝1カット／視点）。編集は「案件」タブから。</span>
+        <span style={{ fontSize: 12, color: colors.textMute }}>案件登録の内容を会社ごとに一覧集計します（1行＝1カット／視点）。清算月・ご依頼日・納品日はこの表から編集できます（清算月は売上登録へ反映）。</span>
       </div>
 
       {/* 会社タブ */}
@@ -171,13 +183,14 @@ export default function ProjectSheetView({ tasks, customerMaster, colors, fontJP
               <th style={th}>担当者名</th>
               <th style={{ ...th, textAlign: 'center' }}>制作状況</th>
               <th style={th}>カット名</th>
+              <th style={{ ...th, textAlign: 'center' }}>清算月</th>
               <th style={th}>ご依頼日</th>
               <th style={th}>納品日</th>
             </tr>
           </thead>
           <tbody>
             {visibleRows.length === 0 ? (
-              <tr><td style={{ ...td, textAlign: 'center', color: colors.textMute }} colSpan={company === '__all__' ? 9 : 8}>該当する案件がありません</td></tr>
+              <tr><td style={{ ...td, textAlign: 'center', color: colors.textMute }} colSpan={company === '__all__' ? 10 : 9}>該当する案件がありません</td></tr>
             ) : visibleRows.map((r, i) => (
               <tr key={i} style={{ background: i % 2 ? '#faf8f3' : '#fff' }}>
                 <td style={{ ...tdC, color: colors.textMute }}>{i + 1}</td>
@@ -187,8 +200,18 @@ export default function ProjectSheetView({ tasks, customerMaster, colors, fontJP
                 <td style={td}>{r.assignee}</td>
                 <td style={{ ...tdC, color: STATUS_COLOR[r.status] || colors.text, fontWeight: 600 }}>{r.status}</td>
                 <td style={td}>{r.viewpointName}</td>
-                <td style={td}>{fmtJDate(r.requestDate)}</td>
-                <td style={td}>{fmtJDate(r.deliveryDate)}</td>
+                <td style={{ ...tdC, padding: '3px 6px' }}>
+                  <input type="month" value={r.settlementMonth || ''} title="清算月（この視点の売上をこの月の売上登録表へ計上）"
+                    onChange={(e) => patchTasksByIds(r.ids, { settlementMonth: e.target.value })} style={cellInput} />
+                </td>
+                <td style={{ ...td, padding: '3px 6px' }}>
+                  <input type="date" value={toDateInput(r.requestDate)} title="ご依頼日（視点内の全ステップの依頼日へ反映）"
+                    onChange={(e) => patchTasksByIds(r.ids, { stepRequestDate: e.target.value })} style={cellInput} />
+                </td>
+                <td style={{ ...td, padding: '3px 6px' }}>
+                  <input type="date" value={toDateInput(r.deliveryDate)} title="納品日（視点内の全ステップの個別納期へ反映）"
+                    onChange={(e) => patchTasksByIds(r.ids, { deadline: e.target.value })} style={cellInput} />
+                </td>
               </tr>
             ))}
           </tbody>

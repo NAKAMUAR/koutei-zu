@@ -1464,6 +1464,14 @@ export default function App() {
     saveTasks(prev => prev.map(t => t.id === task.id ? { ...t, ...patch } : t));
   };
 
+  // 複数タスク（=案件整理の1行＝1視点に属する全ステップ）へ同じ値を一括反映する。
+  // 案件整理タブの 清算月・ご依頼日・納品日 のインライン編集で使う（1回の保存にまとめる）。
+  const patchTasksByIds = (ids, patch) => {
+    const idSet = new Set(ids || []);
+    if (idSet.size === 0) return;
+    saveTasks(prev => prev.map(t => idSet.has(t.id) ? { ...t, ...patch } : t));
+  };
+
   // 見積書／発注書を視点のステップ（請求の元データ）から自動作成して帳票へ保存し、帳票ビューへ遷移する。
   const createBillingFromViewpoint = async (group, docType) => {
     try {
@@ -2095,7 +2103,7 @@ export default function App() {
     addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd,
     setTaskAssignee, completeProject, cancelProject, suspendProject, completeViewpoint,
     handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, setViewpointMeta,
-    setStepMeta, createBillingFromViewpoint, saveProjectInfo, setProjectDeadline,
+    setStepMeta, patchTasksByIds, createBillingFromViewpoint, saveProjectInfo, setProjectDeadline,
     finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, resumeProject,
     registerDraftAndEdit, setActualEnd,
     onDragTask: setDragTaskId, onDropTask: reorderTaskPriority,
