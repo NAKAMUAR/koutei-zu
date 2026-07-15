@@ -1,0 +1,513 @@
+<title>工程図 デザイン改善 3案</title>
+<style>
+  /* ===== ページ基盤（提案書そのもののスタイル） ===== */
+  :root {
+    --ink: #22262b;
+    --mute: #646a72;
+    --hairline: #e3e5e8;
+    --ground: #fafbfc;
+    --card: #ffffff;
+    --brand: #35507a;
+    --brand-soft: #eef2f8;
+    --good: #1e7d3e;
+    --warn: #b45309;
+    --bad: #b42323;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #e8eaed;
+      --mute: #9aa1ab;
+      --hairline: #33383f;
+      --ground: #17191c;
+      --card: #1f2226;
+      --brand: #8fb0e0;
+      --brand-soft: #253243;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ink: #e8eaed; --mute: #9aa1ab; --hairline: #33383f;
+    --ground: #17191c; --card: #1f2226; --brand: #8fb0e0; --brand-soft: #253243;
+  }
+  :root[data-theme="light"] {
+    --ink: #22262b; --mute: #646a72; --hairline: #e3e5e8;
+    --ground: #fafbfc; --card: #ffffff; --brand: #35507a; --brand-soft: #eef2f8;
+  }
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", Meiryo, sans-serif;
+    line-height: 1.75;
+    margin: 0;
+  }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 48px 24px 96px; }
+  .eyebrow { font-size: 12px; letter-spacing: 0.18em; color: var(--brand); font-weight: 700; margin: 0 0 10px; }
+  h1 { font-size: 30px; font-weight: 700; letter-spacing: 0.02em; margin: 0 0 12px; text-wrap: balance; }
+  .lede { color: var(--mute); font-size: 15px; max-width: 44em; margin: 0 0 28px; }
+  h2 { font-size: 21px; font-weight: 700; margin: 64px 0 6px; letter-spacing: 0.01em; }
+  h2 .no { display: inline-block; min-width: 34px; color: var(--brand); font-variant-numeric: tabular-nums; }
+  .concept { color: var(--mute); font-size: 14px; margin: 0 0 18px; max-width: 48em; }
+  .jump { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 8px; }
+  .jump a {
+    font-size: 13px; text-decoration: none; color: var(--brand);
+    background: var(--brand-soft); border-radius: 999px; padding: 5px 14px; font-weight: 600;
+  }
+  .points { list-style: none; margin: 0 0 22px; padding: 0; display: grid; gap: 6px; font-size: 14px; }
+  .points li { padding-left: 20px; position: relative; }
+  .points li::before { content: "—"; position: absolute; left: 0; color: var(--brand); }
+  /* モック枠（スクリーンショット風フレーム） */
+  .frame { border: 1px solid var(--hairline); border-radius: 10px; overflow: hidden; background: var(--card); box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
+  .frame-bar { display: flex; align-items: center; gap: 6px; padding: 9px 14px; border-bottom: 1px solid var(--hairline); }
+  .frame-bar i { width: 9px; height: 9px; border-radius: 50%; background: var(--hairline); }
+  .frame-bar span { font-size: 11px; color: var(--mute); margin-left: 8px; letter-spacing: 0.04em; }
+  .frame-body { overflow-x: auto; }
+  .frame-body > .mock { min-width: 760px; }
+  /* 評価表 */
+  .eval { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 18px 0 0; }
+  .eval .cell { background: var(--card); border: 1px solid var(--hairline); border-radius: 8px; padding: 12px 14px; }
+  .eval h4 { margin: 0 0 6px; font-size: 12px; letter-spacing: 0.08em; color: var(--mute); font-weight: 700; }
+  .eval p { margin: 0; font-size: 13px; }
+  table.compare { border-collapse: collapse; width: 100%; font-size: 13.5px; background: var(--card); }
+  .compare th, .compare td { border: 1px solid var(--hairline); padding: 9px 12px; text-align: left; vertical-align: top; }
+  .compare th { background: var(--brand-soft); font-size: 12.5px; letter-spacing: 0.04em; }
+  .compare td:first-child { white-space: nowrap; font-weight: 600; }
+  .table-scroll { overflow-x: auto; border-radius: 8px; }
+  .reco { border-left: 3px solid var(--brand); background: var(--card); border-radius: 0 8px 8px 0; padding: 14px 18px; margin-top: 20px; font-size: 14px; }
+  @media (max-width: 720px) { .eval { grid-template-columns: 1fr; } h1 { font-size: 24px; } }
+
+  /* ===== 共通：モック内リセット ===== */
+  .mock, .mock * { box-sizing: border-box; }
+  .mock { line-height: 1.5; }
+  .mock .bar { height: 5px; border-radius: 99px; overflow: hidden; }
+  .mock .bar i { display: block; height: 100%; border-radius: 99px; }
+
+  /* ============================================================
+     現行デザイン（再現）
+     ============================================================ */
+  .m0 { background: #faf8f3; font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; color: #1a1a1a; padding-bottom: 24px; }
+  .m0 .hd { background: #fff; border-bottom: 1px solid #e8e3d6; padding: 16px 24px; display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+  .m0 .logo { font-family: "Hiragino Mincho ProN", "Yu Mincho", serif; font-size: 24px; font-weight: 700; letter-spacing: 0.05em; line-height: 1; }
+  .m0 .logo b { color: #c1272d; }
+  .m0 .logosub { font-size: 9px; color: #6b6b6b; letter-spacing: 0.15em; margin-top: 5px; }
+  .m0 .nav { display: flex; gap: 6px; flex-wrap: wrap; }
+  .m0 .nav span { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: #6b6b6b; border: 1px solid #e8e3d6; border-radius: 4px; padding: 5px 10px; background: transparent; }
+  .m0 .nav .on { background: #c1272d; color: #fff; border-color: #c1272d; }
+  .m0 .body { padding: 16px 24px 0; }
+  .m0 .subtabs { display: flex; gap: 6px; margin-bottom: 14px; }
+  .m0 .subtabs span { font-size: 11px; color: #6b6b6b; border: 1px solid #e8e3d6; border-radius: 3px; padding: 3px 10px; }
+  .m0 .subtabs .on { background: #3a5a40; border-color: #3a5a40; color: #fff; }
+  .m0 .sec { display: flex; align-items: center; gap: 8px; margin: 14px 0 8px; }
+  .m0 .sec .pill { font-size: 12px; font-weight: 700; color: #fff; background: #4a6fa5; border-radius: 12px; padding: 2px 12px; }
+  .m0 .sec small { font-size: 11px; color: #6b6b6b; }
+  .m0 .card { background: #fff; border: 1px solid #e8e3d6; border-radius: 4px; padding: 10px 14px; margin-bottom: 8px; }
+  .m0 .row1 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .m0 .urgent { font-size: 10px; font-weight: 700; color: #fff; background: #c46a16; border-radius: 2px; padding: 2px 6px; }
+  .m0 .cpill { font-size: 10px; font-weight: 600; color: #fff; background: #4a6fa5; border-radius: 10px; padding: 1px 8px; }
+  .m0 .pname { font-size: 14px; font-weight: 600; }
+  .m0 .pext, .m0 .meta { font-size: 11px; color: #6b6b6b; }
+  .m0 .due { font-size: 11px; font-weight: 700; color: #7a8471; margin-left: auto; white-space: nowrap; }
+  .m0 .due.over { color: #c1272d; }
+  .m0 .vp { border-top: 1px dashed #e8e3d6; margin-top: 8px; padding-top: 8px; }
+  .m0 .vphead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .m0 .vpname { font-size: 12px; font-weight: 600; }
+  .m0 .tag { font-size: 10px; color: #6b6b6b; border: 1px solid #e8e3d6; border-radius: 2px; padding: 1px 6px; }
+  .m0 .steps { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+  .m0 .step { font-size: 10px; border: 1px solid #e8e3d6; border-radius: 3px; padding: 3px 8px; color: #6b6b6b; background: #fbf9f4; }
+  .m0 .step.doing { border-color: #3a5a40; color: #3a5a40; background: #eef3ee; }
+  .m0 .step.done { color: #9b9b9b; text-decoration: line-through; }
+  .m0 .bar { background: #eee; width: 120px; }
+  .m0 .bar i { background: #3a5a40; }
+
+  /* ============================================================
+     案1：和モダン・リーダブル（トーン維持で文字と余白を立て直す）
+     ============================================================ */
+  .m1 { background: #f7f4ec; font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; color: #262626; padding-bottom: 28px; }
+  .m1 .hd { background: #fffdf8; border-bottom: 1px solid #ddd6c4; padding: 14px 28px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+  .m1 .logo { font-family: "Hiragino Mincho ProN", "Yu Mincho", serif; font-size: 22px; font-weight: 700; letter-spacing: 0.06em; }
+  .m1 .logo b { color: #b3231f; }
+  .m1 .nav { display: flex; gap: 4px; flex-wrap: wrap; }
+  .m1 .nav span { font-size: 13.5px; font-weight: 500; color: #52504a; border-radius: 6px; padding: 7px 14px; }
+  .m1 .nav .on { background: #b3231f; color: #fff; font-weight: 700; }
+  .m1 .body { padding: 20px 28px 0; }
+  .m1 .subtabs { display: inline-flex; gap: 0; margin-bottom: 20px; border: 1px solid #ddd6c4; border-radius: 8px; overflow: hidden; background: #fffdf8; }
+  .m1 .subtabs span { font-size: 13px; color: #52504a; padding: 7px 16px; border-right: 1px solid #ddd6c4; }
+  .m1 .subtabs span:last-child { border-right: 0; }
+  .m1 .subtabs .on { background: #3a5a40; color: #fff; font-weight: 700; }
+  .m1 .sec { display: flex; align-items: baseline; gap: 10px; margin: 22px 0 10px; padding-bottom: 6px; border-bottom: 2px solid #4a6fa5; }
+  .m1 .sec b { font-size: 16px; font-weight: 700; color: #33455e; }
+  .m1 .sec small { font-size: 12.5px; color: #5c5a54; }
+  .m1 .card { background: #fffdf8; border: 1px solid #e2dcc9; border-left: 4px solid #4a6fa5; border-radius: 8px; padding: 16px 20px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(60,50,20,0.06); }
+  .m1 .row1 { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .m1 .urgent { font-size: 12px; font-weight: 700; color: #9a4a00; background: #fdeeda; border: 1px solid #f0cfa0; border-radius: 4px; padding: 2px 8px; }
+  .m1 .pname { font-size: 16px; font-weight: 700; }
+  .m1 .pext { font-size: 12.5px; color: #5c5a54; }
+  .m1 .meta { font-size: 12.5px; color: #5c5a54; }
+  .m1 .due { margin-left: auto; text-align: right; white-space: nowrap; }
+  .m1 .due b { font-size: 14px; font-weight: 700; color: #3a5a40; font-variant-numeric: tabular-nums; }
+  .m1 .due small { display: block; font-size: 11.5px; color: #5c5a54; }
+  .m1 .due.over b { color: #b3231f; }
+  .m1 .vp { border-top: 1px solid #eee7d6; margin-top: 12px; padding-top: 12px; }
+  .m1 .vphead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .m1 .vpname { font-size: 14px; font-weight: 700; }
+  .m1 .tag { font-size: 12px; color: #52504a; background: #f2ede0; border-radius: 4px; padding: 2px 9px; }
+  .m1 .steps { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; align-items: center; }
+  .m1 .step { font-size: 12.5px; border-radius: 6px; padding: 5px 12px; color: #52504a; background: #f2ede0; }
+  .m1 .step.done { color: #8a887f; background: #efece3; }
+  .m1 .step.done::before { content: "✓ "; color: #3a5a40; }
+  .m1 .step.doing { background: #3a5a40; color: #fff; font-weight: 700; }
+  .m1 .arrow { color: #c9c2ae; font-size: 12px; }
+  .m1 .bar { background: #e7e1cf; width: 150px; }
+  .m1 .bar i { background: #3a5a40; }
+
+  /* ============================================================
+     案2：クリーンSaaS（ニュートラル＋ブルー、状態は淡色チップ）
+     ============================================================ */
+  .m2 { background: #f4f6fa; font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; color: #1a2333; padding-bottom: 28px; }
+  .m2 .hd { background: #fff; border-bottom: 1px solid #e4e8f0; padding: 0 24px; display: flex; align-items: center; gap: 24px; height: 52px; }
+  .m2 .logo { font-size: 16px; font-weight: 800; letter-spacing: 0.02em; white-space: nowrap; }
+  .m2 .logo b { color: #2f54c9; }
+  .m2 .nav { display: flex; gap: 2px; height: 100%; }
+  .m2 .nav span { font-size: 13.5px; font-weight: 500; color: #5b6472; padding: 0 14px; display: inline-flex; align-items: center; border-bottom: 2px solid transparent; }
+  .m2 .nav .on { color: #2f54c9; font-weight: 700; border-bottom-color: #2f54c9; }
+  .m2 .body { padding: 20px 24px 0; }
+  .m2 .subtabs { display: inline-flex; background: #e8ecf4; border-radius: 8px; padding: 3px; margin-bottom: 18px; }
+  .m2 .subtabs span { font-size: 13px; color: #5b6472; padding: 5px 14px; border-radius: 6px; }
+  .m2 .subtabs .on { background: #fff; color: #1a2333; font-weight: 700; box-shadow: 0 1px 2px rgba(20,30,60,0.12); }
+  .m2 .sec { display: flex; align-items: center; gap: 8px; margin: 20px 0 10px; }
+  .m2 .sec .dot { width: 10px; height: 10px; border-radius: 3px; background: #4a6fa5; }
+  .m2 .sec b { font-size: 15px; font-weight: 700; }
+  .m2 .sec small { font-size: 12.5px; color: #5b6472; }
+  .m2 .card { background: #fff; border: 1px solid #e4e8f0; border-radius: 12px; padding: 16px 20px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(20,30,60,0.06); }
+  .m2 .row1 { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .m2 .chip { font-size: 12px; font-weight: 600; border-radius: 999px; padding: 2px 10px; }
+  .m2 .chip.urgent { color: #9a3412; background: #ffedd5; }
+  .m2 .chip.ok { color: #166534; background: #dcfce7; }
+  .m2 .chip.late { color: #b91c1c; background: #fee2e2; }
+  .m2 .pname { font-size: 15.5px; font-weight: 700; }
+  .m2 .pext, .m2 .meta { font-size: 12.5px; color: #5b6472; }
+  .m2 .due { margin-left: auto; white-space: nowrap; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .m2 .vp { border-top: 1px solid #edf0f6; margin-top: 12px; padding-top: 12px; }
+  .m2 .vphead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .m2 .vpname { font-size: 14px; font-weight: 700; }
+  .m2 .tag { font-size: 12px; color: #5b6472; background: #f0f3f8; border-radius: 999px; padding: 2px 10px; }
+  .m2 .steps { display: flex; gap: 0; flex-wrap: wrap; margin-top: 10px; align-items: center; }
+  .m2 .step { font-size: 12.5px; padding: 5px 14px; color: #5b6472; background: #f0f3f8; border: 1px solid #e4e8f0; }
+  .m2 .step:first-child { border-radius: 8px 0 0 8px; }
+  .m2 .step:last-child { border-radius: 0 8px 8px 0; }
+  .m2 .step.done { color: #166534; background: #f0fdf4; }
+  .m2 .step.done::before { content: "✓ "; }
+  .m2 .step.doing { background: #2f54c9; border-color: #2f54c9; color: #fff; font-weight: 700; }
+  .m2 .bar { background: #e8ecf4; width: 150px; }
+  .m2 .bar i { background: #2f54c9; }
+
+  /* ============================================================
+     案3：ダッシュボード（濃色サイドバー＋一覧テーブル）
+     ============================================================ */
+  .m3 { display: flex; font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; color: #22262b; background: #fff; min-height: 460px; }
+  .m3 .side { width: 168px; flex-shrink: 0; background: #232936; color: #b9c0cd; padding: 18px 12px; display: flex; flex-direction: column; gap: 2px; }
+  .m3 .slogo { font-family: "Hiragino Mincho ProN", "Yu Mincho", serif; color: #fff; font-size: 19px; font-weight: 700; letter-spacing: 0.08em; padding: 0 8px 14px; }
+  .m3 .slogo b { color: #e05b52; }
+  .m3 .side span { font-size: 13px; padding: 8px 10px; border-radius: 6px; }
+  .m3 .side .on { background: #e05b52; color: #fff; font-weight: 700; }
+  .m3 .side .grp { margin-top: 14px; font-size: 10.5px; letter-spacing: 0.14em; color: #7d8595; padding: 0 10px 2px; }
+  .m3 .main { flex: 1; padding: 18px 22px; min-width: 0; }
+  .m3 .ttl { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+  .m3 .ttl b { font-size: 17px; font-weight: 700; }
+  .m3 .ttl small { font-size: 12.5px; color: #646a72; }
+  .m3 table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  .m3 th { text-align: left; font-size: 11.5px; letter-spacing: 0.06em; color: #646a72; font-weight: 700; padding: 7px 10px; border-bottom: 2px solid #e3e5e8; white-space: nowrap; }
+  .m3 td { padding: 9px 10px; border-bottom: 1px solid #eef0f2; vertical-align: middle; white-space: nowrap; }
+  .m3 tr.zebra td { background: #f7f8fa; }
+  .m3 tr.gh td { background: #eef1f5; font-weight: 700; font-size: 12.5px; padding: 6px 10px; color: #33455e; }
+  .m3 .name b { font-size: 13.5px; font-weight: 700; display: block; }
+  .m3 .name small { font-size: 11.5px; color: #646a72; }
+  .m3 .st { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; }
+  .m3 .st i { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .m3 .st.run i { background: #2563eb; } .m3 .st.run { color: #1d4ed8; }
+  .m3 .st.wait i { background: #b9c0cd; } .m3 .st.wait { color: #646a72; }
+  .m3 .st.late i { background: #dc2626; } .m3 .st.late { color: #b91c1c; }
+  .m3 .st.done i { background: #16a34a; } .m3 .st.done { color: #15803d; }
+  .m3 .due { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .m3 .due small { color: #646a72; font-weight: 400; margin-left: 4px; }
+  .m3 .due.over { color: #b91c1c; }
+  .m3 .bar { background: #e8ecf1; width: 110px; display: inline-block; vertical-align: middle; }
+  .m3 .bar i { background: #2563eb; }
+  .m3 .pct { font-size: 12px; color: #646a72; margin-left: 8px; font-variant-numeric: tabular-nums; }
+</style>
+
+<div class="wrap">
+  <p class="eyebrow">DESIGN PROPOSAL ・ 2026-07</p>
+  <h1>工程図：見やすさ改善のデザイン3案</h1>
+  <p class="lede">
+    現行UIは生成りの背景に朱赤のアクセントという落ち着いた佇まいですが、本文が10〜11pxと小さく、
+    薄いグレー文字と1pxの罫線だけで情報を区切っているため、案件が増えると「どこを見ればいいか」が掴みにくくなっています。
+    同じ画面（案件タブ・進行中一覧）を題材に、方向性の異なる3案を用意しました。いずれも既存の機能・操作はそのままです。
+  </p>
+  <div class="jump">
+    <a href="#current">現行</a>
+    <a href="#plan1">案1 和モダン・リーダブル</a>
+    <a href="#plan2">案2 クリーンSaaS</a>
+    <a href="#plan3">案3 ダッシュボード型</a>
+    <a href="#compare">比較と推し</a>
+  </div>
+
+  <h2 id="current">現行デザイン（比較用の再現）</h2>
+  <p class="concept">
+    課題の整理：① 本文10〜11pxが多く小さい ② 薄グレー（#6b6b6b）×生成り背景でコントラスト不足
+    ③ 会社ピル・至急・納期・担当がすべて同列に並び、視線の置き場が定まらない ④ カードの区切りが弱く行が溶ける。
+  </p>
+  <div class="frame">
+    <div class="frame-bar"><i></i><i></i><i></i><span>nakamuar.github.io/koutei-zu — 現行</span></div>
+    <div class="frame-body"><div class="mock m0">
+      <div class="hd">
+        <div><div class="logo">工程<b>図</b></div><div class="logosub">SCHEDULE VISUALIZER</div></div>
+        <div class="nav"><span class="on">＋ 案件</span><span>サマリー</span><span>完了</span><span>タスクメモ</span><span>マスタ</span><span>集計・帳票 ▾</span></div>
+      </div>
+      <div class="body">
+        <div class="subtabs"><span class="on">進行中一覧</span><span>カレンダー</span><span>担当者別</span></div>
+        <div class="sec"><span class="pill">山田建設</span><small>進行中 3件</small></div>
+        <div class="card">
+          <div class="row1">
+            <span class="urgent">至急</span><span class="cpill">山田建設</span>
+            <span class="pname">グランドメゾン青葉台</span><span class="pext">外観パース一式</span>
+            <span class="meta">お客様: 田中様</span>
+            <span class="due">全体納期 7/22（水） 残7日</span>
+          </div>
+          <div class="vp">
+            <div class="vphead"><span class="vpname">外観01（昼景）</span><span class="tag">外観</span><span class="tag">担当: 佐藤</span><span class="tag">納期 7/18</span></div>
+            <div class="steps">
+              <span class="step done">モデリング</span>
+              <span class="step doing">テクスチャ・ライティング 3.5h/6h</span>
+              <span class="step">レタッチ 2h</span>
+              <span class="bar"><i style="width:58%"></i></span>
+            </div>
+          </div>
+          <div class="vp">
+            <div class="vphead"><span class="vpname">内観03（リビング）</span><span class="tag">内観</span><span class="tag">担当: 鈴木</span><span class="tag">納期 7/21</span></div>
+            <div class="steps"><span class="step">モデリング 4h</span><span class="step">レタッチ 2h</span><span class="bar"><i style="width:0%"></i></span></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="row1">
+            <span class="cpill">山田建設</span><span class="pname">ヴェルデ府中</span><span class="pext">外観差し替え</span>
+            <span class="meta">お客様: 高橋様</span>
+            <span class="due over">全体納期 7/14（火） 超過1日 ⚠</span>
+          </div>
+          <div class="vp">
+            <div class="vphead"><span class="vpname">外観02（夕景）</span><span class="tag">担当: 佐藤</span><span class="tag">納期 7/14</span></div>
+            <div class="steps"><span class="step done">モデリング</span><span class="step doing">レタッチ 1h/2h</span><span class="bar"><i style="width:80%"></i></span></div>
+          </div>
+        </div>
+      </div>
+    </div></div>
+  </div>
+
+  <h2 id="plan1"><span class="no">案1</span>和モダン・リーダブル</h2>
+  <p class="concept">
+    いまの世界観（生成り×朱赤×明朝ロゴ）はそのままに、「文字を大きく・濃く・余白で区切る」ことに全振りした案。
+    最小フォントを12px、案件名を16pxに引き上げ、納期は右端に定位置化して数字を大きく。
+    工程は「✓済み → 進行中（緑地）→ 未着手」の流れが一目でわかるステップ表示にします。
+  </p>
+  <ul class="points">
+    <li>本文12.5px以上・文字色を1段濃く（#6b6b6b → #5c5a54、見出しは #262626）してコントラスト確保</li>
+    <li>カードに左の色帯（会社色）と薄い影を付け、会社セクションは下線見出しで大きく区切る</li>
+    <li>「至急」バッジはベタ塗りをやめ淡色に。強い色は納期超過（朱赤）だけに絞って警告が埋もれないように</li>
+  </ul>
+  <div class="frame">
+    <div class="frame-bar"><i></i><i></i><i></i><span>案1 — 和モダン・リーダブル</span></div>
+    <div class="frame-body"><div class="mock m1">
+      <div class="hd">
+        <div class="logo">工程<b>図</b></div>
+        <div class="nav"><span class="on">案件</span><span>サマリー</span><span>完了</span><span>タスクメモ</span><span>マスタ</span><span>集計・帳票 ▾</span></div>
+      </div>
+      <div class="body">
+        <div class="subtabs"><span class="on">進行中一覧</span><span>カレンダー</span><span>担当者別</span></div>
+        <div class="sec"><b>山田建設</b><small>進行中 3件</small></div>
+        <div class="card">
+          <div class="row1">
+            <span class="urgent">至急</span>
+            <span class="pname">グランドメゾン青葉台</span><span class="pext">外観パース一式 ／ お客様: 田中様</span>
+            <span class="due"><b>7/22（水）</b><small>全体納期・残り7日</small></span>
+          </div>
+          <div class="vp">
+            <div class="vphead"><span class="vpname">外観01（昼景）</span><span class="tag">外観</span><span class="tag">担当: 佐藤</span><span class="tag">納期 7/18</span></div>
+            <div class="steps">
+              <span class="step done">モデリング</span><span class="arrow">▶</span>
+              <span class="step doing">テクスチャ・ライティング 3.5h/6h</span><span class="arrow">▶</span>
+              <span class="step">レタッチ 2h</span>
+              <span class="bar"><i style="width:58%"></i></span>
+            </div>
+          </div>
+          <div class="vp">
+            <div class="vphead"><span class="vpname">内観03（リビング）</span><span class="tag">内観</span><span class="tag">担当: 鈴木</span><span class="tag">納期 7/21</span></div>
+            <div class="steps"><span class="step">モデリング 4h</span><span class="arrow">▶</span><span class="step">レタッチ 2h</span><span class="bar"><i style="width:0%"></i></span></div>
+          </div>
+        </div>
+        <div class="card" style="border-left-color:#b3231f;">
+          <div class="row1">
+            <span class="pname">ヴェルデ府中</span><span class="pext">外観差し替え ／ お客様: 高橋様</span>
+            <span class="due over"><b>7/14（火）⚠</b><small>全体納期・1日超過</small></span>
+          </div>
+          <div class="vp">
+            <div class="vphead"><span class="vpname">外観02（夕景）</span><span class="tag">担当: 佐藤</span><span class="tag">納期 7/14</span></div>
+            <div class="steps"><span class="step done">モデリング</span><span class="arrow">▶</span><span class="step doing">レタッチ 1h/2h</span><span class="bar"><i style="width:80%"></i></span></div>
+          </div>
+        </div>
+      </div>
+    </div></div>
+  </div>
+  <div class="eval">
+    <div class="cell"><h4>見やすくなる理由</h4><p>文字サイズとコントラストの底上げが主眼。毎日見る「案件名・納期・いまの工程」の3点が最初に目に入る。</p></div>
+    <div class="cell"><h4>変わる印象</h4><p>ほぼ変わらない。いまの和のトーンのまま「読める」ようになる。チームへの説明コストが最小。</p></div>
+    <div class="cell"><h4>実装コスト：小</h4><p>App.jsx の colors 定数＋各ビューの fontSize / padding 調整が中心。レイアウト構造は不変。1〜2日目安。</p></div>
+  </div>
+
+  <h2 id="plan2"><span class="no">案2</span>クリーンSaaS</h2>
+  <p class="concept">
+    背景を淡いブルーグレー、アクセントを青に切り替えた業務ツール然とした案。
+    状態（至急・順調・超過）は淡色チップで統一し、ベタ塗りの色ピルをやめて画面全体の色数を絞ります。
+    工程は連結セグメントで「工程の並び」として読めるように。ヘッダは1段52pxに圧縮し、一覧が1画面に多く入ります。
+  </p>
+  <ul class="points">
+    <li>状態色を「緑=順調・橙=至急・赤=超過・青=進行中」の4色に固定し、意味のない装飾色を排除</li>
+    <li>ナビは下線タブ、サブタブはセグメント切替に。現在地が常に明確</li>
+    <li>会社色は小さな角丸ドットに縮小。会社の識別は残しつつ、彩度の高い面積を減らして本文を主役に</li>
+  </ul>
+  <div class="frame">
+    <div class="frame-bar"><i></i><i></i><i></i><span>案2 — クリーンSaaS</span></div>
+    <div class="frame-body"><div class="mock m2">
+      <div class="hd">
+        <div class="logo">工程<b>図</b></div>
+        <div class="nav"><span class="on">案件</span><span>サマリー</span><span>完了</span><span>タスクメモ</span><span>マスタ</span><span>集計・帳票 ▾</span></div>
+      </div>
+      <div class="body">
+        <div class="subtabs"><span class="on">進行中一覧</span><span>カレンダー</span><span>担当者別</span></div>
+        <div class="sec"><span class="dot"></span><b>山田建設</b><small>進行中 3件</small></div>
+        <div class="card">
+          <div class="row1">
+            <span class="pname">グランドメゾン青葉台</span><span class="pext">外観パース一式 ・ お客様: 田中様</span>
+            <span class="chip urgent">至急</span><span class="chip ok">順調</span>
+            <span class="due">納期 7/22（水）・残7日</span>
+          </div>
+          <div class="vp">
+            <div class="vphead"><span class="vpname">外観01（昼景）</span><span class="tag">外観</span><span class="tag">佐藤</span><span class="tag">7/18 まで</span></div>
+            <div class="steps" style="gap:10px;">
+              <span style="display:inline-flex;">
+                <span class="step done">モデリング</span><span class="step doing">テクスチャ・ライティング 3.5h/6h</span><span class="step">レタッチ 2h</span>
+              </span>
+              <span class="bar"><i style="width:58%"></i></span>
+            </div>
+          </div>
+          <div class="vp">
+            <div class="vphead"><span class="vpname">内観03（リビング）</span><span class="tag">内観</span><span class="tag">鈴木</span><span class="tag">7/21 まで</span></div>
+            <div class="steps" style="gap:10px;">
+              <span style="display:inline-flex;"><span class="step">モデリング 4h</span><span class="step">レタッチ 2h</span></span>
+              <span class="bar"><i style="width:0%"></i></span>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="row1">
+            <span class="pname">ヴェルデ府中</span><span class="pext">外観差し替え ・ お客様: 高橋様</span>
+            <span class="chip late">納期超過 1日</span>
+            <span class="due" style="color:#b91c1c;">納期 7/14（火）</span>
+          </div>
+          <div class="vp">
+            <div class="vphead"><span class="vpname">外観02（夕景）</span><span class="tag">佐藤</span><span class="tag">7/14 まで</span></div>
+            <div class="steps" style="gap:10px;">
+              <span style="display:inline-flex;"><span class="step done">モデリング</span><span class="step doing">レタッチ 1h/2h</span></span>
+              <span class="bar"><i style="width:80%"></i></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div></div>
+  </div>
+  <div class="eval">
+    <div class="cell"><h4>見やすくなる理由</h4><p>色に「意味」だけを持たせるので、赤や橙が見えた瞬間に対応すべき案件が分かる。色弱の方にも判別しやすい配色。</p></div>
+    <div class="cell"><h4>変わる印象</h4><p>大きく変わる。和のトーンから一般的な業務SaaSの見た目へ。人によっては没個性と感じる可能性。</p></div>
+    <div class="cell"><h4>実装コスト：中</h4><p>colors 定数の全面差し替え＋バッジ/チップ類の共通コンポーネント化。構造は同じだが色の置換箇所が多い。3〜4日目安。</p></div>
+  </div>
+
+  <h2 id="plan3"><span class="no">案3</span>ダッシュボード型（サイドバー＋一覧テーブル）</h2>
+  <p class="concept">
+    レイアウトごと変える案。ナビを左の濃色サイドバーへ移し、進行中一覧を「1視点=1行」のテーブルにします。
+    納期・担当・進捗が縦に揃うので、案件数が多い日でも上から下へ走査するだけで全体が掴めます。
+    文字は13pxとコンパクトなまま、「揃え」と「状態ドット」で見やすさを作るアプローチです。
+  </p>
+  <ul class="points">
+    <li>納期・進捗・状態が列で縦に揃う（tabular-nums）ため、複数案件の比較・優先判断が速い</li>
+    <li>ナビがサイドバーに出るため上部の高さを取らず、一覧の表示件数が最大化される</li>
+    <li>会社はグループ行で区切り。状態は「進行中・待機・超過・完了」のドット4色に統一</li>
+  </ul>
+  <div class="frame">
+    <div class="frame-bar"><i></i><i></i><i></i><span>案3 — ダッシュボード型</span></div>
+    <div class="frame-body"><div class="mock m3">
+      <div class="side">
+        <div class="slogo">工程<b>図</b></div>
+        <span class="on">案件</span><span>サマリー</span><span>完了</span><span>タスクメモ</span><span>マスタ</span>
+        <div class="grp">集計・帳票</div>
+        <span>帳票</span><span>売上登録</span><span>案件整理</span><span>会社別集計</span>
+      </div>
+      <div class="main">
+        <div class="ttl"><b>進行中一覧</b><small>7/15（水）時点 ・ 進行中 3件 ・ 超過 1件</small></div>
+        <div style="overflow-x:auto;">
+        <table>
+          <tr><th>案件 / 視点</th><th>担当</th><th>いまの工程</th><th>進捗</th><th>納期</th><th>状態</th></tr>
+          <tr class="gh"><td colspan="6">山田建設（3件）</td></tr>
+          <tr>
+            <td class="name"><b>グランドメゾン青葉台</b><small>外観01（昼景）・至急</small></td>
+            <td>佐藤</td><td>テクスチャ・ライティング</td>
+            <td><span class="bar"><i style="width:58%"></i></span><span class="pct">3.5h/6h</span></td>
+            <td class="due">7/18<small>（土）</small></td>
+            <td><span class="st run"><i></i>進行中</span></td>
+          </tr>
+          <tr class="zebra">
+            <td class="name"><b>グランドメゾン青葉台</b><small>内観03（リビング）</small></td>
+            <td>鈴木</td><td>モデリング（未着手）</td>
+            <td><span class="bar"><i style="width:0%"></i></span><span class="pct">0h/6h</span></td>
+            <td class="due">7/21<small>（火）</small></td>
+            <td><span class="st wait"><i></i>待機</span></td>
+          </tr>
+          <tr>
+            <td class="name"><b>ヴェルデ府中</b><small>外観02（夕景）</small></td>
+            <td>佐藤</td><td>レタッチ</td>
+            <td><span class="bar"><i style="width:80%"></i></span><span class="pct">1h/2h</span></td>
+            <td class="due over">7/14<small>（火）</small></td>
+            <td><span class="st late"><i></i>超過 1日</span></td>
+          </tr>
+          <tr class="gh"><td colspan="6">オフショア（その他）（1件）</td></tr>
+          <tr>
+            <td class="name"><b>コートヤード成城</b><small>外観01</small></td>
+            <td>李</td><td>納品チェック</td>
+            <td><span class="bar"><i style="width:100%"></i></span><span class="pct">4h/4h</span></td>
+            <td class="due">7/16<small>（木）</small></td>
+            <td><span class="st done"><i></i>完了待ち</span></td>
+          </tr>
+        </table>
+        </div>
+      </div>
+    </div></div>
+  </div>
+  <div class="eval">
+    <div class="cell"><h4>見やすくなる理由</h4><p>「揃った列」は視線移動が最短。件数が多い繁忙期ほど効く。超過・至急の抽出も列を見るだけ。</p></div>
+    <div class="cell"><h4>変わる印象</h4><p>最も大きく変わる。管理ツール色が強くなり、カードで1案件をじっくり見る現行の使い勝手からは離れる。</p></div>
+    <div class="cell"><h4>実装コスト：大</h4><p>ナビ移設＋一覧のテーブル化で InputView / ViewpointList の再構成が必要。編集UIの出し方も再設計。1〜2週間目安。</p></div>
+  </div>
+
+  <h2 id="compare">比較と推奨</h2>
+  <div class="table-scroll">
+  <table class="compare">
+    <tr><th></th><th>案1 和モダン・リーダブル</th><th>案2 クリーンSaaS</th><th>案3 ダッシュボード型</th></tr>
+    <tr><td>効く課題</td><td>文字の小ささ・コントラスト不足</td><td>色の氾濫・状態の分かりにくさ</td><td>件数が多いときの一覧性</td></tr>
+    <tr><td>雰囲気の変化</td><td>ほぼなし</td><td>大きい（SaaS風）</td><td>最大（レイアウト刷新）</td></tr>
+    <tr><td>実装コスト</td><td>小（1〜2日）</td><td>中（3〜4日）</td><td>大（1〜2週間）</td></tr>
+    <tr><td>リスク</td><td>ほぼなし</td><td>個性が薄れる</td><td>操作の学び直しが発生</td></tr>
+  </table>
+  </div>
+  <div class="reco">
+    <b>推奨：まず案1、余力があれば案2の「状態チップ」だけ移植。</b><br>
+    案1は colors 定数と文字サイズの調整だけで効果が大きく、既存の操作を一切変えません。
+    その上で案2の「淡色チップ＋意味のある4色」だけを取り込むと、少ないコストで両案のいいとこ取りになります。
+    案3は繁忙期の運用で一覧性に限界を感じたときの次の一手として温存するのが現実的です。
+  </div>
+</div>
