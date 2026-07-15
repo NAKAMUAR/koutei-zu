@@ -36,8 +36,33 @@ const toDateInput = (s) => {
   return /^\d{4}-\d{2}-\d{2}/.test(str) ? str.slice(0, 10) : '';
 };
 
+// 清算月プルダウンの候補（YYYY-MM）。現在月の前後を並べ、既存値が範囲外でも必ず含める。
+const monthYmLabel = (ym) => {
+  const [y, m] = String(ym).split('-');
+  return `${y}年${Number(m)}月`;
+};
+function buildMonthOptions(now, includeValue) {
+  const base = now instanceof Date ? now : new Date();
+  const set = new Set();
+  for (let i = -12; i <= 12; i++) {
+    const dt = new Date(base.getFullYear(), base.getMonth() + i, 1);
+    set.add(`${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`);
+  }
+  if (/^\d{4}-\d{2}$/.test(includeValue || '')) set.add(includeValue);
+  return [...set].sort();
+}
+// 清算月セレクト（（未設定）＋ YYYY年M月 の一覧）
+function MonthSelect({ value, onChange, now, style, title }) {
+  return (
+    <select value={value || ''} onChange={(e) => onChange(e.target.value)} style={style} title={title}>
+      <option value="">（未設定）</option>
+      {buildMonthOptions(now, value).map((ym) => <option key={ym} value={ym}>{monthYmLabel(ym)}</option>)}
+    </select>
+  );
+}
+
 export default function ProjectSheetView({ tasks, customerMaster, colors, fontJP, fontDisplay }) {
-  const { patchTasksByIds, addProjectFromSheet, companyList, assigneeList } = useApp();
+  const { patchTasksByIds, addProjectFromSheet, companyList, assigneeList, now } = useApp();
   const [company, setCompany] = useState('__all__');
   const [includeDone, setIncludeDone] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
@@ -144,7 +169,7 @@ export default function ProjectSheetView({ tasks, customerMaster, colors, fontJP
       {addOpen && (
         <AddProjectModal
           defaultCompany={company === '__all__' || company === NO_COMPANY ? '' : company}
-          companyList={companyList || []} assigneeList={assigneeList || []}
+          companyList={companyList || []} assigneeList={assigneeList || []} now={now}
           onAdd={addProjectFromSheet} onClose={() => setAddOpen(false)}
           colors={colors} fontJP={fontJP} />
       )}
@@ -215,8 +240,9 @@ export default function ProjectSheetView({ tasks, customerMaster, colors, fontJP
                 <td style={{ ...tdC, color: STATUS_COLOR[r.status] || colors.text, fontWeight: 600 }}>{r.status}</td>
                 <td style={td}>{r.viewpointName}</td>
                 <td style={{ ...tdC, padding: '3px 6px' }}>
-                  <input type="month" value={r.settlementMonth || ''} title="清算月（この視点の売上をこの月の売上登録表へ計上）"
-                    onChange={(e) => patchTasksByIds(r.ids, { settlementMonth: e.target.value })} style={cellInput} />
+                  <MonthSelect value={r.settlementMonth || ''} now={now}
+                    title="清算月（この視点の売上をこの月の売上登録表へ計上）"
+                    onChange={(v) => patchTasksByIds(r.ids, { settlementMonth: v })} style={{ ...cellInput, width: '100%' }} />
                 </td>
                 <td style={{ ...td, padding: '3px 6px' }}>
                   <input type="date" value={toDateInput(r.requestDate)} title="ご依頼日（視点内の全ステップの依頼日へ反映）"
@@ -238,7 +264,7 @@ export default function ProjectSheetView({ tasks, customerMaster, colors, fontJP
 // ===== 新規案件の追加モーダル =====
 // 案件整理タブから、この表の1行（=1カット/視点）に相当する案件を1件だけ登録する。
 // 収集項目：会社名・社内案件名・案件名（必須）・担当者名・カット名（必須）・制作時間・清算月・ご依頼日・納品日。
-function AddProjectModal({ defaultCompany, onAdd, onClose, colors, fontJP }) {
+function AddProjectModal({ defaultCompany, now, onAdd, onClose, colors, fontJP }) {
   const [d, setD] = useState({
     companyName: defaultCompany || '', projectNameInternal: '', projectName: '', customerContact: '',
     assignee: '', viewpointName: 'パース', hours: '1:00',
@@ -282,7 +308,11 @@ function AddProjectModal({ defaultCompany, onAdd, onClose, colors, fontJP }) {
           </div>
           <div style={section}>清算・日付</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
-            {field('清算月', 'settlementMonth', 'month')}
+            <div>
+              <label style={label}>清算月</label>
+              <MonthSelect value={d.settlementMonth} now={now}
+                onChange={(v) => set('settlementMonth', v)} style={input({ cursor: 'pointer' })} />
+            </div>
             {field('ご依頼日', 'requestDate', 'date')}
             {field('納品日', 'deliveryDate', 'date')}
           </div>
