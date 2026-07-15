@@ -74,6 +74,35 @@
   .reco { border-left: 3px solid var(--brand); background: var(--card); border-radius: 0 8px 8px 0; padding: 14px 18px; margin-top: 20px; font-size: 14px; }
   @media (max-width: 720px) { .eval { grid-template-columns: 1fr; } h1 { font-size: 24px; } }
 
+  /* ===== スマホ対応：モックを縮小せず折り返しで収める ===== */
+  @media (max-width: 640px) {
+    .wrap { padding: 28px 12px 64px; }
+    .lede, .concept { font-size: 13.5px; }
+    .frame-body > .mock { min-width: 0; }
+    /* 現行・案1・案2：ヘッダとナビを縦積みに */
+    .m0 .hd, .m1 .hd { padding: 12px 14px; }
+    .m0 .body, .m1 .body, .m2 .body { padding: 14px 12px 0; }
+    .m0 .card, .m1 .card, .m2 .card { padding: 12px 12px; }
+    .m1 .due, .m2 .due, .m0 .due { margin-left: 0; width: 100%; text-align: left; }
+    .m1 .due small { display: inline; margin-left: 6px; }
+    .m0 .bar, .m1 .bar, .m2 .bar { width: 100%; margin-top: 4px; }
+    .m1 .arrow { display: none; }
+    .m2 .hd { height: auto; flex-wrap: wrap; padding: 10px 14px; gap: 8px 16px; }
+    .m2 .nav { flex-wrap: wrap; height: auto; gap: 2px 4px; }
+    .m2 .nav span { padding: 4px 10px; border-bottom-width: 2px; }
+    .m2 .steps > span[style] { flex-wrap: wrap; display: flex !important; }
+    .m2 .step:first-child, .m2 .step:last-child { border-radius: 8px; }
+    .m2 .step { border-radius: 8px; }
+    /* 案3：サイドバーを上部の横並びナビに変換。テーブルは横スクロール */
+    .m3 { flex-direction: column; min-height: 0; }
+    .m3 .side { width: auto; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px; padding: 12px; }
+    .m3 .slogo { padding: 0 10px 0 4px; font-size: 17px; }
+    .m3 .side span { font-size: 12px; padding: 5px 9px; }
+    .m3 .side .grp { margin-top: 0; padding: 0 4px; width: auto; }
+    .m3 .main { padding: 14px 12px; }
+    .m3 table { min-width: 620px; }
+  }
+
   /* ===== 共通：モック内リセット ===== */
   .mock, .mock * { box-sizing: border-box; }
   .mock { line-height: 1.5; }
