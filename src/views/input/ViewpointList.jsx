@@ -1,5 +1,5 @@
 // 進行中案件一覧（視点グループ・視点カード・ステップ行・請求パネル）。App.jsx から分割。
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { Fragment, useState, useEffect, useMemo, useRef } from 'react';
 import { useApp } from '../../appContext.js';
 import { dateToDtLocal, dayName, fmtHM, fmtMD, fmtYMD, getProjectColor, isSameDay, minToTime, parseHM, priorityColor, startOfDay } from '../../lib/utils.js';
 import { compareCompanyDisplay, computeProjectOrder, elapsedHoursForSlots } from '../../lib/schedule.js';
@@ -1341,4 +1341,150 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
   );
 }
 
-export { ViewpointGroupList, ViewpointMetaPanel, ViewpointCard, StepRow };
+// ============================================================
+// 表形式ビュー（ダッシュボード型）：1視点=1行の一覧。
+// 納期・担当・進捗が縦に揃うので、案件数が多い日でも上から走査するだけで全体を掴める。
+// 会社ごとにグループ行で区切り、会社内は納期の早い順。案件名クリックで編集フォームを開く。
+// ============================================================
+function ViewpointTable({ groups }) {
+  const {
+    colors, fontJP, now, companyOrder, offshoreCompanies, handleEditProject,
+  } = useApp();
+  const isOffshore = (c) => !!offshoreCompanies && offshoreCompanies.has(c || '');
+  const groupKeyOf = (c) => isOffshore(c) ? 'オフショア（その他）' : (c || '');
+  const todayYmd = fmtYMD(now);
+
+  // 会社ごとにまとめ、会社内は納期の早い順（納期なしは末尾・優先順位順）で並べる
+  const sections = useMemo(() => {
+    const map = new Map();
+    for (const g of groups) {
+      const c = groupKeyOf(g.companyName || '');
+      if (!map.has(c)) map.set(c, { companyName: c, rows: [], remaining: 0 });
+      const sec = map.get(c);
+      sec.rows.push(g);
+      sec.remaining += Math.max(0, (g.totalHours || 0) - (g.completedHours || 0));
+    }
+    const arr = [...map.values()].sort((a, b) => compareCompanyDisplay(a.companyName, b.companyName, companyOrder));
+    for (const sec of arr) {
+      sec.rows.sort((a, b) => {
+        const da = a.deadline || '9999-12-31';
+        const db = b.deadline || '9999-12-31';
+        if (da !== db) return da < db ? -1 : 1;
+        return (a.minPriority || 0) - (b.minPriority || 0);
+      });
+    }
+    return arr;
+  }, [groups, companyOrder, offshoreCompanies]);
+
+  // 1視点の状態を分類する（超過 > 完了 > 進行中 > 待機）
+  const classify = (g) => {
+    const total = g.tasks.length;
+    const doneCount = g.tasks.filter(t => t.status === 'done').length;
+    const allDone = total > 0 && doneCount === total;
+    const overdue = !!g.deadline && g.deadline <= todayYmd && !allDone;
+    const startedTs = g.scheduledStart ? g.scheduledStart.getTime() + (g.scheduledStartMin || 0) * 60000 : null;
+    const started = (startedTs != null && startedTs <= now.getTime()) || (g.completedHours || 0) > 0;
+    if (allDone) return { key: 'done', label: '完了', color: colors.progress };
+    if (overdue) return { key: 'late', label: '超過', color: '#c1272d' };
+    if (started) return { key: 'run', label: '進行中', color: '#2f6fb0' };
+    return { key: 'wait', label: '待機', color: colors.textMute };
+  };
+
+  const th = {
+    textAlign: 'left', fontSize: 11, letterSpacing: '0.04em', color: colors.textMute,
+    fontWeight: 700, padding: '8px 10px', borderBottom: `2px solid ${colors.border}`, whiteSpace: 'nowrap',
+  };
+  const td = { padding: '9px 10px', borderBottom: `1px solid ${colors.border}`, verticalAlign: 'middle' };
+
+  if (sections.length === 0) return null;
+
+  return (
+    <div style={{ overflowX: 'auto', border: `1px solid ${colors.border}`, borderRadius: 8, background: colors.surface }}>
+      <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 720, fontFamily: fontJP, fontSize: 13, color: colors.text }}>
+        <thead>
+          <tr>
+            <th style={{ ...th, minWidth: 220 }}>案件 / 視点</th>
+            <th style={th}>担当</th>
+            <th style={th}>いまの工程</th>
+            <th style={{ ...th, minWidth: 150 }}>進捗</th>
+            <th style={th}>納期</th>
+            <th style={th}>状態</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sections.map((sec) => (
+            <Fragment key={'sec::' + sec.companyName}>
+              <tr>
+                <td colSpan={6} style={{ padding: '7px 10px', background: '#f1ede2', borderBottom: `1px solid ${colors.border}` }}>
+                  <span style={{
+                    display: 'inline-block', fontSize: 12, fontWeight: 700, color: '#fff',
+                    background: getProjectColor(sec.companyName), borderRadius: 10, padding: '2px 10px',
+                  }}>{sec.companyName || '（会社未設定）'}</span>
+                  <span style={{ marginLeft: 10, fontSize: 11, color: colors.textMute }}>
+                    {sec.rows.length}視点 ・ 残 {fmtHM(Math.max(0, sec.remaining))}
+                  </span>
+                </td>
+              </tr>
+              {sec.rows.map((g, ri) => {
+                const total = g.totalHours || 0;
+                const done = g.completedHours || 0;
+                const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+                const st = classify(g);
+                const firstActive = g.tasks.find(t => t.status !== 'done');
+                const stepLabel = firstActive
+                  ? (firstActive.stepName || '（無題ステップ）') + (firstActive.status !== 'done' && (firstActive.completedHours || 0) > 0 ? '（作業中）' : '')
+                  : '全ステップ完了';
+                const dl = g.deadline ? new Date(g.deadline + 'T00:00:00') : null;
+                const overdue = st.key === 'late';
+                const zebra = ri % 2 === 1;
+                const name = g.projectNameInternal || g.projectName;
+                return (
+                  <tr key={g.key} style={{ background: zebra ? '#faf8f3' : 'transparent' }}>
+                    <td style={td}>
+                      <button type="button"
+                        onClick={() => handleEditProject && handleEditProject(g.projectName)}
+                        title={`「${g.projectName}」を編集`}
+                        style={{
+                          background: 'transparent', border: 'none', padding: 0, cursor: 'pointer',
+                          textAlign: 'left', fontFamily: fontJP, color: 'inherit', display: 'block', maxWidth: 320,
+                        }}>
+                        <span style={{ fontSize: 13.5, fontWeight: 700, color: overdue ? '#c1272d' : colors.text }}>{name}</span>
+                        <span style={{ display: 'block', fontSize: 11.5, color: colors.textMute, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {g.viewpointNameExternal || g.viewpointName}
+                          {g.viewpointCategory ? ` ・ ${g.viewpointCategory}` : ''}
+                        </span>
+                      </button>
+                    </td>
+                    <td style={{ ...td, whiteSpace: 'nowrap' }}>{g.assignee || '—'}</td>
+                    <td style={{ ...td, color: firstActive ? colors.text : colors.textMute }}>{stepLabel}</td>
+                    <td style={td}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ flex: '1 1 auto', minWidth: 60, height: 6, background: '#e7e2d5', borderRadius: 99, overflow: 'hidden' }}>
+                          <span style={{ display: 'block', height: '100%', width: pct + '%', background: st.key === 'late' ? '#c1272d' : colors.progress, borderRadius: 99 }} />
+                        </span>
+                        <span style={{ fontSize: 11.5, color: colors.textMute, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+                          {fmtHM(done)}/{fmtHM(total)}
+                        </span>
+                      </div>
+                    </td>
+                    <td style={{ ...td, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums', color: overdue ? '#c1272d' : colors.text, fontWeight: overdue ? 700 : 400 }}>
+                      {dl ? <>{fmtMD(dl)}<span style={{ fontSize: 11, color: overdue ? '#c1272d' : colors.textMute, marginLeft: 3 }}>（{dayName(dl)}）</span></> : <span style={{ color: colors.textMute }}>—</span>}
+                    </td>
+                    <td style={{ ...td, whiteSpace: 'nowrap' }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 600, color: st.color }}>
+                        <span style={{ width: 8, height: 8, borderRadius: '50%', background: st.color, flexShrink: 0 }} />
+                        {st.label}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </Fragment>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+export { ViewpointGroupList, ViewpointMetaPanel, ViewpointCard, StepRow, ViewpointTable };

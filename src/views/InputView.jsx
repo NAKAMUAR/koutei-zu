@@ -8,7 +8,7 @@ import { QuoteModal } from '../components/modals.jsx';
 import { AlertTriangle, ArrowRight, Check, CheckCircle2, ChevronDown, ChevronUp, Folder, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react';
 import { Combobox, DurationSelect, TimeSelect, tabStyle } from '../components/common.jsx';
 import { AssigneeBoard, ReviewSection, SuspendedSection } from './input/sections.jsx';
-import { ViewpointGroupList } from './input/ViewpointList.jsx';
+import { ViewpointGroupList, ViewpointTable } from './input/ViewpointList.jsx';
 import { CalendarView } from './CalendarView.jsx';
 import { AssigneeView } from './AssigneeView.jsx';
 
@@ -1374,6 +1374,9 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
             <button type="button" onClick={() => setListGroupMode('board')} style={tabStyle(listGroupMode === 'board', colors, fontJP)} title="担当者ごとの進行中案件を一目で把握できるボード表示（納期の近い順）">
               担当者ボード
             </button>
+            <button type="button" onClick={() => setListGroupMode('table')} style={tabStyle(listGroupMode === 'table', colors, fontJP)} title="1視点=1行のダッシュボード表。納期・担当・進捗・状態が縦に揃い、多数案件の比較・優先判断が速い（会社別・納期の早い順）">
+              表形式
+            </button>
           </div>
           <div style={{ position: 'relative', flex: '1 1 280px', maxWidth: 480 }}>
             <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: colors.textMute, display: 'flex', alignItems: 'center', pointerEvents: 'none' }}>
@@ -1440,6 +1443,9 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
           <div style={{ background: colors.surface, border: `1px dashed ${colors.border}`, borderRadius: 6, padding: 48, textAlign: 'center', color: colors.textMute, fontSize: 13 }}>
             「{searchQuery}」に一致する案件はありません。
           </div>
+        ) : listGroupMode === 'table' ? (
+          // 表形式（ダッシュボード型）：1視点=1行。会社別・納期の早い順で、進捗・状態が縦に揃う
+          <ViewpointTable groups={groupByViewpoint(filteredActive, vpDeliveryCount)} />
         ) : listGroupMode === 'board' ? (
           // 担当者ボード：担当者ごとの進行中案件を一目で把握できる一覧（④）
           <AssigneeBoard tasks={filteredActive} />
