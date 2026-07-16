@@ -1349,6 +1349,7 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
 function ViewpointTable({ groups }) {
   const {
     colors, fontJP, now, companyOrder, offshoreCompanies, handleEditProject,
+    toggleStatus, addProgress,
   } = useApp();
   const isOffshore = (c) => !!offshoreCompanies && offshoreCompanies.has(c || '');
   const groupKeyOf = (c) => isOffshore(c) ? 'オフショア（その他）' : (c || '');
@@ -1409,13 +1410,14 @@ function ViewpointTable({ groups }) {
             <th style={{ ...th, minWidth: 150 }}>進捗</th>
             <th style={th}>納期</th>
             <th style={th}>状態</th>
+            <th style={{ ...th, textAlign: 'right' }}>操作</th>
           </tr>
         </thead>
         <tbody>
           {sections.map((sec) => (
             <Fragment key={'sec::' + sec.companyName}>
               <tr>
-                <td colSpan={6} style={{ padding: '7px 10px', background: '#f1ede2', borderBottom: `1px solid ${colors.border}` }}>
+                <td colSpan={7} style={{ padding: '7px 10px', background: '#f1ede2', borderBottom: `1px solid ${colors.border}` }}>
                   <span style={{
                     display: 'inline-block', fontSize: 12, fontWeight: 700, color: '#fff',
                     background: getProjectColor(sec.companyName), borderRadius: 10, padding: '2px 10px',
@@ -1475,6 +1477,26 @@ function ViewpointTable({ groups }) {
                         <span style={{ width: 8, height: 8, borderRadius: '50%', background: st.color, flexShrink: 0 }} />
                         {st.label}
                       </span>
+                    </td>
+                    <td style={{ ...td, whiteSpace: 'nowrap', textAlign: 'right' }}>
+                      {firstActive ? (
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}
+                          title={`現在の工程「${firstActive.stepName || '（無題ステップ）'}」への操作`}>
+                          <button type="button" onClick={() => addProgress(firstActive.id, 0.5)} style={progressBtnStyle(colors, fontJP)} title="現在の工程の完了時間に +0.5h">+0.5h</button>
+                          <button type="button" onClick={() => addProgress(firstActive.id, 1)} style={progressBtnStyle(colors, fontJP)} title="現在の工程の完了時間に +1h">+1h</button>
+                          <button type="button" onClick={() => toggleStatus(firstActive.id)}
+                            style={{
+                              display: 'inline-flex', alignItems: 'center', gap: 3, padding: '3px 8px',
+                              background: colors.progress, color: '#fff', border: 'none', borderRadius: 3,
+                              cursor: 'pointer', fontFamily: fontJP, fontSize: 11, fontWeight: 600,
+                            }}
+                            title="現在の工程を完了にする（次の未完了ステップへ進む）">
+                            <Check size={12} />完了
+                          </button>
+                        </div>
+                      ) : (
+                        <span style={{ color: colors.textMute, fontSize: 11 }}>—</span>
+                      )}
                     </td>
                   </tr>
                 );
