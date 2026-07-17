@@ -13,13 +13,21 @@ function MasterView() {
     addOvertime, removeOvertime, addAbsence, removeAbsence, addHolidays, removeHoliday,
     saveCompanyOrder,
   } = useApp();
-  // ローカル下書き（入力中の値）。props が更新されたら同期する
+  // ローカル下書き（入力中の値）。props が更新されたら同期する。
+  // ただし入力中（未コミット）の下書きは、自分の保存が Firestore から echo で戻ってきた
+  // タイミングで上書きして消してしまわないようガードする。これが無いと
+  // 「会社を追加 → 社名を入力中」に直前の保存の echo が届いて入力が消え、
+  // 何度打っても登録が反映されないように見える（例: パンとエスプレッソと）。
+  // onChange 中は editing*.current=true、保存（コミット）で false に戻す。
   const [customers, setCustomers] = useState(customerMaster);
   const [employees, setEmployees] = useState(employeeMaster);
   const [stepTypes, setStepTypes] = useState(stepTypeMaster || []);
-  useEffect(() => { setCustomers(customerMaster); }, [customerMaster]);
-  useEffect(() => { setEmployees(employeeMaster); }, [employeeMaster]);
-  useEffect(() => { setStepTypes(stepTypeMaster || []); }, [stepTypeMaster]);
+  const editingCustomers = useRef(false);
+  const editingEmployees = useRef(false);
+  const editingStepTypes = useRef(false);
+  useEffect(() => { if (!editingCustomers.current) setCustomers(customerMaster); }, [customerMaster]);
+  useEffect(() => { if (!editingEmployees.current) setEmployees(employeeMaster); }, [employeeMaster]);
+  useEffect(() => { if (!editingStepTypes.current) setStepTypes(stepTypeMaster || []); }, [stepTypeMaster]);
 
   // 表示切替：お客様設定 / 従業員設定 / 会社の表示順（進行中案件のタブと同じ要領）
   const [masterTab, setMasterTab] = useState('customer');
@@ -48,20 +56,20 @@ function MasterView() {
   const newId = (p) => `${p}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
   // お客様マスタ（会社ごとに担当者をまとめる）
-  const commitCustomers = (next) => { setCustomers(next); saveCustomerMaster(next); };
+  const commitCustomers = (next) => { editingCustomers.current = false; setCustomers(next); saveCustomerMaster(next); };
   const addCompany = () => commitCustomers([...customers, { id: newId('cust'), company: '', contacts: [{ id: newId('cc'), name: '' }] }]);
   const removeCompany = (cid) => commitCustomers(customers.filter(c => c.id !== cid));
-  const setCompanyField = (cid, field, val) => setCustomers(cs => cs.map(c => c.id === cid ? { ...c, [field]: val } : c));
+  const setCompanyField = (cid, field, val) => { editingCustomers.current = true; setCustomers(cs => cs.map(c => c.id === cid ? { ...c, [field]: val } : c)); };
   const addContact = (cid) => commitCustomers(customers.map(c => c.id === cid ? { ...c, contacts: [...(c.contacts || []), { id: newId('cc'), name: '' }] } : c));
   const removeContact = (cid, ctid) => commitCustomers(customers.map(c => c.id === cid ? { ...c, contacts: (c.contacts || []).filter(ct => ct.id !== ctid) } : c));
-  const setContactField = (cid, ctid, field, val) => setCustomers(cs => cs.map(c => c.id === cid ? { ...c, contacts: (c.contacts || []).map(ct => ct.id === ctid ? { ...ct, [field]: val } : ct) } : c));
-  const commitCustomersNow = () => saveCustomerMaster(customers);
+  const setContactField = (cid, ctid, field, val) => { editingCustomers.current = true; setCustomers(cs => cs.map(c => c.id === cid ? { ...c, contacts: (c.contacts || []).map(ct => ct.id === ctid ? { ...ct, [field]: val } : ct) } : c)); };
+  const commitCustomersNow = () => { editingCustomers.current = false; saveCustomerMaster(customers); };
 
   // 従業員マスタ
-  const addEmployee = () => { const next = [...employees, { id: newId('emp'), name: '', role: '' }]; setEmployees(next); saveEmployeeMaster(next); };
-  const setEmployeeField = (id, field, val) => setEmployees(es => es.map(e => e.id === id ? { ...e, [field]: val } : e));
-  const commitEmployees = () => saveEmployeeMaster(employees);
-  const removeEmployee = (id) => { const next = employees.filter(e => e.id !== id); setEmployees(next); saveEmployeeMaster(next); };
+  const addEmployee = () => { editingEmployees.current = false; const next = [...employees, { id: newId('emp'), name: '', role: '' }]; setEmployees(next); saveEmployeeMaster(next); };
+  const setEmployeeField = (id, field, val) => { editingEmployees.current = true; setEmployees(es => es.map(e => e.id === id ? { ...e, [field]: val } : e)); };
+  const commitEmployees = () => { editingEmployees.current = false; saveEmployeeMaster(employees); };
+  const removeEmployee = (id) => { editingEmployees.current = false; const next = employees.filter(e => e.id !== id); setEmployees(next); saveEmployeeMaster(next); };
   // 並び順の変更（この順がカレンダー・担当者別・サマリーの表示順になる）
   const moveEmployee = (id, dir) => {
     const i = employees.findIndex(e => e.id === id);
@@ -69,6 +77,7 @@ function MasterView() {
     if (i < 0 || j < 0 || j >= employees.length) return;
     const next = [...employees];
     [next[i], next[j]] = [next[j], next[i]];
+    editingEmployees.current = false;
     setEmployees(next);
     saveEmployeeMaster(next);
   };
@@ -82,16 +91,17 @@ function MasterView() {
     const rest = employees.filter(e => e.id !== srcId);
     const ti = rest.findIndex(e => e.id === targetId);
     const next = ti < 0 ? [...rest, src] : [...rest.slice(0, ti), src, ...rest.slice(ti)];
+    editingEmployees.current = false;
     setEmployees(next);
     saveEmployeeMaster(next);
   };
 
   // ステップ種類マスタ（新規案件のステップ・プルダウンの選択肢）
-  const commitStepTypes = (next) => { setStepTypes(next); saveStepTypeMaster(next); };
+  const commitStepTypes = (next) => { editingStepTypes.current = false; setStepTypes(next); saveStepTypeMaster(next); };
   const addStepType = () => commitStepTypes([...stepTypes, { id: newId('st'), label: '', paid: true, deliveryBase: '', numbered: false }]);
   const removeStepType = (id) => commitStepTypes(stepTypes.filter(s => s.id !== id));
-  const setStepTypeField = (id, field, val) => setStepTypes(ss => ss.map(s => s.id === id ? { ...s, [field]: val } : s));
-  const commitStepTypesNow = () => saveStepTypeMaster(stepTypes);
+  const setStepTypeField = (id, field, val) => { editingStepTypes.current = true; setStepTypes(ss => ss.map(s => s.id === id ? { ...s, [field]: val } : s)); };
+  const commitStepTypesNow = () => { editingStepTypes.current = false; saveStepTypeMaster(stepTypes); };
   const moveStepType = (id, dir) => {
     const i = stepTypes.findIndex(s => s.id === id);
     const j = i + dir;
