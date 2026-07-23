@@ -107,9 +107,12 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
     vps[vi] = { ...vps[vi], [field]: value };
     setForm({ ...form, viewpoints: vps });
   };
+  // 視点の担当者を変更する。編集時（既存タスク）は各ステップが自分の担当者（step.assignee）を
+  // 保持しており、保存時（buildRecords）は step.assignee が視点担当者より優先される。
+  // そのため視点の担当者だけ変えても反映されない。ここで視点内の全ステップの担当者も揃える。
   const updateViewpointAssignee = (vi, value) => {
     const vps = [...form.viewpoints];
-    vps[vi] = { ...vps[vi], assignee: value };
+    vps[vi] = { ...vps[vi], assignee: value, steps: (vps[vi].steps || []).map(s => ({ ...s, assignee: value })) };
     setForm({ ...form, viewpoints: vps });
   };
   const addStep = (vi) => {
@@ -236,7 +239,8 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
     setAssigneeSuggestions(out);
   };
   const applySuggestedAssignee = (a) => {
-    setForm({ ...form, assignee: a, viewpoints: (form.viewpoints || []).map(vp => ({ ...vp, assignee: a })) });
+    // 視点だけでなく各ステップの担当者も揃える（保存時にステップ担当者が優先されるため）
+    setForm({ ...form, assignee: a, viewpoints: (form.viewpoints || []).map(vp => ({ ...vp, assignee: a, steps: (vp.steps || []).map(s => ({ ...s, assignee: a })) })) });
     setAssigneeSuggestions(null);
   };
 
@@ -750,7 +754,8 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                     if (!(await confirmDialog({ message: `この案件の全視点（${form.viewpoints.length}件）の担当者を「${a}」に一括変更します。よろしいですか？`, confirmLabel: '一括変更' }))) return;
                     setForm({
                       ...form,
-                      viewpoints: form.viewpoints.map(vp => ({ ...vp, assignee: a })),
+                      // 視点だけでなく各ステップの担当者も揃える（保存時にステップ担当者が優先されるため）
+                      viewpoints: form.viewpoints.map(vp => ({ ...vp, assignee: a, steps: (vp.steps || []).map(s => ({ ...s, assignee: a })) })),
                     });
                   }}
                   title="入力した担当者を、この案件の全視点に一括反映"
