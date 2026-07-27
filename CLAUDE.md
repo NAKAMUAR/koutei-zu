@@ -52,7 +52,21 @@ src/
   views/             # 画面単位（案件=InputView・カレンダー・担当者別・サマリー・完了・マスタ・メモ）
     input/           # 案件タブの下位部品（一覧・視点カード・ステップ行・各セクション）
   billing/ sales/ project/ viewpoint/  # 帳票・売上・案件整理・視点ロジック（従来どおり）
+bot/
+  worker.js          # Telegram Bot（Cloudflare Worker）。アプリのビルド対象外・依存なし・AI不使用
 ```
+
+### bot/worker.js について（Telegram 連携）
+
+チャットから案件登録（ボタン対話式）と状況確認ができる Cloudflare Worker。**Vite のビルド対象外**なので
+`npm run build` / `npm run deploy` には影響しない（更新は Cloudflare の Edit code に貼り直して Deploy）。
+
+- 設計: `docs/08_チャット連携（外部AIエージェント）設計.md` / 手順: `docs/09_Telegram連携セットアップ手順.md`
+- **タスクのフィールド構成は `src/App.jsx` の `buildRecords` と揃えてある。スキーマを変えたら `bot/worker.js` の
+  `buildTasks` も必ず更新すること**（設計書 第10.2章が両者の契約）
+- `kanaNormalize` / `parseHM` / `fmtHM` / `resolveViewpointSteps` は `src/lib/utils.js` `src/viewpoint/viewpointUtils.js`
+  からの移植。アプリ側を変えたら合わせる
+- `hours` は**小数時間**（8時間 = `8`、4時間30分 = `4.5`）。分ではない
 
 ## 技術スタック
 
