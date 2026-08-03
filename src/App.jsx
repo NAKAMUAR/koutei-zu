@@ -854,6 +854,7 @@ export default function App() {
   // 登録/更新のエントリ：開始時間が指定どおりに置けない場合、
   // または視点の終了予定が納期を超える場合は確認モーダルを出す
   const handleSubmit = async () => {
+    if (submitInFlight.current) return; // 送信処理中の再クリックは無視（二重登録防止）
     if (form.projectName.trim()) {
       const sim = simulateFormSchedule(form, tasksRef.current, settings, projectOrder, new Date());
       const hasStartPin = (form.viewpoints || []).some(v => v.manualStart);
@@ -879,9 +880,20 @@ export default function App() {
     await performSubmit();
   };
 
+  // 二重送信ガード：ボタン連打・確認モーダルの二重操作で同じ内容が二重登録されるのを防ぐ
+  const submitInFlight = useRef(false);
+  const [submitting, setSubmitting] = useState(false);
+  const performSubmit = async (opts = {}) => {
+    if (submitInFlight.current) return false;
+    submitInFlight.current = true;
+    setSubmitting(true);
+    try { return await performSubmitInner(opts); }
+    finally { submitInFlight.current = false; setSubmitting(false); }
+  };
+
   // 登録/更新の本体（確認モーダルを通過したあとに実際に保存する処理）
   // opts.orderOverride: 納期超過時の繰り上げで採用する案件並び順（完全な案件名リスト）
-  const performSubmit = async (opts = {}) => {
+  const performSubmitInner = async (opts = {}) => {
     if (!form.projectName.trim()) {
       notify('案件名を入力してください', { type: 'error' });
       return false;
@@ -2147,6 +2159,7 @@ export default function App() {
     companyOrder: settings.companyOrder || [],
     usedCompanies: [...new Set(tasks.map(t => (t.companyName || '').trim()).filter(Boolean))],
     dragTaskId,
+    submitting, // 登録/更新の送信処理中（登録ボタンの連打防止・無効化表示に使う）
     // タスク・案件・視点の操作
     handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject,
     handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority,

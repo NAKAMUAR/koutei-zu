@@ -7,6 +7,15 @@ import { Check, CheckCircle2, ChevronDown, ChevronUp, Clock, Copy, Edit2, FileTe
 import { ROUND_TYPES, deliveryBaseName, num as vpNum, roundTypeOf, stepDeliveryName } from '../../viewpoint/viewpointUtils.js';
 import { DateTimeField, iconBtnStyle, miniBtnStyle, progressBtnStyle } from '../../components/common.jsx';
 
+// 登録日時（createdAt）の表示用フォーマット：M/D HH:MM（年が違う場合のみ YYYY/ を前置）
+function fmtRegDateTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return '';
+  const y = d.getFullYear() !== new Date().getFullYear() ? `${d.getFullYear()}/` : '';
+  return `${y}${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
 function ViewpointGroupList({ groups, allActive, sortMode, defaultCollapsed }) {
   const {
     colors, fontJP, now, companyOrder, projectOrder, saveProjectOrder,
@@ -759,6 +768,13 @@ function ViewpointCard({ group, allSortedIds, companyFirstIds, companyLastIds })
               }}>{group.companyName}</span>
             )}
             {group.customerContact && <span>担当: {group.customerContact}</span>}
+            {(() => {
+              // 視点の登録日時＝この視点のステップのうち最初の登録時刻（createdAt の最小値）
+              const ts = (group.tasks || []).reduce((m, t) => (t.createdAt && t.createdAt < m ? t.createdAt : m), Infinity);
+              return Number.isFinite(ts)
+                ? <span title="この視点の登録日時（最初のステップの登録時刻）">登録 {fmtRegDateTime(ts)}</span>
+                : null;
+            })()}
             <span style={{ color: '#9c8e5e' }}>制作時間 {fmtHM(workedHours)} / 制作予定時間 {fmtHM(group.totalHours)}</span>
             <span>完了 {fmtHM(group.completedHours)}</span>
             <span style={{ color: colors.accent, fontWeight: 600 }}>残 {fmtHM(remainingHours)}</span>
@@ -1154,8 +1170,9 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
                   </span>
                 )}
               </div>
-              {(task.stepRequestDate || cdStr || amt > 0) && (
+              {(task.createdAt || task.stepRequestDate || cdStr || amt > 0) && (
                 <div style={{ fontSize: 10.5, color: colors.textMute, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 4 }}>
+                  {task.createdAt && <span title="このステップの登録日時">登録 {fmtRegDateTime(task.createdAt)}</span>}
                   {task.stepRequestDate && <span>依頼 {task.stepRequestDate}</span>}
                   {cdStr && <span>完了 {cdStr}</span>}
                   {amt > 0 && <span style={{ color: '#3a7bd5', fontWeight: 600 }}>¥{Math.round(amt).toLocaleString('ja-JP')}</span>}

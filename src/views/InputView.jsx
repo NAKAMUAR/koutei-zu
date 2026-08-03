@@ -19,7 +19,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
     projectOrder, projectList, projectInternalList, viewpointList,
     assigneeList, assigneeOrder, companyList, customerMaster,
     stepTypeMaster, vpDeliveryCount,
-    registerDraftAndEdit, confirmDialog, notify,
+    registerDraftAndEdit, handleEditProject, submitting, confirmDialog, notify,
   } = useApp();
   // お客様担当者の候補：会社名を選んでいればその会社に所属する担当者を表示
   // （会社名はひらがな/カタカナ/全半角の違いを無視して照合）
@@ -472,6 +472,26 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
   const applyRecall = async () => {
     const proj = recallMatch;
     if (!proj) return;
+    // 進行中案件：新規登録として視点を再展開すると、既存のステップがそのまま
+    // 新規タスクとして二重登録されてしまう（過去に発生）。案件編集（既存ステップと
+    // taskId で紐付いた状態）で開き、各視点の末尾に空の「修正」ステップを足して渡す。
+    // 空のままなら登録されず、時間を入れたステップだけが追加される。
+    if (proj.hasActive) {
+      if (isFormDirty() && !(await confirmDialog({
+        message: `入力中の内容を破棄して、進行中案件「${proj.projectName}」の編集画面を開きます。よろしいですか？`,
+        confirmLabel: '編集画面を開く',
+      }))) return;
+      handleEditProject(proj.projectName);
+      setForm(prev => ({
+        ...prev,
+        viewpoints: (prev.viewpoints || []).map(vp => ({
+          ...vp,
+          steps: [...(vp.steps || []), { ...makeEmptyStep('修正'), roundType: 'fix' }],
+        })),
+      }));
+      notify(`進行中案件「${proj.projectName}」を編集画面で開き、各視点に空の「修正」ステップを追加しました。制作時間を入れて「更新する」と追加登録されます（既存ステップは二重登録されません）`);
+      return;
+    }
     const vpDirty = (form.viewpoints || []).some(vp =>
       (vp.viewpointNameExternal || '').trim() || (vp.deadline || '').trim() || (vp.assignee || '').trim() ||
       (vp.steps || []).some(s => String(s.hours ?? '').trim() || String(s.completedHours ?? '').trim()));
@@ -880,7 +900,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
         {recallMatch && recallState.name === recallMatch.projectName && recallState.status === 'applied' && (
           <div style={{ border: '1px solid #bcd3b0', background: '#f3f8f0', borderRadius: 6, padding: '10px 14px', marginBottom: 16, fontSize: 12.5, color: '#3a5a40', display: 'flex', alignItems: 'center', gap: 8 }}>
             <CheckCircle2 size={15} style={{ flexShrink: 0 }} />
-            {recallMatch.hasActive ? '進行中案件' : '過去案件'}「{recallMatch.projectName}」の視点を過去のステップ構成（種類=修正／制作時間・完了時間を復元）で展開しました。不要な視点・ステップは削除し、必要に応じて時間を調整して登録してください。
+            過去案件「{recallMatch.projectName}」の視点を過去のステップ構成（種類=修正／制作時間・完了時間を復元）で展開しました。不要な視点・ステップは削除し、必要に応じて時間を調整して登録してください。
           </div>
         )}
         {recallMatch && recallState.name !== recallMatch.projectName && (
@@ -929,11 +949,11 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                   padding: '7px 14px', cursor: 'pointer', fontFamily: fontJP, fontSize: 12, fontWeight: 600,
                   display: 'flex', alignItems: 'center', gap: 6,
                 }}>
-                <RotateCcw size={13} /> {recallMatch.hasActive ? 'この案件へ追加・修正を登録（視点を展開）' : '過去案件を呼び出す（視点を修正として展開）'}
+                <RotateCcw size={13} /> {recallMatch.hasActive ? 'この案件の編集画面を開く（修正ステップを追加）' : '過去案件を呼び出す（視点を修正として展開）'}
               </button>
               <span style={{ fontSize: 11, color: colors.textMute }}>
                 {recallMatch.hasActive
-                  ? '既存の視点に種類「修正」のステップを付けて展開し、進行中案件への追加の登録として登録できます（別案件として二重登録されるのを防ぎます）。'
+                  ? '進行中案件を編集画面で開き、各視点の末尾に空の「修正」ステップを追加します。既存のステップはそのまま維持され、二重登録されません。'
                   : '過去の視点に種類「修正」のステップを付けて展開します。案件・視点名が過去と揃うため、完了タブの「視点別 修正集計」に自動で乗ります。'}
               </span>
             </div>
@@ -1032,7 +1052,16 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                         </select>
                       </div>
                     )}
-                    <button type="button" onClick={() => removeViewpoint(vi)}
+                    <button type="button" onClick={async () => {
+                        // 視点削除は必ず確認を挟む（誤クリックでステップ構成が消えるのを防ぐ）
+                        const vpLabel = (vp.viewpointName || '').trim() || `視点 ${vi + 1}`;
+                        const hasSaved = (vp.steps || []).some(s => s.taskId);
+                        const note = hasSaved
+                          ? '\n登録済みのステップを含む視点です。実際の削除は「更新する」を押した時に確定します。'
+                          : '';
+                        if (!(await confirmDialog({ title: '視点の削除', message: `視点「${vpLabel}」をフォームから削除しますか？${note}`, confirmLabel: '削除する' }))) return;
+                        removeViewpoint(vi);
+                      }}
                       disabled={form.viewpoints.length <= 1}
                       style={{
                         background: '#fff', border: `1px solid ${colors.border}`,
@@ -1329,14 +1358,14 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
           </div>
 
         <div style={{ marginTop: 20, display: 'flex', justifyContent: 'flex-end' }}>
-          <button onClick={handleSubmit}
+          <button onClick={handleSubmit} disabled={submitting}
             style={{
-              padding: '10px 24px', background: colors.text, color: '#fff',
-              border: 'none', borderRadius: 4, cursor: 'pointer',
+              padding: '10px 24px', background: submitting ? colors.textMute : colors.text, color: '#fff',
+              border: 'none', borderRadius: 4, cursor: submitting ? 'wait' : 'pointer',
               fontFamily: fontJP, fontSize: 14, fontWeight: 500,
               display: 'flex', alignItems: 'center', gap: 6,
             }}>
-            {editMode ? <><Check size={16} /> 更新する</> : <><Plus size={16} /> 登録する</>}
+            {submitting ? '保存中…' : editMode ? <><Check size={16} /> 更新する</> : <><Plus size={16} /> 登録する</>}
           </button>
         </div>
         </>)}
