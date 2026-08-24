@@ -6,3 +6,7 @@ dist
 *.log
 service-account.json
 *-firebase-adminsdk-*.json
+
+# bot のテストが生成する一時ファイル
+bot/test/.worker.mjs
+bot/test/.*.out
