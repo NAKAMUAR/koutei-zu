@@ -1,306 +1,965 @@
 /**
- * 工程図（koutei-zu）スプレッドシート → Firestore 同期
+ * 工程図（koutei-zu）連携シート用 Apps Script
  *
- * 機能:
- *  - 案件シートの 3832 行目以降の AD 列(チェックボックス)=FALSE の行を取得
- *  - 社外案件名(C列)/社内案件名(B列)/視点名(D列)/制作時間(J+Q)/担当者(H列) を抽出
- *  - externalId = `${正規化案件コード}::${視点名}` で重複防止
- *  - 既存タスクは hours/projectName/projectNameInternal のみ更新（priority/completedHours/assignee 等は維持）
- *  - シートから消えた既存タスクは残す（自動削除しない）
- *  - 結果を Firestore workspaces/${WORKSPACE_ID}/data/tasks に書き戻す
+ * このスクリプトは「工程図連携」スプレッドシート（スタッフには共有しない別ファイル）に貼り付けて使う。
  *
- * 使い方:
- *  1. スプレッドシートのメニュー: 拡張機能 > Apps Script
- *  2. 既存コードを全消ししてこのファイルを貼り付け
- *  3. CONFIG を必要に応じて編集
- *  4. 関数 `syncSheetToKouteiZu` を選んで実行（初回は権限承認が必要）
- *  5. 任意で「トリガー > 時間主導型」を設定（例: 毎時／毎朝）
+ * 流れ:
+ *   1. スタッフが書く「Project Schedule」の『案件シート(一覧)』タブから、
+ *      工程図の登録に必要な列だけを『連携』タブへ転記する（新しい行だけ追加。手で直した欄は上書きしない）
+ *   2. 転記時に『会社マスタ』『視点マスタ』で 会社名・区分（外観/内観）・種類（パース/写真合成）を自動判定する
+ *   3. 人が『連携』タブで不足・紐づけ違いを直し、「工程図へ」にチェックを入れる
+ *   4. 「工程図へ送信」で、チェック済みの行を工程図（Firestore）にタスクとして登録する
+ *      - White時間 → 「ホワイト」ステップ、Color時間 → 「カラー」ステップ（2回目以降は「修正」扱い）
+ *      - 登録後の進捗（担当者・優先度・完了時間・状態）は工程図側が正。シートからは上書きしない
+ *      - 工程図側で削除したタスク（deletedExternalIds）は復活させない
+ *
+ * 認証:
+ *   - 通常は、このスクリプトを実行する Google アカウント（工程図の Firebase プロジェクトのオーナー）の権限で
+ *     Firestore REST API にアクセスする（ScriptApp.getOAuthToken）。Firestore ルールはこの経路には適用されない。
+ *   - それが使えない環境では、メニュー「秘密鍵を設定」でサービスアカウントの鍵（JSON）を
+ *     スクリプトプロパティに保存して使う（シートには書かない）。
+ *
+ * 設定値は『設定』タブから読む（ファイルID・タブ名・取込開始行・既定の担当者・プロジェクトID・ワークスペースID）。
+ * 列の位置は見出し名で探すので、『連携』タブの列の順番は変えてよい（見出しの文字は変えない）。
  */
 
-// ============ CONFIG ============
-const CONFIG = {
-  FIREBASE_API_KEY: 'AIzaSyA2iQimhNq11ElsLb57qq3fuKx_3OGIcPE',
-  PROJECT_ID: 'koutei-zu',
-  WORKSPACE_ID: 'liebe-asia-team',
-  DATA_KEY: 'tasks',
+// ============ 定数 ============
+const SHEET = { LINK: '連携', COMPANY: '会社マスタ', VIEW: '視点マスタ', SETTINGS: '設定', HOWTO: '使い方' };
 
-  // 対象シートの名前（空なら最初のシート）
-  SHEET_NAME: '',
+// 『連携』タブの見出し（列は見出し名で探す）
+const H = {
+  key: '取込キー', status: '状態', send: '工程図へ',
+  code: '社内案件名', name: '社外案件名', cut: 'カット名', round: '回', deadline: '納期',
+  white: 'White時間', color: 'Color時間', item: '制作項目',
+  company: '会社名', category: '区分', kind: '種類', stepKind: 'ステップ種類',
+  assignee: '担当者', memo: 'メモ', exclude: '対象外',
+  transferredAt: '転記日時', sentAt: '送信日時', result: '結果', srcRow: '元シート行', link: 'サーバリンク',
+};
+const LINK_HEADER_ORDER = ['key', 'status', 'send', 'code', 'name', 'cut', 'round', 'deadline', 'white', 'color', 'item',
+  'company', 'category', 'kind', 'stepKind', 'assignee', 'memo', 'exclude', 'transferredAt', 'sentAt', 'result', 'srcRow', 'link'];
 
-  // データ範囲（1-indexed）
-  ROW_START: 3832,
-  ROW_END: 0,        // 0 なら自動検出（最終行まで）
+const STATUS = { NEW: '未送信', CHECK: '要確認', UPDATED: '更新あり', SENT: '登録済み', ERROR: 'エラー', GONE: '元シートから消えた' };
+const KIND = { PERS: 'パース', PHOTO: '写真合成' };
+const CATEGORY = { EX: '外観', IN: '内観' };
+const STEP_KIND = { NEW: '新規', FIX: '修正（無料）', CHANGE: '変更（有料）' };
 
-  // 列番号（1-indexed）
-  COL_INTERNAL: 2,   // B: 社内案件名（案件コード）
-  COL_EXTERNAL: 3,   // C: 社外案件名
-  COL_VIEW: 4,       // D: 視点名
-  COL_WHITE: 10,     // J: White 時間
-  COL_COLOR: 17,     // Q: Color 時間
-  COL_ASSIGNEE: 8,   // H: 担当者
-  COL_CHECKBOX: 30,  // AD: 完了チェック
+// 工程図のステップ種類マスタ（アプリ側 DEFAULT_STEP_TYPES と同じ）。工程図に保存済みのマスタがあればそちらを優先する。
+const DEFAULT_STEP_TYPES = [
+  { id: 'white',        label: 'ホワイト',            paid: true,  deliveryBase: '白色', numbered: false },
+  { id: 'color',        label: 'カラー',              paid: true,  deliveryBase: '色付', numbered: false },
+  { id: 'person_scene', label: '人物＋添景合成',       paid: true,  deliveryBase: '',     numbered: false },
+  { id: 'white_fix',    label: 'ホワイト修正（無料）', paid: false, deliveryBase: '白色', numbered: true },
+  { id: 'white_change', label: 'ホワイト変更（有料）', paid: true,  deliveryBase: '白色', numbered: true },
+  { id: 'color_fix',    label: 'カラー修正（無料）',   paid: false, deliveryBase: '色付', numbered: true },
+  { id: 'color_change', label: 'カラー変更（有料）',   paid: true,  deliveryBase: '色付', numbered: true },
+];
 
-  DEFAULT_ASSIGNEE: '未割当',
+// 『設定』タブの項目名と既定値
+const SETTING_KEYS = {
+  fileId: 'スタッフシートのファイルID',
+  tabName: 'スタッフシートのタブ名',
+  startRow: '取込開始行',
+  defaultAssignee: '既定の担当者',
+  projectId: 'FirebaseプロジェクトID',
+  workspaceId: 'ワークスペースID',
+};
+const SETTING_DEFAULTS = {
+  fileId: '12IfXNtu67LNuqRnB6Iako0pvI1A3k1CzyQTS4F3u5fU',
+  tabName: '案件シート(一覧)',
+  startRow: 4800,
+  defaultAssignee: '未割当',
+  projectId: 'koutei-zu',
+  workspaceId: 'liebe-asia-team',
 };
 
-// ============ メイン ============
-function syncSheetToKouteiZu() {
-  const start = Date.now();
-  const idToken = signInAnonymously_();
-  const existing = readFirestoreTasks_(idToken);
-  const deletedIds = readDeletedIds_(idToken);
-  const sheetRows = readSheetRows_();
+const PROP_SERVICE_ACCOUNT = 'SERVICE_ACCOUNT_JSON';
 
-  const { merged, added, updated, skippedDeleted, keptOnlyInApp } =
-    mergeTasks_(existing, sheetRows, deletedIds);
+// 『会社マスタ』『視点マスタ』が空のときに「初期設定」で入れる初期値（シート上で自由に直してよい）
+const INITIAL_COMPANY_MASTER = [
+  ['REN', 'リノべる株式会社', '工程図の既定の会社順にある表記。顧客マスタの表記と違えば直す'],
+  ['RENOBERU', 'リノべる株式会社', '同上（表記ゆれ）'],
+  ['RENOVERU', 'リノべる株式会社', '同上（表記ゆれ）'],
+  ['SUM', 'SUMUS', ''],
+  ['SUMUS', 'SUMUS', '表記ゆれ'],
+  ['TAMAZEN', 'TAMAZEN', '要確認：工程図側が「玉善」表記なら直す'],
+  ['OFFICE', 'オフィスコム', ''],
+  ['TANAKA', '田中建設', ''],
+  ['TANAK', '田中建設', '表記ゆれ（TANAK.284 など）'],
+  ['CG', 'CG工房', ''],
+  ['RIC', '株式会社リックデザイン', '要確認：サーバリンクのフォルダ名から。工程図の表記に合わせる'],
+  ['DESIGN', 'デザイン経営研究舎', '要確認：サーバリンクのフォルダ名から'],
+  ['CONTE', '', '要確認：工程図の会社名を入力'],
+  ['SAN', '', '要確認：工程図の会社名を入力'],
+  ['ATO', '', '要確認：工程図の会社名を入力'],
+  ['GRAY', '', '要確認：工程図の会社名を入力'],
+  ['ALEG', '', '要確認：工程図の会社名を入力'],
+  ['ESAKI', '', '要確認：工程図の会社名を入力'],
+  ['WUNDER', '', '要確認：工程図の会社名を入力'],
+];
+const INITIAL_VIEW_MASTER = [
+  ['EX', '外観', 'パース', 'EX1, EX2 … など。先に書いた行が優先'],
+  ['IN', '内観', 'パース', 'IN1, HOTEL_IN1(D), CAFE_IN2 など'],
+  ['LDK', '内観', 'パース', 'A-LDK2, 七番町ⅣT2_LDK1 など'],
+  ['BED', '内観', 'パース', ''],
+  ['LAVABO', '内観', 'パース', ''],
+  ['KITCHEN', '内観', 'パース', ''],
+  ['BATH', '内観', 'パース', ''],
+  ['ENTRANCE', '内観', 'パース', ''],
+  ['LOBBY', '内観', 'パース', ''],
+  ['FRONT', '内観', 'パース', ''],
+  ['CAFE', '内観', 'パース', ''],
+  ['RESTAURANT', '内観', 'パース', ''],
+  ['HOTEL', '内観', 'パース', ''],
+  ['ROOM', '内観', 'パース', ''],
+  ['WC', '内観', 'パース', ''],
+  ['TOILET', '内観', 'パース', ''],
+  ['P', '', '写真合成', 'P-1, P-2 など（制作項目に「写真」「合成」があれば自動で写真合成）'],
+  ['PHOTO', '', '写真合成', ''],
+  ['CAD', '', '', '要確認：CAD図の扱いは人が判断（種類が空なので「要確認」になります）'],
+  ['AREA', '', '', '要確認：オフショア案件の area1… は人が判断'],
+  ['CAM', '', '', '要確認'],
+  ['VR', '', '', '要確認'],
+];
 
-  writeFirestoreTasks_(idToken, merged);
-
-  const elapsed = ((Date.now() - start) / 1000).toFixed(2);
-  const summary =
-    `同期完了 (${elapsed}s)\n` +
-    `  シート対象行   : ${sheetRows.length}\n` +
-    `  新規追加       : ${added}\n` +
-    `  更新           : ${updated}\n` +
-    `  削除済みでスキップ: ${skippedDeleted}（工程図で削除済み、シートに残っているが復活させない）\n` +
-    `  アプリ側のみ   : ${keptOnlyInApp}（シート外の手動タスクとして保持）\n` +
-    `  合計タスク数   : ${merged.length}`;
-  console.log(summary);
-  return summary;
-}
-
-/** 工程図側で削除されたタスクの externalId リストをすべて消去
- * （= 全てを再同期で復活させたい時に使う） */
-function clearDeletedList() {
-  const idToken = signInAnonymously_();
-  writeRawDoc_(idToken, 'deletedExternalIds', { value: '[]' });
-  const msg = '削除済みリストをクリアしました。次回同期で全件が復活対象になります。';
-  console.log(msg);
-  try { SpreadsheetApp.getUi().alert(msg); } catch (e) { /* トリガー実行時はUI無し */ }
-}
-
-// 手動実行用：メニューに「同期を実行」ボタンを追加
+// ============ メニュー ============
 function onOpen() {
   SpreadsheetApp.getUi()
-    .createMenu('工程図同期')
-    .addItem('Firestore に同期', 'syncSheetToKouteiZu')
-    .addItem('シートだけプレビュー（書き込まない）', 'dryRun')
+    .createMenu('工程図連携')
+    .addItem('1. スタッフシートから転記', 'transferFromStaffSheet')
+    .addItem('2. 工程図へ送信', 'sendToKoutei')
+    .addItem('送信内容のプレビュー（書き込まない）', 'previewSend')
     .addSeparator()
-    .addItem('削除済みリストをクリア（全件復活）', 'clearDeletedList')
+    .addItem('工程図の会社名一覧を取り込む', 'fetchCompanyNames')
+    .addItem('工程図との接続テスト', 'testConnection')
+    .addSeparator()
+    .addItem('初期設定（タブ・チェックボックスを整える）', 'setupSheet')
+    .addItem('秘密鍵を設定（接続テストが失敗する場合のみ）', 'setServiceAccountKey')
+    .addItem('秘密鍵を削除', 'clearServiceAccountKey')
     .addToUi();
 }
 
-function dryRun() {
-  const rows = readSheetRows_();
-  const sample = rows.slice(0, 5).map(r => `  ${r.externalId}  ${r.projectName}  ${r.hours}h`).join('\n');
-  const msg = `シート抽出件数: ${rows.length}\n先頭5件:\n${sample}`;
-  console.log(msg);
-  SpreadsheetApp.getUi().alert(msg);
-}
-
-// ============ シート読み取り ============
-function readSheetRows_() {
+// ============ 1. 転記 ============
+function transferFromStaffSheet() {
+  const cfg = readSettings_();
   const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = CONFIG.SHEET_NAME ? ss.getSheetByName(CONFIG.SHEET_NAME) : ss.getSheets()[0];
-  if (!sheet) throw new Error('シートが見つかりません: ' + CONFIG.SHEET_NAME);
+  const link = ensureLinkSheet_(ss);
+  const col = headerMap_(link);
+  const masters = readMasters_(ss);
 
-  const lastRow = CONFIG.ROW_END || sheet.getLastRow();
-  if (lastRow < CONFIG.ROW_START) return [];
+  const staffRows = readStaffRows_(cfg);
+  const sourceRows = collectSourceRows_(staffRows);
 
-  const numRows = lastRow - CONFIG.ROW_START + 1;
-  const numCols = Math.max(CONFIG.COL_CHECKBOX, CONFIG.COL_COLOR);
-  const values = sheet.getRange(CONFIG.ROW_START, 1, numRows, numCols).getValues();
-
-  const tasks = [];
-  for (let i = 0; i < values.length; i++) {
-    const row = values[i];
-    const internalCode = trimStr_(row[CONFIG.COL_INTERNAL - 1]);
-    const externalName = trimStr_(row[CONFIG.COL_EXTERNAL - 1]);
-    const view = trimStr_(row[CONFIG.COL_VIEW - 1]);
-    const checked = row[CONFIG.COL_CHECKBOX - 1];
-    if (!internalCode || !view) continue;            // 案件コード or 視点なし → 無視
-    if (checked === true || checked === 'TRUE') continue; // 完了済みは無視
-
-    const whiteHours = toNumber_(row[CONFIG.COL_WHITE - 1]);
-    const colorHours = toNumber_(row[CONFIG.COL_COLOR - 1]);
-    const assignee = trimStr_(row[CONFIG.COL_ASSIGNEE - 1]) || CONFIG.DEFAULT_ASSIGNEE;
-
-    tasks.push({
-      externalId: buildExternalId_(internalCode, view),
-      projectNameInternal: internalCode,
-      projectName: externalName || internalCode,
-      viewpointName: view,
-      assignee,
-      hours: whiteHours + colorHours,
-      whiteHours,
-      colorHours,
-      sourceRow: CONFIG.ROW_START + i,
-    });
+  const data = link.getDataRange().getValues();
+  const byKey = new Map();
+  for (let r = 1; r < data.length; r++) {
+    const k = String(data[r][col.key - 1] || '');
+    if (k) byKey.set(k, r);
   }
-  return tasks;
-}
 
-function buildExternalId_(code, view) {
-  const norm = String(code).replace(/[.\s]/g, '').toUpperCase();
-  const v = String(view).trim();
-  return `${norm}::${v}`;
-}
-
-// ============ マージロジック（重複防止 + 削除尊重） ============
-function mergeTasks_(existing, sheetTasks, deletedIds) {
-  const sheetById = new Map();
-  sheetTasks.forEach(t => sheetById.set(t.externalId, t));
-
-  const existingIds = new Set();
-  existing.forEach(t => { if (t.externalId) existingIds.add(t.externalId); });
-
-  let added = 0;
+  const stamp = fmtDateTime_(new Date());
+  const appends = [];
+  const cellUpdates = []; // { row(1-based), col, value }
   let updated = 0;
-  let skippedDeleted = 0;
-  let keptOnlyInApp = 0;
-  const merged = [];
+  const seen = new Set();
 
-  // 1) 既存タスク群: シートに同じ externalId があれば更新、なければそのまま残す
-  existing.forEach(t => {
-    if (t.externalId && sheetById.has(t.externalId)) {
-      const s = sheetById.get(t.externalId);
-      merged.push({
-        ...t,
-        // シート由来で上書きする項目
-        projectName: s.projectName,
-        projectNameInternal: s.projectNameInternal,
-        viewpointName: s.viewpointName,
-        hours: s.hours,
-        whiteHours: s.whiteHours,
-        colorHours: s.colorHours,
-        sourceRow: s.sourceRow,
-        // 以下は維持: priority / completedHours / assignee / status / manualStart / stepName / stepOrder / createdAt / id
+  sourceRows.forEach(s => {
+    seen.add(s.key);
+    if (byKey.has(s.key)) {
+      const r = byKey.get(s.key);
+      const cur = data[r];
+      const fields = { code: s.code, name: s.name, cut: s.cut, deadline: s.deadline, white: s.white, color: s.color, item: s.item, srcRow: s.srcRow, link: s.link };
+      let changed = false;
+      Object.keys(fields).forEach(f => {
+        if (!sameCell_(cur[col[f] - 1], fields[f])) {
+          cellUpdates.push({ row: r + 1, col: col[f], value: fields[f] });
+          // 元シート行・サーバリンクの変化は「内容の変更」とみなさない
+          if (f !== 'srcRow' && f !== 'link') changed = true;
+        }
       });
-      updated++;
-    } else {
-      merged.push(t);
-      if (t.externalId) keptOnlyInApp++;
-    }
-  });
-
-  // 2) シートにあって既存にないもの → 削除済みでなければ新規追加
-  sheetTasks.forEach(s => {
-    if (existingIds.has(s.externalId)) return;       // 既存にあれば既に処理済み
-    if (deletedIds.has(s.externalId)) {              // ユーザーが工程図側で削除済み
-      skippedDeleted++;
+      if (changed) {
+        updated++;
+        cellUpdates.push({ row: r + 1, col: col.transferredAt, value: stamp });
+        const status = String(cur[col.status - 1] || '');
+        if (status === STATUS.SENT) cellUpdates.push({ row: r + 1, col: col.status, value: STATUS.UPDATED });
+        else if (status === STATUS.GONE) cellUpdates.push({ row: r + 1, col: col.status, value: STATUS.NEW });
+      }
       return;
     }
-    merged.push({
-      id: Utilities.getUuid(),
-      externalId: s.externalId,
-      projectName: s.projectName,
-      projectNameInternal: s.projectNameInternal,
-      viewpointName: s.viewpointName,
-      assignee: s.assignee,
-      hours: s.hours,
-      whiteHours: s.whiteHours,
-      colorHours: s.colorHours,
-      completedHours: 0,
-      priority: 99,
-      status: 'pending',
-      stepName: null,
-      stepOrder: null,
-      manualStart: null,
-      createdAt: Date.now(),
-      sourceRow: s.sourceRow,
+    const j = judgeRow_(s, masters);
+    const rowObj = {
+      key: s.key, status: j.status, send: false,
+      code: s.code, name: s.name, cut: s.cut, round: s.round, deadline: s.deadline,
+      white: s.white, color: s.color, item: s.item,
+      company: j.company, category: j.category, kind: j.kind, stepKind: j.stepKind,
+      assignee: '', memo: '', exclude: false,
+      transferredAt: stamp, sentAt: '', result: j.note, srcRow: s.srcRow, link: s.link,
+    };
+    appends.push(rowObjToArray_(rowObj, col));
+  });
+
+  // 元シートから消えた（完了チェック・削除・取込開始行より上になった）未送信行に印を付ける
+  byKey.forEach((r, k) => {
+    if (seen.has(k)) return;
+    const status = String(data[r][col.status - 1] || '');
+    if (status === STATUS.NEW || status === STATUS.CHECK) cellUpdates.push({ row: r + 1, col: col.status, value: STATUS.GONE });
+  });
+
+  cellUpdates.forEach(u => link.getRange(u.row, u.col).setValue(u.value));
+  if (appends.length) {
+    const startRow = link.getLastRow() + 1;
+    link.getRange(startRow, 1, appends.length, appends[0].length).setValues(appends);
+    applyValidations_(link, col, startRow, appends.length);
+  }
+
+  const needCheck = appends.filter(a => a[col.status - 1] === STATUS.CHECK).length;
+  const msg = `転記完了\n  スタッフシート対象行: ${sourceRows.length}\n  新規追加: ${appends.length}（うち要確認 ${needCheck}）\n  内容更新: ${updated}`;
+  console.log(msg);
+  toastOrLog_(msg);
+  return msg;
+}
+
+/** スタッフシートを読み、必要な列だけ抜き出す。見出し名で列を探すので列の位置が変わっても追従する。 */
+function readStaffRows_(cfg) {
+  const ss = SpreadsheetApp.openById(cfg.fileId);
+  const sheet = ss.getSheetByName(cfg.tabName);
+  if (!sheet) throw new Error(`スタッフシートにタブ「${cfg.tabName}」が見つかりません（『設定』タブのタブ名を確認してください）`);
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+  if (lastRow < 2) return [];
+
+  // 見出し行：B〜E列のどこかに「社内案件名」がある最初の行
+  const probe = sheet.getRange(1, 1, Math.min(lastRow, 200), Math.min(lastCol, 6)).getValues();
+  let headerRow = -1;
+  for (let r = 0; r < probe.length; r++) {
+    if (probe[r].some(v => String(v || '').trim() === '社内案件名')) { headerRow = r + 1; break; }
+  }
+  if (headerRow < 0) throw new Error('スタッフシートに見出し「社内案件名」の行が見つかりません（先頭200行を探しました）');
+
+  const headers = sheet.getRange(headerRow, 1, 1, lastCol).getValues()[0].map(v => String(v || '').trim());
+  const sc = staffHeaderMap_(headers);
+
+  const firstDataRow = Math.max(headerRow + 1, cfg.startRow || 0);
+  if (firstDataRow > lastRow) return [];
+  const width = Math.max.apply(null, Object.keys(sc).map(k => sc[k]));
+  const values = sheet.getRange(firstDataRow, 1, lastRow - firstDataRow + 1, width).getValues();
+
+  const rows = [];
+  for (let i = 0; i < values.length; i++) {
+    const v = values[i];
+    rows.push({
+      srcRow: firstDataRow + i,
+      code: trimStr_(v[sc.code - 1]),
+      name: trimStr_(v[sc.name - 1]),
+      cut: trimStr_(v[sc.cut - 1]),
+      link: sc.link ? trimStr_(v[sc.link - 1]) : '',
+      deadlineRaw: sc.deadline ? v[sc.deadline - 1] : '',
+      item: sc.item ? trimStr_(v[sc.item - 1]) : '',
+      white: toHours_(v[sc.white - 1]),
+      color: sc.color ? toHours_(v[sc.color - 1]) : 0,
+      done: sc.done ? isChecked_(v[sc.done - 1]) : false,
     });
-    added++;
-  });
-
-  return { merged, added, updated, skippedDeleted, keptOnlyInApp };
-}
-
-// ============ Firebase 認証（匿名サインイン） ============
-function signInAnonymously_() {
-  const url = `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${CONFIG.FIREBASE_API_KEY}`;
-  const res = UrlFetchApp.fetch(url, {
-    method: 'post',
-    contentType: 'application/json',
-    payload: JSON.stringify({ returnSecureToken: true }),
-    muteHttpExceptions: true,
-  });
-  if (res.getResponseCode() >= 300) {
-    throw new Error('匿名サインイン失敗: ' + res.getContentText());
   }
-  return JSON.parse(res.getContentText()).idToken;
+  return rows;
 }
 
-// ============ Firestore 読み書き ============
-function readFirestoreTasks_(idToken) {
-  const valueStr = readRawValueString_(idToken, CONFIG.DATA_KEY);
-  if (!valueStr) return [];
-  try {
-    const parsed = JSON.parse(valueStr);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (e) {
-    console.warn('既存タスクのJSONパース失敗。空配列として続行: ' + e);
-    return [];
-  }
-}
-
-function readDeletedIds_(idToken) {
-  const valueStr = readRawValueString_(idToken, 'deletedExternalIds');
-  if (!valueStr) return new Set();
-  try {
-    const arr = JSON.parse(valueStr);
-    return new Set(Array.isArray(arr) ? arr : []);
-  } catch (e) {
-    console.warn('削除済みリストのJSONパース失敗。空集合として続行: ' + e);
-    return new Set();
-  }
-}
-
-function writeFirestoreTasks_(idToken, tasks) {
-  writeRawDoc_(idToken, CONFIG.DATA_KEY, { value: JSON.stringify(tasks) });
-}
-
-function readRawValueString_(idToken, key) {
-  const url = firestoreDocUrl_(key);
-  const res = UrlFetchApp.fetch(url, {
-    method: 'get',
-    headers: { Authorization: 'Bearer ' + idToken },
-    muteHttpExceptions: true,
-  });
-  if (res.getResponseCode() === 404) return null;
-  if (res.getResponseCode() >= 300) {
-    throw new Error(`Firestore 読み込み失敗 (${key}): ` + res.getContentText());
-  }
-  const doc = JSON.parse(res.getContentText());
-  return doc.fields && doc.fields.value && doc.fields.value.stringValue || null;
-}
-
-function writeRawDoc_(idToken, key, payload) {
-  const url = firestoreDocUrl_(key) +
-    '?updateMask.fieldPaths=value&updateMask.fieldPaths=updatedAt';
-  const body = {
-    fields: {
-      value: { stringValue: payload.value },
-      updatedAt: { integerValue: String(Date.now()) },
-    },
+/** スタッフシートの見出し配列 → 列番号（1始まり）。予想時間は1つ目=White、2つ目=Color。 */
+function staffHeaderMap_(headers) {
+  const find = (pred) => { for (let i = 0; i < headers.length; i++) if (pred(headers[i])) return i + 1; return 0; };
+  const startsWith = (p) => (h) => h.indexOf(p) === 0;
+  const m = {
+    code: find(startsWith('社内案件名')),
+    name: find(startsWith('社外案件名')),
+    cut: find(startsWith('カット名')),
+    link: find(startsWith('サーバリンク')),
+    deadline: find(startsWith('納期')),
+    item: find(startsWith('制作項目')),
+    done: find(startsWith('作業完了')),
   };
-  const res = UrlFetchApp.fetch(url, {
-    method: 'patch',
-    headers: { Authorization: 'Bearer ' + idToken },
-    contentType: 'application/json',
-    payload: JSON.stringify(body),
-    muteHttpExceptions: true,
+  const est = [];
+  headers.forEach((h, i) => { if (h.indexOf('予想時間') === 0) est.push(i + 1); });
+  m.white = est[0] || 0;
+  m.color = est[1] || 0;
+  const missing = ['code', 'cut', 'white'].filter(k => !m[k]);
+  if (missing.length) {
+    const label = { code: '社内案件名', cut: 'カット名', white: '予想時間' };
+    throw new Error('スタッフシートの見出しが見つかりません: ' + missing.map(k => label[k]).join('、'));
+  }
+  return m;
+}
+
+/** 案件コード＋カット名で同じものを数え、n回目を付けて取込キーにする。完了チェック済みは数えるが出力しない。 */
+function collectSourceRows_(staffRows, today) {
+  const counts = new Map();
+  const out = [];
+  staffRows.forEach(r => {
+    if (!r.code || !r.cut) return;
+    const base = normCode_(r.code) + '::' + normCut_(r.cut);
+    const n = (counts.get(base) || 0) + 1;
+    counts.set(base, n);
+    if (r.done) return;
+    out.push({
+      key: base + '::' + n,
+      round: n,
+      srcRow: r.srcRow,
+      code: r.code, name: r.name, cut: r.cut, link: r.link, item: r.item,
+      deadline: parseDeadline_(r.deadlineRaw, today || new Date()),
+      white: r.white, color: r.color,
+    });
   });
-  if (res.getResponseCode() >= 300) {
-    throw new Error(`Firestore 書き込み失敗 (${key}): ` + res.getContentText());
+  return out;
+}
+
+// ============ 判定（純ロジック） ============
+/** 案件コード → 大文字・記号なし（'Ric.34' → 'RIC34'、'TANAKA 329' → 'TANAKA329'） */
+function normCode_(s) {
+  return String(s || '').toUpperCase().replace(/[.\s_\-－ー　]/g, '');
+}
+/** 案件コードの英字部分（'RENOBERU58' → 'RENOBERU'） */
+function codePrefix_(s) {
+  const m = normCode_(s).match(/^[A-Z]+/);
+  return m ? m[0] : '';
+}
+/** カット名の正規化（大文字・空白を1つに） */
+function normCut_(s) {
+  return String(s || '').trim().toUpperCase().replace(/\s+/g, ' ');
+}
+/** カット名 → 英字トークン（'HOTEL_IN1(D)' → ['HOTEL','IN','D']、'CAD 1F-A' → ['CAD','F','A']） */
+function cutTokens_(cut) {
+  return normCut_(cut).split(/[^A-Z0-9]+/).filter(Boolean)
+    .map(t => (t.match(/^[A-Z]+/) || [''])[0]).filter(Boolean);
+}
+
+/** サーバリンクのフォルダ名から会社名を推定（「…\2025-7\株式会社リックデザイン(RIC)\…」→「株式会社リックデザイン」） */
+function guessCompanyFromLink_(link) {
+  const segs = String(link || '').split(/[\\\/]+/).map(s => s.trim()).filter(Boolean);
+  for (let i = 0; i < segs.length - 1; i++) {
+    if (/^\d{4}-\d{1,2}$/.test(segs[i])) return segs[i + 1].replace(/[（(].*$/, '').trim();
+  }
+  return '';
+}
+
+/** 会社名の判定：会社マスタ（案件コードの英字部分）→ なければサーバリンクから推定（要確認） */
+function judgeCompany_(code, link, companyMaster) {
+  const prefix = codePrefix_(code);
+  const hit = (companyMaster || []).find(m => m.prefix && m.prefix === prefix);
+  if (hit && hit.company) return { company: hit.company, guessed: false };
+  const g = guessCompanyFromLink_(link);
+  return { company: g, guessed: true };
+}
+
+/** 区分（外観/内観）と種類（パース/写真合成）の判定 */
+function judgeViewpoint_(cut, item, viewMaster) {
+  const it = String(item || '');
+  let kind = '';
+  if (/写真|合成/.test(it)) kind = KIND.PHOTO;
+  else if (/パース/.test(it)) kind = KIND.PERS;
+  let category = '';
+  const toks = cutTokens_(cut);
+  for (let i = 0; i < toks.length; i++) {
+    const m = (viewMaster || []).find(r => r.keyword === toks[i]);
+    if (m) { category = m.category || ''; if (!kind) kind = m.kind || ''; break; }
+  }
+  if (!kind && category) kind = KIND.PERS;
+  return { category, kind };
+}
+
+/** ステップ種類：制作項目に「変更」→変更（有料）、「修正」→修正（無料）、2回目以降→修正（無料）、それ以外→新規 */
+function judgeStepKind_(item, round) {
+  const it = String(item || '');
+  if (/変更/.test(it)) return STEP_KIND.CHANGE;
+  if (/修正/.test(it)) return STEP_KIND.FIX;
+  if ((round || 1) >= 2) return STEP_KIND.FIX;
+  return STEP_KIND.NEW;
+}
+
+function judgeRow_(s, masters) {
+  const c = judgeCompany_(s.code, s.link, masters.companies);
+  const v = judgeViewpoint_(s.cut, s.item, masters.views);
+  const stepKind = judgeStepKind_(s.item, s.round);
+  const notes = [];
+  if (!c.company) notes.push('会社名を入力してください（会社マスタに「' + codePrefix_(s.code) + '」を追加すると次回から自動）');
+  else if (c.guessed) notes.push('会社名はサーバリンクから推定しました。確認してください');
+  if (!v.kind) notes.push('種類（パース/写真合成）を選んでください');
+  if (!v.category && v.kind === KIND.PERS) notes.push('区分（外観/内観）が未判定です（空のままでも送信できます）');
+  const needCheck = !c.company || c.guessed || !v.kind;
+  return { company: c.company, category: v.category, kind: v.kind, stepKind, status: needCheck ? STATUS.CHECK : STATUS.NEW, note: notes.join(' / ') };
+}
+
+/** 納期セル → 'YYYY-MM-DD'（Date / 'YYYY/M/D' / 'M/D' / 'M月D日'）。M/D は今年、60日以上前なら来年扱い。 */
+function parseDeadline_(v, today) {
+  if (isDate_(v)) return fmtYMD_(v);
+  const s = String(v || '').trim();
+  if (!s) return '';
+  let m = s.match(/^(\d{4})[\/\-年.](\d{1,2})[\/\-月.](\d{1,2})/);
+  if (m) return fmtYMD_(new Date(+m[1], +m[2] - 1, +m[3]));
+  m = s.match(/^(\d{1,2})[\/\-月.](\d{1,2})/);
+  if (m) {
+    const t = today || new Date();
+    let y = t.getFullYear();
+    const d = new Date(y, +m[1] - 1, +m[2]);
+    if (d.getTime() < t.getTime() - 60 * 86400000) y++;
+    return fmtYMD_(new Date(y, +m[1] - 1, +m[2]));
+  }
+  return '';
+}
+
+/** 時間セル → 数値（h）。空・文字・負数は 0。 */
+function toHours_(v) {
+  if (v === null || v === undefined || v === '') return 0;
+  const n = typeof v === 'number' ? v : parseFloat(String(v).replace(/[^\d.\-]/g, ''));
+  if (isNaN(n) || n <= 0) return 0;
+  return Math.round(n * 100) / 100;
+}
+
+function isChecked_(v) { return v === true || String(v).toUpperCase() === 'TRUE'; }
+function isDate_(v) { return Object.prototype.toString.call(v) === '[object Date]' && !isNaN(v.getTime()); }
+function trimStr_(v) { return String(v === null || v === undefined ? '' : v).trim(); }
+function sameCell_(a, b) {
+  const na = (a === null || a === undefined) ? '' : a;
+  const nb = (b === null || b === undefined) ? '' : b;
+  if (typeof na === 'number' || typeof nb === 'number') return Number(na) === Number(nb);
+  return String(na).trim() === String(nb).trim();
+}
+function pad2_(n) { return (n < 10 ? '0' : '') + n; }
+function fmtYMD_(d) { return d.getFullYear() + '-' + pad2_(d.getMonth() + 1) + '-' + pad2_(d.getDate()); }
+function fmtDateTime_(d) { return fmtYMD_(d) + ' ' + pad2_(d.getHours()) + ':' + pad2_(d.getMinutes()); }
+
+// ============ タスクレコード生成（純ロジック） ============
+/** 回数付きの表示名（アプリ側 resolveStepLabel と同じ）。'カラー修正（無料）', true, 2 → 'カラー修正2回目（無料）' */
+function resolveStepLabel_(baseLabel, numbered, n) {
+  const b = String(baseLabel || '').trim();
+  if (!numbered) return b;
+  const m = b.match(/^(.*?)(（[^（）]*）)?$/);
+  const core = (m && m[1] != null) ? m[1] : b;
+  const suf = (m && m[2]) || '';
+  return core + n + '回目' + suf;
+}
+function resolveDeliverySuffix_(deliveryBase, n) {
+  const base = String(deliveryBase || '').trim();
+  if (!base) return '';
+  return n > 1 ? base + n : base;
+}
+function normalizeStepTypes_(list) {
+  if (!Array.isArray(list) || list.length === 0) return DEFAULT_STEP_TYPES.map(t => Object.assign({}, t));
+  return list.map((t, i) => ({
+    id: (t && t.id) || ('st-' + i),
+    label: (t && t.label) || '',
+    paid: t && t.paid !== undefined ? !!t.paid : true,
+    deliveryBase: (t && t.deliveryBase) || '',
+    numbered: !!(t && t.numbered),
+  }));
+}
+function stepTypeIdFor_(base, stepKind) {
+  if (stepKind === STEP_KIND.FIX) return base + '_fix';
+  if (stepKind === STEP_KIND.CHANGE) return base + '_change';
+  return base;
+}
+function vpKey_(projectName, viewpointName) { return String(projectName || '') + '' + String(viewpointName || ''); }
+
+/**
+ * 『連携』の1行 → 工程図タスク（1ステップ=1レコード）。
+ * ctx: { now(ms), today('YYYY-MM-DD'), defaultAssignee, stepTypes, byVp: Map(vpKey→既存タスク[]), byExt: Map(externalId→既存タスク), deleted: Set(externalId) }
+ * 戻り値: { records: [{ id, externalId, update, doc?, changes?, skippedDeleted? }], errors: [] }
+ */
+function buildTaskRecords_(row, ctx) {
+  const errors = [];
+  const code = trimStr_(row.code);
+  const cut = trimStr_(row.cut);
+  const company = trimStr_(row.company);
+  const kind = trimStr_(row.kind);
+  const white = toHours_(row.white);
+  const color = toHours_(row.color);
+  if (!cut) errors.push('カット名が空です');
+  if (!company) errors.push('会社名が空です');
+  if (kind !== KIND.PERS && kind !== KIND.PHOTO) errors.push('種類は「パース」か「写真合成」を選んでください');
+  if (white <= 0 && color <= 0) errors.push('White時間・Color時間がどちらも0です');
+  if (errors.length) return { records: [], errors };
+
+  const projectName = trimStr_(row.name) || code;
+  const projectNameInternal = code;
+  const viewpointName = cut;
+  const category = trimStr_(row.category);
+  const stepKind = trimStr_(row.stepKind) || STEP_KIND.NEW;
+  const deadline = trimStr_(row.deadline) || null;
+  const memo = trimStr_(row.memo);
+  const stepTypes = ctx.stepTypes || DEFAULT_STEP_TYPES;
+  const typeById = new Map(stepTypes.map(t => [t.id, t]));
+
+  const key = vpKey_(projectName, viewpointName);
+  const vpTasks = (ctx.byVp && ctx.byVp.get(key)) || [];
+  // 担当者：シート → 既存視点の担当者（最新） → 既定
+  let assignee = trimStr_(row.assignee);
+  if (!assignee && vpTasks.length) {
+    const latest = vpTasks.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0];
+    assignee = trimStr_(latest.assignee);
+  }
+  if (!assignee) assignee = ctx.defaultAssignee || '未割当';
+
+  let order = vpTasks.reduce((m, t) => Math.max(m, typeof t.stepOrder === 'number' ? t.stepOrder : -1), -1) + 1;
+  const typeCounts = {};
+  const baseCounts = {};
+  vpTasks.forEach(t => {
+    const ty = typeById.get(t.stepTypeId);
+    if (ty) {
+      if (ty.numbered) typeCounts[ty.id] = (typeCounts[ty.id] || 0) + 1;
+      if (ty.deliveryBase) baseCounts[ty.deliveryBase] = (baseCounts[ty.deliveryBase] || 0) + 1;
+    }
+  });
+
+  const wants = [];
+  if (kind === KIND.PHOTO) {
+    wants.push({ typeId: '', name: KIND.PHOTO, tag: 'photo', hours: Math.round((white + color) * 100) / 100 });
+  } else {
+    if (white > 0) wants.push({ typeId: stepTypeIdFor_('white', stepKind), hours: white });
+    if (color > 0) wants.push({ typeId: stepTypeIdFor_('color', stepKind), hours: color });
+  }
+
+  const records = [];
+  let seq = 0;
+  wants.forEach(w => {
+    const externalId = String(row.key) + '::' + (w.typeId || w.tag);
+    if (ctx.deleted && ctx.deleted.has(externalId)) { records.push({ externalId, skippedDeleted: true }); return; }
+    const existing = ctx.byExt && ctx.byExt.get(externalId);
+    if (existing) {
+      const changes = {};
+      if (existing.status !== 'done' && Number(existing.hours) !== w.hours) changes.hours = w.hours;
+      if ((existing.projectName || '') !== projectName) changes.projectName = projectName;
+      if ((existing.projectNameInternal || '') !== projectNameInternal) changes.projectNameInternal = projectNameInternal;
+      if ((existing.companyName || '') !== company) changes.companyName = company;
+      if ((existing.viewpointCategory || '') !== category) changes.viewpointCategory = category;
+      if ((existing.deadline || null) !== deadline) changes.deadline = deadline;
+      records.push({ id: existing.id, externalId, update: true, changes: Object.keys(changes).length ? changes : null });
+      return;
+    }
+    const ty = w.typeId ? typeById.get(w.typeId) : null;
+    let label = w.name || w.typeId;
+    let deliverySuffix = '';
+    if (ty) {
+      let n = 1;
+      if (ty.numbered) { typeCounts[ty.id] = (typeCounts[ty.id] || 0) + 1; n = typeCounts[ty.id]; }
+      label = resolveStepLabel_(ty.label, ty.numbered, n);
+      if (ty.deliveryBase) { baseCounts[ty.deliveryBase] = (baseCounts[ty.deliveryBase] || 0) + 1; deliverySuffix = resolveDeliverySuffix_(ty.deliveryBase, baseCounts[ty.deliveryBase]); }
+    }
+    const createdAt = ctx.now + seq;
+    const id = 'task-' + ctx.now + '-' + seq + '-' + Math.random().toString(36).slice(2, 7);
+    const doc = {
+      id,
+      projectName, projectNameInternal, companyName: company, customerContact: '',
+      viewpointName, viewpointNameExternal: '', viewpointCategory: category,
+      stepName: label, stepOrder: order, assignee,
+      priority: 99, hours: w.hours, completedHours: 0,
+      memo, tentative: false, tentativeStart: null, tentativeEnd: null,
+      deadline, projectDeadline: null, projectRequestDate: null,
+      manualStart: null, manualEnd: null,
+      status: 'pending', completedAt: null, createdAt, registeredDate: ctx.today,
+      stepTypeId: ty ? ty.id : '', stepDeliverySuffix: deliverySuffix,
+      stepAmount: '', stepRequestDate: ctx.today, stepCompletedDate: '', stepDeliveryNameOverride: '',
+      stepRoundType: '', stepOutInHouse: '', stepOutExternal: '', stepOutVND: '',
+      externalId,
+    };
+    records.push({ id, externalId, update: false, doc });
+    order++; seq++;
+  });
+  return { records, errors };
+}
+
+// ============ 2. 送信 ============
+function sendToKoutei() { return runSend_(false); }
+function previewSend() { return runSend_(true); }
+
+function runSend_(dryRun) {
+  const cfg = readSettings_();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const link = ensureLinkSheet_(ss);
+  const col = headerMap_(link);
+  const data = link.getDataRange().getValues();
+
+  const targets = [];
+  for (let r = 1; r < data.length; r++) {
+    const row = arrayToRowObj_(data[r], col);
+    if (!row.key) continue;
+    if (!isChecked_(row.send) || isChecked_(row.exclude)) continue;
+    if (row.status === STATUS.SENT || row.status === STATUS.GONE) continue;
+    targets.push({ r, row });
+  }
+  if (!targets.length) {
+    alertOrLog_('送信対象がありません。\n「工程図へ」にチェックが入っていて、状態が「登録済み」以外の行が対象です。\n（登録済みの行を送り直すには、状態を「更新あり」に変えてください）');
+    return '対象なし';
+  }
+
+  const auth = getAuth_();
+  const existing = fsListAll_(auth, cfg, 'workspaces/' + cfg.workspaceId + '/tasks');
+  const deleted = new Set(parseJsonArray_(fsGetValueString_(auth, cfg, 'deletedExternalIds')));
+  const customerMaster = parseJsonArray_(fsGetValueString_(auth, cfg, 'customerMaster'));
+  const companies = new Set(customerMaster.map(c => trimStr_(c && c.company)).filter(Boolean));
+  const stepTypes = normalizeStepTypes_(parseJsonArray_(fsGetValueString_(auth, cfg, 'stepTypeMaster')));
+
+  const byExt = new Map();
+  const byVp = new Map();
+  existing.forEach(t => {
+    if (t.externalId) byExt.set(t.externalId, t);
+    const k = vpKey_(t.projectName, t.viewpointName);
+    if (!byVp.has(k)) byVp.set(k, []);
+    byVp.get(k).push(t);
+  });
+
+  const nowDate = new Date();
+  const ctx = { now: nowDate.getTime(), today: fmtYMD_(nowDate), defaultAssignee: cfg.defaultAssignee, stepTypes, byVp, byExt, deleted };
+  const stamp = fmtDateTime_(nowDate);
+  const lines = [];
+  let created = 0, updated = 0, errored = 0;
+
+  targets.forEach(t => {
+    const row = t.row;
+    const label = (row.code + ' ' + row.cut + (row.round > 1 ? '（' + row.round + '回目）' : '')).trim();
+    ctx.now = Date.now();
+    const built = buildTaskRecords_(row, ctx);
+    if (built.errors.length) {
+      errored++;
+      if (!dryRun) {
+        link.getRange(t.r + 1, col.status).setValue(STATUS.ERROR);
+        link.getRange(t.r + 1, col.result).setValue(built.errors.join(' / '));
+      }
+      lines.push('✕ ' + label + ': ' + built.errors.join(' / '));
+      return;
+    }
+    const warns = [];
+    if (companies.size && !companies.has(trimStr_(row.company))) warns.push('会社名「' + row.company + '」は工程図の顧客マスタに未登録');
+    let c = 0, u = 0, s = 0;
+    built.records.forEach(rec => {
+      if (rec.skippedDeleted) { s++; return; }
+      const path = 'workspaces/' + cfg.workspaceId + '/tasks/' + rec.id;
+      if (rec.update) {
+        if (rec.changes) { if (!dryRun) fsPatch_(auth, cfg, path, rec.changes, Object.keys(rec.changes)); u++; }
+        return;
+      }
+      if (!dryRun) fsPatch_(auth, cfg, path, rec.doc, null);
+      // 同じ視点の後続行（2回目など）が正しい順番・回数になるよう、作成分をコンテキストに反映
+      byExt.set(rec.externalId, rec.doc);
+      const k = vpKey_(rec.doc.projectName, rec.doc.viewpointName);
+      if (!byVp.has(k)) byVp.set(k, []);
+      byVp.get(k).push(rec.doc);
+      c++;
+    });
+    created += c; updated += u;
+    const summary = '新規' + c + '件・更新' + u + '件' + (s ? '・工程図で削除済み' + s + '件は送信せず' : '') + (warns.length ? ' ／ ' + warns.join('、') : '');
+    if (!dryRun) {
+      link.getRange(t.r + 1, col.status).setValue(STATUS.SENT);
+      link.getRange(t.r + 1, col.sentAt).setValue(stamp);
+      link.getRange(t.r + 1, col.result).setValue(summary);
+    }
+    lines.push((warns.length ? '△ ' : '○ ') + label + ': ' + summary);
+  });
+
+  const head = dryRun
+    ? 'プレビュー（工程図には書き込んでいません）\n対象 ' + targets.length + ' 行：新規 ' + created + ' 件・更新 ' + updated + ' 件・エラー ' + errored + ' 行\n\n'
+    : '送信完了\n対象 ' + targets.length + ' 行：新規 ' + created + ' 件・更新 ' + updated + ' 件・エラー ' + errored + ' 行\n\n';
+  const msg = head + lines.slice(0, 40).join('\n') + (lines.length > 40 ? '\n…（他 ' + (lines.length - 40) + ' 行）' : '');
+  console.log(msg);
+  alertOrLog_(msg);
+  return msg;
+}
+
+// ============ 補助メニュー ============
+function fetchCompanyNames() {
+  const cfg = readSettings_();
+  const auth = getAuth_();
+  const master = parseJsonArray_(fsGetValueString_(auth, cfg, 'customerMaster'));
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEET.COMPANY) || ss.insertSheet(SHEET.COMPANY);
+  const rows = master.map(c => [trimStr_(c && c.company), (c && c.contractType) === 'offshore' ? 'オフショア' : (c && c.contractType) ? String(c.contractType) : '']);
+  sheet.getRange(1, 5, 1, 2).setValues([['工程図に登録済みの会社名（参考）', '契約']]).setFontWeight('bold');
+  if (sheet.getLastRow() > 1) sheet.getRange(2, 5, sheet.getLastRow() - 1, 2).clearContent();
+  if (rows.length) sheet.getRange(2, 5, rows.length, 2).setValues(rows);
+  toastOrLog_('工程図の会社名を ' + rows.length + ' 件、会社マスタの E 列に書き出しました。B 列の会社名はこの表記に合わせてください。');
+}
+
+function testConnection() {
+  const cfg = readSettings_();
+  try {
+    const auth = getAuth_();
+    const docs = fsListAll_(auth, cfg, 'workspaces/' + cfg.workspaceId + '/tasks', 1);
+    alertOrLog_('接続OK（認証方式: ' + (auth.mode === 'service-account' ? 'サービスアカウントの秘密鍵' : 'このGoogleアカウントの権限') + '）\n工程図のタスクを読み取れました（先頭 ' + docs.length + ' 件を確認）。');
+  } catch (e) {
+    alertOrLog_('接続に失敗しました。\n\n' + String(e && e.message || e) + '\n\n対処:\n1) このスクリプトを実行しているGoogleアカウントが、工程図のFirebaseプロジェクト（' + cfg.projectId + '）のオーナーまたは編集者か確認\n2) それでも失敗する場合は、メニュー「秘密鍵を設定」でサービスアカウントの鍵を登録（手順書を参照）');
   }
 }
 
-function firestoreDocUrl_(key) {
-  return `https://firestore.googleapis.com/v1/projects/${CONFIG.PROJECT_ID}` +
-    `/databases/(default)/documents/workspaces/${CONFIG.WORKSPACE_ID}` +
-    `/data/${key}`;
+function setServiceAccountKey() {
+  const html = HtmlService.createHtmlOutput(
+    '<div style="font-family:sans-serif;font-size:13px">' +
+    '<p>Firebase コンソール → プロジェクトの設定 → サービスアカウント → 「新しい秘密鍵の生成」でダウンロードした JSON ファイルの中身を、そのまま貼り付けてください。</p>' +
+    '<p>鍵はこのスクリプトの「スクリプトプロパティ」にだけ保存され、シートには書き込まれません。</p>' +
+    '<textarea id="k" style="width:100%;height:220px"></textarea><br>' +
+    '<button onclick="google.script.run.withSuccessHandler(function(m){alert(m);google.script.host.close();}).withFailureHandler(function(e){alert(e.message||e);}).saveServiceAccountKey_(document.getElementById(\'k\').value)">保存</button>' +
+    '</div>'
+  ).setWidth(560).setHeight(380);
+  SpreadsheetApp.getUi().showModalDialog(html, 'サービスアカウントの秘密鍵を設定');
+}
+function saveServiceAccountKey_(text) {
+  let obj;
+  try { obj = JSON.parse(text); } catch (e) { throw new Error('JSON として読めません。ダウンロードしたファイルの中身をそのまま貼り付けてください。'); }
+  if (!obj.client_email || !obj.private_key) throw new Error('client_email / private_key が含まれていません。サービスアカウントの鍵ファイルか確認してください。');
+  PropertiesService.getScriptProperties().setProperty(PROP_SERVICE_ACCOUNT, JSON.stringify({ client_email: obj.client_email, private_key: obj.private_key }));
+  CacheService.getScriptCache().remove('sa_token');
+  return '保存しました（' + obj.client_email + '）。メニュー「工程図との接続テスト」で確認してください。';
+}
+function clearServiceAccountKey() {
+  PropertiesService.getScriptProperties().deleteProperty(PROP_SERVICE_ACCOUNT);
+  CacheService.getScriptCache().remove('sa_token');
+  toastOrLog_('秘密鍵を削除しました。以後はこのGoogleアカウントの権限で接続します。');
 }
 
-// ============ ユーティリティ ============
-function trimStr_(v) { return (v == null ? '' : String(v)).trim(); }
-function toNumber_(v) { const n = Number(v); return isFinite(n) ? n : 0; }
+/** タブ・見出し・チェックボックス・プルダウンを整える（何度実行しても安全） */
+function setupSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const link = ensureLinkSheet_(ss);
+  const col = headerMap_(link);
+  link.setFrozenRows(1);
+  link.getRange(1, 1, 1, link.getLastColumn()).setFontWeight('bold');
+  const n = Math.max(link.getLastRow() - 1, 0);
+  if (n > 0) applyValidations_(link, col, 2, n);
+
+  const company = ss.getSheetByName(SHEET.COMPANY) || ss.insertSheet(SHEET.COMPANY);
+  if (company.getLastRow() === 0) {
+    const rows = [['案件コードの英字部分', '工程図の会社名', '備考']].concat(INITIAL_COMPANY_MASTER);
+    company.getRange(1, 1, rows.length, 3).setValues(rows);
+  }
+  company.setFrozenRows(1);
+  company.getRange(1, 1, 1, Math.max(company.getLastColumn(), 3)).setFontWeight('bold');
+
+  const view = ss.getSheetByName(SHEET.VIEW) || ss.insertSheet(SHEET.VIEW);
+  if (view.getLastRow() === 0) {
+    const rows = [['カット名のキーワード', '区分', '種類', '備考']].concat(INITIAL_VIEW_MASTER);
+    view.getRange(1, 1, rows.length, 4).setValues(rows);
+  }
+  view.setFrozenRows(1);
+  view.getRange(1, 1, 1, Math.max(view.getLastColumn(), 4)).setFontWeight('bold');
+
+  const settings = ss.getSheetByName(SHEET.SETTINGS) || ss.insertSheet(SHEET.SETTINGS);
+  if (settings.getLastRow() === 0) {
+    const rows = [['項目', '値', '説明']];
+    Object.keys(SETTING_KEYS).forEach(k => rows.push([SETTING_KEYS[k], SETTING_DEFAULTS[k], '']));
+    settings.getRange(1, 1, rows.length, 3).setValues(rows);
+  }
+  settings.getRange(1, 1, 1, 3).setFontWeight('bold');
+  toastOrLog_('初期設定が完了しました。');
+}
+
+// ============ シート補助 ============
+function ensureLinkSheet_(ss) {
+  let sheet = ss.getSheetByName(SHEET.LINK);
+  if (!sheet) sheet = ss.insertSheet(SHEET.LINK, 0);
+  const lastCol = sheet.getLastColumn();
+  const first = lastCol ? sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(v => trimStr_(v)) : [];
+  const missing = LINK_HEADER_ORDER.filter(k => first.indexOf(H[k]) < 0);
+  if (first.filter(Boolean).length === 0) {
+    sheet.getRange(1, 1, 1, LINK_HEADER_ORDER.length).setValues([LINK_HEADER_ORDER.map(k => H[k])]);
+  } else if (missing.length) {
+    // 足りない見出しは右端に追加する（既存の列は動かさない）
+    sheet.getRange(1, lastCol + 1, 1, missing.length).setValues([missing.map(k => H[k])]);
+  }
+  return sheet;
+}
+
+/** 『連携』の見出し行 → { フィールド名: 列番号(1始まり) } */
+function headerMap_(sheet) {
+  const lastCol = sheet.getLastColumn();
+  const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(v => trimStr_(v));
+  const col = {};
+  Object.keys(H).forEach(k => { const i = headers.indexOf(H[k]); if (i >= 0) col[k] = i + 1; });
+  const missing = Object.keys(H).filter(k => !col[k]);
+  if (missing.length) throw new Error('『連携』タブの見出しが見つかりません: ' + missing.map(k => H[k]).join('、') + '（メニュー「初期設定」を実行してください）');
+  return col;
+}
+
+function rowObjToArray_(obj, col) {
+  const width = Math.max.apply(null, Object.keys(col).map(k => col[k]));
+  const arr = new Array(width).fill('');
+  Object.keys(col).forEach(k => { if (obj[k] !== undefined) arr[col[k] - 1] = obj[k]; });
+  return arr;
+}
+function arrayToRowObj_(arr, col) {
+  const obj = {};
+  Object.keys(col).forEach(k => { const v = arr[col[k] - 1]; obj[k] = (v === null || v === undefined) ? '' : v; });
+  if (obj.key) obj.key = String(obj.key);
+  if (obj.status) obj.status = String(obj.status);
+  obj.round = Number(obj.round) || 1;
+  if (isDate_(obj.deadline)) obj.deadline = fmtYMD_(obj.deadline);
+  return obj;
+}
+
+function applyValidations_(sheet, col, startRow, numRows) {
+  const checkbox = SpreadsheetApp.newDataValidation().requireCheckbox().build();
+  const list = (values) => SpreadsheetApp.newDataValidation().requireValueInList(values, true).setAllowInvalid(true).build();
+  sheet.getRange(startRow, col.send, numRows, 1).setDataValidation(checkbox);
+  sheet.getRange(startRow, col.exclude, numRows, 1).setDataValidation(checkbox);
+  sheet.getRange(startRow, col.category, numRows, 1).setDataValidation(list([CATEGORY.EX, CATEGORY.IN]));
+  sheet.getRange(startRow, col.kind, numRows, 1).setDataValidation(list([KIND.PERS, KIND.PHOTO]));
+  sheet.getRange(startRow, col.stepKind, numRows, 1).setDataValidation(list([STEP_KIND.NEW, STEP_KIND.FIX, STEP_KIND.CHANGE]));
+  sheet.getRange(startRow, col.status, numRows, 1).setDataValidation(list([STATUS.NEW, STATUS.CHECK, STATUS.UPDATED, STATUS.SENT, STATUS.ERROR, STATUS.GONE]));
+}
+
+function readSettings_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEET.SETTINGS);
+  const cfg = Object.assign({}, SETTING_DEFAULTS);
+  if (sheet && sheet.getLastRow() > 1) {
+    const rows = sheet.getRange(1, 1, sheet.getLastRow(), 2).getValues();
+    rows.forEach(r => {
+      const label = trimStr_(r[0]);
+      const val = r[1];
+      Object.keys(SETTING_KEYS).forEach(k => { if (SETTING_KEYS[k] === label && trimStr_(val) !== '') cfg[k] = val; });
+    });
+  }
+  cfg.fileId = trimStr_(cfg.fileId);
+  cfg.tabName = trimStr_(cfg.tabName);
+  cfg.startRow = parseInt(cfg.startRow, 10) || 0;
+  cfg.defaultAssignee = trimStr_(cfg.defaultAssignee) || '未割当';
+  cfg.projectId = trimStr_(cfg.projectId);
+  cfg.workspaceId = trimStr_(cfg.workspaceId);
+  if (!cfg.fileId) throw new Error('『設定』タブの「スタッフシートのファイルID」が空です');
+  return cfg;
+}
+
+function readMasters_(ss) {
+  const companies = [];
+  const cs = ss.getSheetByName(SHEET.COMPANY);
+  if (cs && cs.getLastRow() > 1) {
+    cs.getRange(2, 1, cs.getLastRow() - 1, 2).getValues().forEach(r => {
+      const prefix = codePrefix_(r[0]);
+      const company = trimStr_(r[1]);
+      if (prefix && company) companies.push({ prefix, company });
+    });
+  }
+  const views = [];
+  const vs = ss.getSheetByName(SHEET.VIEW);
+  if (vs && vs.getLastRow() > 1) {
+    vs.getRange(2, 1, vs.getLastRow() - 1, 3).getValues().forEach(r => {
+      const keyword = normCut_(r[0]).replace(/[^A-Z]/g, '');
+      if (keyword) views.push({ keyword, category: trimStr_(r[1]), kind: trimStr_(r[2]) });
+    });
+  }
+  return { companies, views };
+}
+
+function parseJsonArray_(s) {
+  if (!s) return [];
+  try { const v = JSON.parse(s); return Array.isArray(v) ? v : []; } catch (e) { return []; }
+}
+function toastOrLog_(msg) {
+  try { SpreadsheetApp.getActiveSpreadsheet().toast(msg, '工程図連携', 10); } catch (e) { console.log(msg); }
+}
+function alertOrLog_(msg) {
+  try { SpreadsheetApp.getUi().alert(msg); } catch (e) { console.log(msg); }
+}
+
+// ============ 認証 ============
+function getAuth_() {
+  const sa = PropertiesService.getScriptProperties().getProperty(PROP_SERVICE_ACCOUNT);
+  if (sa) return { token: serviceAccountToken_(JSON.parse(sa)), mode: 'service-account' };
+  return { token: ScriptApp.getOAuthToken(), mode: 'user' };
+}
+
+/** サービスアカウント鍵 → アクセストークン（JWT を署名して交換。50分キャッシュ） */
+function serviceAccountToken_(sa) {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get('sa_token');
+  if (cached) return cached;
+  const now = Math.floor(Date.now() / 1000);
+  const b64 = (o) => Utilities.base64EncodeWebSafe(JSON.stringify(o)).replace(/=+$/, '');
+  const unsigned = b64({ alg: 'RS256', typ: 'JWT' }) + '.' + b64({
+    iss: sa.client_email,
+    scope: 'https://www.googleapis.com/auth/datastore',
+    aud: 'https://oauth2.googleapis.com/token',
+    iat: now, exp: now + 3600,
+  });
+  const sig = Utilities.base64EncodeWebSafe(Utilities.computeRsaSha256Signature(unsigned, sa.private_key)).replace(/=+$/, '');
+  const res = UrlFetchApp.fetch('https://oauth2.googleapis.com/token', {
+    method: 'post',
+    payload: { grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: unsigned + '.' + sig },
+    muteHttpExceptions: true,
+  });
+  if (res.getResponseCode() >= 300) throw new Error('サービスアカウントのトークン取得に失敗: ' + res.getContentText().slice(0, 300));
+  const token = JSON.parse(res.getContentText()).access_token;
+  cache.put('sa_token', token, 3000);
+  return token;
+}
+
+// ============ Firestore REST ============
+function fsBase_(cfg) {
+  return 'https://firestore.googleapis.com/v1/projects/' + cfg.projectId + '/databases/(default)/documents';
+}
+function fsFetch_(auth, url, method, body) {
+  const res = UrlFetchApp.fetch(url, {
+    method: method,
+    contentType: 'application/json',
+    headers: { Authorization: 'Bearer ' + auth.token },
+    payload: body ? JSON.stringify(body) : undefined,
+    muteHttpExceptions: true,
+  });
+  const code = res.getResponseCode();
+  if (code === 404 && method === 'get') return null;
+  if (code >= 300) throw new Error('Firestore ' + method.toUpperCase() + ' ' + code + ': ' + res.getContentText().slice(0, 500));
+  const text = res.getContentText();
+  return text ? JSON.parse(text) : {};
+}
+/** コレクションの全ドキュメント（デコード済み）。limit を渡すと先頭だけ。 */
+function fsListAll_(auth, cfg, collectionPath, limit) {
+  const docs = [];
+  let pageToken = '';
+  do {
+    const size = limit ? Math.min(limit, 300) : 300;
+    const url = fsBase_(cfg) + '/' + collectionPath + '?pageSize=' + size + (pageToken ? '&pageToken=' + encodeURIComponent(pageToken) : '');
+    const j = fsFetch_(auth, url, 'get') || {};
+    (j.documents || []).forEach(d => docs.push(fsDecodeDoc_(d)));
+    pageToken = j.nextPageToken || '';
+    if (limit && docs.length >= limit) break;
+  } while (pageToken);
+  return docs;
+}
+/** workspaces/{wid}/data/{key} の value（JSON文字列）を返す。無ければ null。 */
+function fsGetValueString_(auth, cfg, key) {
+  const d = fsFetch_(auth, fsBase_(cfg) + '/workspaces/' + cfg.workspaceId + '/data/' + key, 'get');
+  if (!d) return null;
+  const f = fsDecodeDoc_(d);
+  return (f.value === undefined || f.value === null) ? null : String(f.value);
+}
+/** ドキュメントを作成／部分更新。maskFields を渡すとその項目だけ更新する。 */
+function fsPatch_(auth, cfg, docPath, fields, maskFields) {
+  let url = fsBase_(cfg) + '/' + docPath;
+  if (maskFields && maskFields.length) url += '?' + maskFields.map(f => 'updateMask.fieldPaths=' + encodeURIComponent(f)).join('&');
+  return fsFetch_(auth, url, 'patch', { fields: fsEncodeFields_(fields) });
+}
+function fsEncodeFields_(obj) {
+  const out = {};
+  Object.keys(obj).forEach(k => { out[k] = fsEncodeValue_(obj[k]); });
+  return out;
+}
+function fsEncodeValue_(v) {
+  if (v === null || v === undefined) return { nullValue: null };
+  if (typeof v === 'boolean') return { booleanValue: v };
+  if (typeof v === 'number') return Number.isInteger(v) ? { integerValue: String(v) } : { doubleValue: v };
+  if (typeof v === 'string') return { stringValue: v };
+  if (Array.isArray(v)) return { arrayValue: { values: v.map(fsEncodeValue_) } };
+  if (typeof v === 'object') return { mapValue: { fields: fsEncodeFields_(v) } };
+  return { stringValue: String(v) };
+}
+function fsDecodeDoc_(d) {
+  const out = {};
+  const fields = (d && d.fields) || {};
+  Object.keys(fields).forEach(k => { out[k] = fsDecodeValue_(fields[k]); });
+  return out;
+}
+function fsDecodeValue_(v) {
+  if (!v || typeof v !== 'object') return null;
+  if ('stringValue' in v) return v.stringValue;
+  if ('integerValue' in v) return Number(v.integerValue);
+  if ('doubleValue' in v) return Number(v.doubleValue);
+  if ('booleanValue' in v) return !!v.booleanValue;
+  if ('nullValue' in v) return null;
+  if ('timestampValue' in v) return v.timestampValue;
+  if ('arrayValue' in v) return ((v.arrayValue && v.arrayValue.values) || []).map(fsDecodeValue_);
+  if ('mapValue' in v) return fsDecodeDoc_(v.mapValue);
+  return null;
+}
