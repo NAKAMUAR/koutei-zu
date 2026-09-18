@@ -62,9 +62,9 @@ src/
   - 帳票・売上の旧1ドキュメント集中保存（`billingDocuments` / `salesLedger`）は起動時に自動移行され、旧データは `*_backup` キーへ退避される
 - ホスティング: GitHub Pages（`gh-pages` で `dist/` を公開）
 - Firestore ルール（`firestore.rules`）: オーナー（ルール内に直書き）＋ `data/allowedEmails` の emails 配列に載っているメンバーのみ読み書き可。メンバーはアプリの設定パネル（メンバー管理）で編集（リストの書き換えはオーナーのみ）。**ルールを変更したら Firebase コンソールへ手動デプロイが必要。**
-- スプレッドシート連携（`sync/`）: スタッフが書く「Project Schedule」→ 別ファイル「工程図連携」シート（人が補正）→ 工程図、という2段階。`sync/Code.gs`（Apps Script）と `sync/appsscript.json` を「工程図連携」シートに貼り付けて使う。手順・仕様は `docs/08_スプレッドシート連携.md`。
+- スプレッドシート連携（`sync/`）: スタッフが書く「Project Schedule」の『product schedule』タブ（社内案件名・視点名・パターン・ホワイト/カラー/その他時間）→ 別ファイル「工程図連携」シート（案件マスタ・会社マスタ・視点マスタで自動判定、人が補正）→ 工程図、という2段階。`sync/Code.gs`（Apps Script）と `sync/appsscript.json` を「工程図連携」シートに貼り付けて使う。手順・仕様は `docs/08_スプレッドシート連携.md`。
   - 工程図への書き込みは Firestore REST API。認証は実行アカウント（Firebase オーナー）の OAuth トークン、または サービスアカウント鍵（スクリプトプロパティに保存。**鍵ファイルはリポジトリに入れない**、`.gitignore` 済み）。Firestore ルールはこの経路に適用されないので、ルール変更は不要。
-  - 同期で作るタスクは `externalId`（`案件コード::カット名::n回目::ステップ種類`）を持つ。アプリ側で削除すると `data/deletedExternalIds` に記録され、再送信しても復活しない（App.jsx の既存挙動）。
+  - 同期で作るタスクは `externalId`（`案件コード::視点名(パターン込み)::n回目::ステップ種類`）を持ち、`stepRoundType`（新規→initial・追加→add・修正/変更→fix）と `viewpointNameExternal`（外観視点①_パターンA）を自動で入れる。アプリ側で削除すると `data/deletedExternalIds` に記録され、再送信しても復活しない（App.jsx の既存挙動）。
   - 純ロジックのテスト: `node sync/test/logic.test.mjs`
 
 ## 確認のしかた

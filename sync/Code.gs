@@ -4,13 +4,17 @@
  * このスクリプトは「工程図連携」スプレッドシート（スタッフには共有しない別ファイル）に貼り付けて使う。
  *
  * 流れ:
- *   1. スタッフが書く「Project Schedule」の『案件シート(一覧)』タブから、
- *      工程図の登録に必要な列だけを『連携』タブへ転記する（新しい行だけ追加。手で直した欄は上書きしない）
- *   2. 転記時に『会社マスタ』『視点マスタ』で 会社名・区分（外観/内観）・種類（パース/写真合成）を自動判定する
- *   3. 人が『連携』タブで不足・紐づけ違いを直し、「工程図へ」にチェックを入れる
- *   4. 「工程図へ送信」で、チェック済みの行を工程図（Firestore）にタスクとして登録する
- *      - White時間 → 「ホワイト」ステップ、Color時間 → 「カラー」ステップ（2回目以降は「修正」扱い）
- *      - 登録後の進捗（担当者・優先度・完了時間・状態）は工程図側が正。シートからは上書きしない
+ *   1. スタッフ（エンジニア）が「Project Schedule」の『product schedule』タブに
+ *      社内案件名・視点名（EX1/IN1…）・パターン（A/B…）・制作時間（ホワイト/カラー/その他）を書く
+ *      （旧レイアウトの『案件シート(一覧)』タブも読める。列は見出し名で探す）
+ *   2. 「転記」で『連携』タブへ新しい行だけ追加し、『案件マスタ』『会社マスタ』『視点マスタ』で
+ *      社外案件名・会社名・お客様担当者・区分（外観/内観）・種類（パース/写真合成）・社外視点名（外観視点①）を自動判定
+ *   3. 人が『連携』タブで不足・紐づけ違い（お客様名・社内担当者など）を直し、「工程図へ」にチェック
+ *   4. 「工程図へ送信」で、チェック済みの行を工程図（Firestore）にタスクとして登録
+ *      - ホワイト時間 → 「ホワイト」、カラー時間 → 「カラー」、その他時間 → 「人物＋添景合成」のステップ
+ *      - 同じ案件＋視点の2回目以降は「修正」ステップとして同じ視点に追加
+ *      - 種類（新規/追加/修正）は売上・帳票の「初回/追加/修正」として登録（金額は工程図側で入力）
+ *      - 登録後の担当者・優先度・完了時間・状態は工程図側が正。シートからは上書きしない
  *      - 工程図側で削除したタスク（deletedExternalIds）は復活させない
  *
  * 認証:
@@ -19,29 +23,35 @@
  *   - それが使えない環境では、メニュー「秘密鍵を設定」でサービスアカウントの鍵（JSON）を
  *     スクリプトプロパティに保存して使う（シートには書かない）。
  *
- * 設定値は『設定』タブから読む（ファイルID・タブ名・取込開始行・既定の担当者・プロジェクトID・ワークスペースID）。
- * 列の位置は見出し名で探すので、『連携』タブの列の順番は変えてよい（見出しの文字は変えない）。
+ * 設定値は『設定』タブから読む。列の位置は見出し名で探すので、『連携』タブの列の順番は変えてよい（見出しの文字は変えない）。
  */
 
 // ============ 定数 ============
-const SHEET = { LINK: '連携', COMPANY: '会社マスタ', VIEW: '視点マスタ', SETTINGS: '設定', HOWTO: '使い方' };
+const SHEET = { LINK: '連携', COMPANY: '会社マスタ', VIEW: '視点マスタ', PROJECT: '案件マスタ', SETTINGS: '設定', HOWTO: '使い方' };
+const STAFF_TAB_DEFAULT = 'product schedule';
 
 // 『連携』タブの見出し（列は見出し名で探す）
 const H = {
   key: '取込キー', status: '状態', send: '工程図へ',
-  code: '社内案件名', name: '社外案件名', cut: 'カット名', round: '回', deadline: '納期',
-  white: 'White時間', color: 'Color時間', item: '制作項目',
-  company: '会社名', category: '区分', kind: '種類', stepKind: 'ステップ種類',
+  code: '社内案件名', name: '社外案件名', cut: '視点名', pattern: 'パターン', extName: '社外視点名', round: '回', deadline: '納期',
+  white: 'ホワイト時間', color: 'カラー時間', other: 'その他時間', item: '制作項目', note: '元シート備考',
+  company: '会社名', contact: 'お客様担当者', category: '区分', kind: '種類', stepKind: 'ステップ種類',
   assignee: '担当者', memo: 'メモ', exclude: '対象外',
   transferredAt: '転記日時', sentAt: '送信日時', result: '結果', srcRow: '元シート行', link: 'サーバリンク',
 };
-const LINK_HEADER_ORDER = ['key', 'status', 'send', 'code', 'name', 'cut', 'round', 'deadline', 'white', 'color', 'item',
-  'company', 'category', 'kind', 'stepKind', 'assignee', 'memo', 'exclude', 'transferredAt', 'sentAt', 'result', 'srcRow', 'link'];
+// 旧バージョンの見出し（そのまま使えるように別名として受け付ける）
+const H_ALIASES = { cut: ['カット名'], white: ['White時間'], color: ['Color時間'] };
+const LINK_HEADER_ORDER = ['key', 'status', 'send', 'code', 'name', 'cut', 'pattern', 'extName', 'round', 'deadline',
+  'white', 'color', 'other', 'item', 'note', 'company', 'contact', 'category', 'kind', 'stepKind', 'assignee', 'memo', 'exclude',
+  'transferredAt', 'sentAt', 'result', 'srcRow', 'link'];
 
 const STATUS = { NEW: '未送信', CHECK: '要確認', UPDATED: '更新あり', SENT: '登録済み', ERROR: 'エラー', GONE: '元シートから消えた' };
 const KIND = { PERS: 'パース', PHOTO: '写真合成' };
 const CATEGORY = { EX: '外観', IN: '内観' };
-const STEP_KIND = { NEW: '新規', FIX: '修正（無料）', CHANGE: '変更（有料）' };
+const STEP_KIND = { NEW: '新規', ADD: '追加', FIX: '修正（無料）', CHANGE: '変更（有料）' };
+// 工程図の売上・帳票で使う「納品種類」（viewpointUtils.js の ROUND_TYPES と同じ id）
+const ROUND_TYPE_BY_STEP_KIND = { '新規': 'initial', '追加': 'add', '修正（無料）': 'fix', '変更（有料）': 'fix' };
+const CIRCLED = '①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳';
 
 // 工程図のステップ種類マスタ（アプリ側 DEFAULT_STEP_TYPES と同じ）。工程図に保存済みのマスタがあればそちらを優先する。
 const DEFAULT_STEP_TYPES = [
@@ -65,14 +75,27 @@ const SETTING_KEYS = {
 };
 const SETTING_DEFAULTS = {
   fileId: '12IfXNtu67LNuqRnB6Iako0pvI1A3k1CzyQTS4F3u5fU',
-  tabName: '案件シート(一覧)',
-  startRow: 4800,
+  tabName: STAFF_TAB_DEFAULT,
+  startRow: 2,
   defaultAssignee: '未割当',
   projectId: 'koutei-zu',
   workspaceId: 'liebe-asia-team',
 };
+const SETTING_NOTES = {
+  fileId: '「Project Schedule」のURLの /d/ と /edit の間の文字列',
+  tabName: 'スタッフが書くタブの名前（見出し「社内案件名」がある行から下を読みます）',
+  startRow: 'この行より上は取り込みません。旧レイアウト『案件シート(一覧)』を読むときは 4800 などにする',
+  defaultAssignee: '『連携』の担当者が空のときに使う名前。工程図で後から変更できます',
+  projectId: '通常は変更不要',
+  workspaceId: '通常は変更不要',
+};
 
 const PROP_SERVICE_ACCOUNT = 'SERVICE_ACCOUNT_JSON';
+
+// スタッフ入力タブ『product schedule』の見出し（メニュー「スタッフ入力タブを作成」で作る）
+const STAFF_INPUT_HEADERS = ['入力日', '社内案件名', '視点名', 'パターン', 'ホワイト時間', 'カラー時間', 'その他時間', '納期', '備考', '完了'];
+const STAFF_INPUT_NOTES = ['例: 9/18', '例: RIC.34（案件名＋番号）', '外観1 → EX1、内観1 → IN1', 'A / B / C（無ければ空）',
+  '躯体・家具・レンダリング・照明・カメラ設定（h）', '色付け・レンダリング（h）', '人物・点景・色分など（h）', '例: 9/30（任意）', '任意', '作業完了／作成無しならチェック'];
 
 // 『会社マスタ』『視点マスタ』が空のときに「初期設定」で入れる初期値（シート上で自由に直してよい）
 const INITIAL_COMPANY_MASTER = [
@@ -96,30 +119,34 @@ const INITIAL_COMPANY_MASTER = [
   ['ESAKI', '', '要確認：工程図の会社名を入力'],
   ['WUNDER', '', '要確認：工程図の会社名を入力'],
 ];
+// [キーワード, 区分, 種類, 社外名, 備考]
 const INITIAL_VIEW_MASTER = [
-  ['EX', '外観', 'パース', 'EX1, EX2 … など。先に書いた行が優先'],
-  ['IN', '内観', 'パース', 'IN1, HOTEL_IN1(D), CAFE_IN2 など'],
-  ['LDK', '内観', 'パース', 'A-LDK2, 七番町ⅣT2_LDK1 など'],
-  ['BED', '内観', 'パース', ''],
-  ['LAVABO', '内観', 'パース', ''],
-  ['KITCHEN', '内観', 'パース', ''],
-  ['BATH', '内観', 'パース', ''],
-  ['ENTRANCE', '内観', 'パース', ''],
-  ['LOBBY', '内観', 'パース', ''],
-  ['FRONT', '内観', 'パース', ''],
-  ['CAFE', '内観', 'パース', ''],
-  ['RESTAURANT', '内観', 'パース', ''],
-  ['HOTEL', '内観', 'パース', ''],
-  ['ROOM', '内観', 'パース', ''],
-  ['WC', '内観', 'パース', ''],
-  ['TOILET', '内観', 'パース', ''],
-  ['P', '', '写真合成', 'P-1, P-2 など（制作項目に「写真」「合成」があれば自動で写真合成）'],
-  ['PHOTO', '', '写真合成', ''],
-  ['CAD', '', '', '要確認：CAD図の扱いは人が判断（種類が空なので「要確認」になります）'],
-  ['AREA', '', '', '要確認：オフショア案件の area1… は人が判断'],
-  ['CAM', '', '', '要確認'],
-  ['VR', '', '', '要確認'],
+  ['EX', '外観', 'パース', '外観視点', 'EX1 → 外観視点①。先に書いた行が優先'],
+  ['IN', '内観', 'パース', '内観視点', 'IN2 → 内観視点②。HOTEL_IN1(D), CAFE_IN2 なども IN として判定'],
+  ['LDK', '内観', 'パース', '内観視点', 'A-LDK2, 七番町ⅣT2_LDK1 など'],
+  ['BED', '内観', 'パース', '内観視点', ''],
+  ['LAVABO', '内観', 'パース', '内観視点', ''],
+  ['KITCHEN', '内観', 'パース', '内観視点', ''],
+  ['BATH', '内観', 'パース', '内観視点', ''],
+  ['ENTRANCE', '内観', 'パース', '内観視点', ''],
+  ['LOBBY', '内観', 'パース', '内観視点', ''],
+  ['FRONT', '内観', 'パース', '内観視点', ''],
+  ['CAFE', '内観', 'パース', '内観視点', ''],
+  ['RESTAURANT', '内観', 'パース', '内観視点', ''],
+  ['HOTEL', '内観', 'パース', '内観視点', ''],
+  ['ROOM', '内観', 'パース', '内観視点', ''],
+  ['WC', '内観', 'パース', '内観視点', ''],
+  ['TOILET', '内観', 'パース', '内観視点', ''],
+  ['P', '', '写真合成', '写真合成', 'P-1, P-2 など（制作項目に「写真」「合成」があれば自動で写真合成）'],
+  ['PHOTO', '', '写真合成', '写真合成', ''],
+  ['CAD', '', '', '', '要確認：CAD図の扱いは人が判断（種類が空なので「要確認」になります）'],
+  ['AREA', '', '', '', '要確認：オフショア案件の area1… は人が判断'],
+  ['CAM', '', '', '', '要確認'],
+  ['VR', '', '', '', '要確認'],
 ];
+const COMPANY_MASTER_HEADERS = ['案件コードの英字部分', '工程図の会社名', '備考'];
+const VIEW_MASTER_HEADERS = ['カット名のキーワード', '区分', '種類', '社外名', '備考'];
+const PROJECT_MASTER_HEADERS = ['社内案件名', '社外案件名', '会社名', 'お客様担当者', '備考'];
 
 // ============ メニュー ============
 function onOpen() {
@@ -133,6 +160,7 @@ function onOpen() {
     .addItem('工程図との接続テスト', 'testConnection')
     .addSeparator()
     .addItem('初期設定（タブ・チェックボックスを整える）', 'setupSheet')
+    .addItem('スタッフ入力タブ（product schedule）を作成', 'createStaffInputTab')
     .addItem('秘密鍵を設定（接続テストが失敗する場合のみ）', 'setServiceAccountKey')
     .addItem('秘密鍵を削除', 'clearServiceAccountKey')
     .addToUi();
@@ -167,13 +195,14 @@ function transferFromStaffSheet() {
     if (byKey.has(s.key)) {
       const r = byKey.get(s.key);
       const cur = data[r];
-      const fields = { code: s.code, name: s.name, cut: s.cut, deadline: s.deadline, white: s.white, color: s.color, item: s.item, srcRow: s.srcRow, link: s.link };
+      const fields = { code: s.code, cut: s.cut, pattern: s.pattern, deadline: s.deadline, white: s.white, color: s.color, other: s.other, item: s.item, note: s.note, srcRow: s.srcRow, link: s.link };
+      if (s.name) fields.name = s.name; // スタッフシートに社外案件名があるときだけ追従（無ければ人が入れた値を保つ）
       let changed = false;
       Object.keys(fields).forEach(f => {
         if (!sameCell_(cur[col[f] - 1], fields[f])) {
           cellUpdates.push({ row: r + 1, col: col[f], value: fields[f] });
-          // 元シート行・サーバリンクの変化は「内容の変更」とみなさない
-          if (f !== 'srcRow' && f !== 'link') changed = true;
+          // 元シート行・サーバリンク・備考の変化は「内容の変更」とみなさない
+          if (f !== 'srcRow' && f !== 'link' && f !== 'note') changed = true;
         }
       });
       if (changed) {
@@ -188,9 +217,9 @@ function transferFromStaffSheet() {
     const j = judgeRow_(s, masters);
     const rowObj = {
       key: s.key, status: j.status, send: false,
-      code: s.code, name: s.name, cut: s.cut, round: s.round, deadline: s.deadline,
-      white: s.white, color: s.color, item: s.item,
-      company: j.company, category: j.category, kind: j.kind, stepKind: j.stepKind,
+      code: s.code, name: j.name, cut: s.cut, pattern: s.pattern, extName: j.extName, round: s.round, deadline: s.deadline,
+      white: s.white, color: s.color, other: s.other, item: s.item, note: s.note,
+      company: j.company, contact: j.contact, category: j.category, kind: j.kind, stepKind: j.stepKind,
       assignee: '', memo: '', exclude: false,
       transferredAt: stamp, sentAt: '', result: j.note, srcRow: s.srcRow, link: s.link,
     };
@@ -218,16 +247,16 @@ function transferFromStaffSheet() {
   return msg;
 }
 
-/** スタッフシートを読み、必要な列だけ抜き出す。見出し名で列を探すので列の位置が変わっても追従する。 */
+/** スタッフシートを読み、必要な列だけ抜き出す。見出し名で列を探すので、新旧どちらのレイアウトでも読める。 */
 function readStaffRows_(cfg) {
   const ss = SpreadsheetApp.openById(cfg.fileId);
   const sheet = ss.getSheetByName(cfg.tabName);
-  if (!sheet) throw new Error(`スタッフシートにタブ「${cfg.tabName}」が見つかりません（『設定』タブのタブ名を確認してください）`);
+  if (!sheet) throw new Error(`スタッフシートにタブ「${cfg.tabName}」が見つかりません（『設定』タブのタブ名を確認するか、メニュー「スタッフ入力タブを作成」を実行してください）`);
   const lastRow = sheet.getLastRow();
   const lastCol = sheet.getLastColumn();
   if (lastRow < 2) return [];
 
-  // 見出し行：B〜E列のどこかに「社内案件名」がある最初の行
+  // 見出し行：A〜F列のどこかに「社内案件名」がある最初の行
   const probe = sheet.getRange(1, 1, Math.min(lastRow, 200), Math.min(lastCol, 6)).getValues();
   let headerRow = -1;
   for (let r = 0; r < probe.length; r++) {
@@ -243,57 +272,72 @@ function readStaffRows_(cfg) {
   const width = Math.max.apply(null, Object.keys(sc).map(k => sc[k]));
   const values = sheet.getRange(firstDataRow, 1, lastRow - firstDataRow + 1, width).getValues();
 
+  const at = (v, c) => (c ? v[c - 1] : '');
   const rows = [];
   for (let i = 0; i < values.length; i++) {
     const v = values[i];
     rows.push({
       srcRow: firstDataRow + i,
-      code: trimStr_(v[sc.code - 1]),
-      name: trimStr_(v[sc.name - 1]),
-      cut: trimStr_(v[sc.cut - 1]),
-      link: sc.link ? trimStr_(v[sc.link - 1]) : '',
-      deadlineRaw: sc.deadline ? v[sc.deadline - 1] : '',
-      item: sc.item ? trimStr_(v[sc.item - 1]) : '',
-      white: toHours_(v[sc.white - 1]),
-      color: sc.color ? toHours_(v[sc.color - 1]) : 0,
-      done: sc.done ? isChecked_(v[sc.done - 1]) : false,
+      code: trimStr_(at(v, sc.code)),
+      name: trimStr_(at(v, sc.name)),
+      cut: trimStr_(at(v, sc.cut)),
+      pattern: normPattern_(at(v, sc.pattern)),
+      link: trimStr_(at(v, sc.link)),
+      deadlineRaw: at(v, sc.deadline),
+      item: trimStr_(at(v, sc.item)),
+      note: trimStr_(at(v, sc.note)),
+      white: toHours_(at(v, sc.white)),
+      color: toHours_(at(v, sc.color)),
+      other: toHours_(at(v, sc.other)),
+      done: isChecked_(at(v, sc.done)),
     });
   }
   return rows;
 }
 
-/** スタッフシートの見出し配列 → 列番号（1始まり）。予想時間は1つ目=White、2つ目=Color。 */
+/**
+ * スタッフシートの見出し配列 → 列番号（1始まり）。
+ * 新レイアウト（product schedule）: 社内案件名 / 視点名 / パターン / ホワイト時間 / カラー時間 / その他時間 / 納期 / 備考 / 完了
+ * 旧レイアウト（案件シート(一覧)）: 社内案件名 / 社外案件名 / カット名 / サーバリンク / 納期 / 制作項目 / 予想時間×2 / 作業完了
+ */
 function staffHeaderMap_(headers) {
   const find = (pred) => { for (let i = 0; i < headers.length; i++) if (pred(headers[i])) return i + 1; return 0; };
-  const startsWith = (p) => (h) => h.indexOf(p) === 0;
+  const starts = (list) => (h) => list.some(p => h.indexOf(p) === 0);
   const m = {
-    code: find(startsWith('社内案件名')),
-    name: find(startsWith('社外案件名')),
-    cut: find(startsWith('カット名')),
-    link: find(startsWith('サーバリンク')),
-    deadline: find(startsWith('納期')),
-    item: find(startsWith('制作項目')),
-    done: find(startsWith('作業完了')),
+    code: find(starts(['社内案件名'])),
+    name: find(starts(['社外案件名'])),
+    cut: find(starts(['視点名', 'カット名'])),
+    pattern: find(starts(['パターン'])),
+    link: find(starts(['サーバリンク'])),
+    deadline: find(starts(['納期'])),
+    item: find(starts(['制作項目'])),
+    note: find(starts(['備考'])),
+    done: find(starts(['作業完了', '完了'])),
+    white: find(starts(['ホワイト', 'White', 'WHITE'])),
+    color: find(starts(['カラー', 'Color', 'COLOR'])),
+    other: find(starts(['その他', '人物'])),
   };
+  // 旧レイアウト：「予想時間」が2つ（1つ目=White、2つ目=Color）
   const est = [];
   headers.forEach((h, i) => { if (h.indexOf('予想時間') === 0) est.push(i + 1); });
-  m.white = est[0] || 0;
-  m.color = est[1] || 0;
+  if (!m.white && est[0]) m.white = est[0];
+  if (!m.color && est[1]) m.color = est[1];
   const missing = ['code', 'cut', 'white'].filter(k => !m[k]);
   if (missing.length) {
-    const label = { code: '社内案件名', cut: 'カット名', white: '予想時間' };
+    const label = { code: '社内案件名', cut: '視点名（またはカット名）', white: 'ホワイト時間（または予想時間）' };
     throw new Error('スタッフシートの見出しが見つかりません: ' + missing.map(k => label[k]).join('、'));
   }
   return m;
 }
 
-/** 案件コード＋カット名で同じものを数え、n回目を付けて取込キーにする。完了チェック済みは数えるが出力しない。 */
+/** 案件コード＋視点名（パターン込み）で同じものを数え、n回目を付けて取込キーにする。完了チェック済みは数えるが出力しない。 */
 function collectSourceRows_(staffRows, today) {
   const counts = new Map();
   const out = [];
   staffRows.forEach(r => {
     if (!r.code || !r.cut) return;
-    const base = normCode_(r.code) + '::' + normCut_(r.cut);
+    const vpName = viewpointNameOf_(r.cut, r.pattern);
+    const base = normCode_(r.code) + '::' + normCut_(vpName);
     const n = (counts.get(base) || 0) + 1;
     counts.set(base, n);
     if (r.done) return;
@@ -301,9 +345,9 @@ function collectSourceRows_(staffRows, today) {
       key: base + '::' + n,
       round: n,
       srcRow: r.srcRow,
-      code: r.code, name: r.name, cut: r.cut, link: r.link, item: r.item,
+      code: r.code, name: r.name, cut: r.cut, pattern: r.pattern, link: r.link, item: r.item, note: r.note,
       deadline: parseDeadline_(r.deadlineRaw, today || new Date()),
-      white: r.white, color: r.color,
+      white: r.white, color: r.color, other: r.other,
     });
   });
   return out;
@@ -323,10 +367,40 @@ function codePrefix_(s) {
 function normCut_(s) {
   return String(s || '').trim().toUpperCase().replace(/\s+/g, ' ');
 }
-/** カット名 → 英字トークン（'HOTEL_IN1(D)' → ['HOTEL','IN','D']、'CAD 1F-A' → ['CAD','F','A']） */
+/** パターン欄の正規化：'Aパターン' / 'パターンA' / 'a' → 'A'。'なし'・空 → '' */
+function normPattern_(v) {
+  const s = String(v === null || v === undefined ? '' : v).trim();
+  if (!s || /^(なし|無し|無|-|－)$/.test(s)) return '';
+  const m = s.replace(/パターン/g, '').trim().toUpperCase();
+  return m;
+}
+/** 工程図の視点名（内部名）：視点名＋パターン（'EX1' + 'A' → 'EX1-A'） */
+function viewpointNameOf_(cut, pattern) {
+  const c = trimStr_(cut);
+  const p = normPattern_(pattern);
+  return p ? c + '-' + p : c;
+}
+/** カット名 → 英字トークン（'HOTEL_IN1(D)' → ['HOTEL','IN','D']、'CAD 1F-A' → ['CAD','A']） */
 function cutTokens_(cut) {
   return normCut_(cut).split(/[^A-Z0-9]+/).filter(Boolean)
     .map(t => (t.match(/^[A-Z]+/) || [''])[0]).filter(Boolean);
+}
+/** カット名の番号（'EX1' → 1、'IN12' → 12、'EX' → 0）。最初に出てくる「英字＋数字」の数字部分 */
+function cutNumber_(cut) {
+  const m = normCut_(cut).match(/[A-Z]+(\d+)/);
+  return m ? parseInt(m[1], 10) : 0;
+}
+/** 丸数字（1 → ①、21以上はそのまま） */
+function circled_(n) {
+  if (!n || n < 1) return '';
+  return n <= CIRCLED.length ? CIRCLED.charAt(n - 1) : String(n);
+}
+/** 社外視点名：社外名＋丸数字＋パターン（'外観視点', 1, 'A' → '外観視点①_パターンA'） */
+function externalViewpointName_(base, number, pattern) {
+  const b = trimStr_(base);
+  if (!b) return '';
+  const p = normPattern_(pattern);
+  return b + circled_(number) + (p ? '_パターン' + p : '');
 }
 
 /** サーバリンクのフォルダ名から会社名を推定（「…\2025-7\株式会社リックデザイン(RIC)\…」→「株式会社リックデザイン」） */
@@ -338,8 +412,17 @@ function guessCompanyFromLink_(link) {
   return '';
 }
 
-/** 会社名の判定：会社マスタ（案件コードの英字部分）→ なければサーバリンクから推定（要確認） */
-function judgeCompany_(code, link, companyMaster) {
+/** 案件マスタ（社内案件名 → 社外案件名・会社名・お客様担当者）を引く。案件コードは正規化して比べる。 */
+function findProject_(code, projectMaster) {
+  const key = normCode_(code);
+  if (!key) return null;
+  return (projectMaster || []).find(p => p.key === key) || null;
+}
+
+/** 会社名の判定：案件マスタ → 会社マスタ（案件コードの英字部分）→ サーバリンクから推定（要確認） */
+function judgeCompany_(code, link, companyMaster, projectMaster) {
+  const pj = findProject_(code, projectMaster);
+  if (pj && pj.company) return { company: pj.company, guessed: false };
   const prefix = codePrefix_(code);
   const hit = (companyMaster || []).find(m => m.prefix && m.prefix === prefix);
   if (hit && hit.company) return { company: hit.company, guessed: false };
@@ -347,42 +430,49 @@ function judgeCompany_(code, link, companyMaster) {
   return { company: g, guessed: true };
 }
 
-/** 区分（外観/内観）と種類（パース/写真合成）の判定 */
+/** 区分（外観/内観）・種類（パース/写真合成）・社外名ベースの判定 */
 function judgeViewpoint_(cut, item, viewMaster) {
   const it = String(item || '');
   let kind = '';
   if (/写真|合成/.test(it)) kind = KIND.PHOTO;
   else if (/パース/.test(it)) kind = KIND.PERS;
   let category = '';
+  let external = '';
   const toks = cutTokens_(cut);
   for (let i = 0; i < toks.length; i++) {
     const m = (viewMaster || []).find(r => r.keyword === toks[i]);
-    if (m) { category = m.category || ''; if (!kind) kind = m.kind || ''; break; }
+    if (m) { category = m.category || ''; external = m.external || ''; if (!kind) kind = m.kind || ''; break; }
   }
   if (!kind && category) kind = KIND.PERS;
-  return { category, kind };
+  return { category, kind, external };
 }
 
-/** ステップ種類：制作項目に「変更」→変更（有料）、「修正」→修正（無料）、2回目以降→修正（無料）、それ以外→新規 */
+/** ステップ種類：制作項目に「変更」→変更（有料）、「修正」→修正（無料）、「追加」→追加、2回目以降→修正（無料）、それ以外→新規 */
 function judgeStepKind_(item, round) {
   const it = String(item || '');
   if (/変更/.test(it)) return STEP_KIND.CHANGE;
   if (/修正/.test(it)) return STEP_KIND.FIX;
+  if (/追加/.test(it)) return STEP_KIND.ADD;
   if ((round || 1) >= 2) return STEP_KIND.FIX;
   return STEP_KIND.NEW;
 }
 
 function judgeRow_(s, masters) {
-  const c = judgeCompany_(s.code, s.link, masters.companies);
+  const pj = findProject_(s.code, masters.projects);
+  const name = trimStr_(s.name) || (pj ? pj.name : '');
+  const contact = pj ? pj.contact : '';
+  const c = judgeCompany_(s.code, s.link, masters.companies, masters.projects);
   const v = judgeViewpoint_(s.cut, s.item, masters.views);
+  const extName = externalViewpointName_(v.external, cutNumber_(s.cut), s.pattern);
   const stepKind = judgeStepKind_(s.item, s.round);
   const notes = [];
-  if (!c.company) notes.push('会社名を入力してください（会社マスタに「' + codePrefix_(s.code) + '」を追加すると次回から自動）');
+  if (!name) notes.push('社外案件名を入力してください（案件マスタに「' + s.code + '」を追加すると次回から自動。空のままなら社内案件名で登録）');
+  if (!c.company) notes.push('会社名を入力してください（案件マスタか会社マスタに「' + codePrefix_(s.code) + '」を追加すると次回から自動）');
   else if (c.guessed) notes.push('会社名はサーバリンクから推定しました。確認してください');
   if (!v.kind) notes.push('種類（パース/写真合成）を選んでください');
   if (!v.category && v.kind === KIND.PERS) notes.push('区分（外観/内観）が未判定です（空のままでも送信できます）');
-  const needCheck = !c.company || c.guessed || !v.kind;
-  return { company: c.company, category: v.category, kind: v.kind, stepKind, status: needCheck ? STATUS.CHECK : STATUS.NEW, note: notes.join(' / ') };
+  const needCheck = !name || !c.company || c.guessed || !v.kind;
+  return { name, contact, company: c.company, category: v.category, kind: v.kind, extName, stepKind, status: needCheck ? STATUS.CHECK : STATUS.NEW, note: notes.join(' / ') };
 }
 
 /** 納期セル → 'YYYY-MM-DD'（Date / 'YYYY/M/D' / 'M/D' / 'M月D日'）。M/D は今年、60日以上前なら来年扱い。 */
@@ -469,17 +559,21 @@ function buildTaskRecords_(row, ctx) {
   const kind = trimStr_(row.kind);
   const white = toHours_(row.white);
   const color = toHours_(row.color);
-  if (!cut) errors.push('カット名が空です');
+  const other = toHours_(row.other);
+  if (!cut) errors.push('視点名が空です');
   if (!company) errors.push('会社名が空です');
   if (kind !== KIND.PERS && kind !== KIND.PHOTO) errors.push('種類は「パース」か「写真合成」を選んでください');
-  if (white <= 0 && color <= 0) errors.push('White時間・Color時間がどちらも0です');
+  if (white <= 0 && color <= 0 && other <= 0) errors.push('ホワイト・カラー・その他の時間がすべて0です');
   if (errors.length) return { records: [], errors };
 
   const projectName = trimStr_(row.name) || code;
   const projectNameInternal = code;
-  const viewpointName = cut;
+  const viewpointName = viewpointNameOf_(cut, row.pattern);
+  const viewpointNameExternal = trimStr_(row.extName);
+  const customerContact = trimStr_(row.contact);
   const category = trimStr_(row.category);
   const stepKind = trimStr_(row.stepKind) || STEP_KIND.NEW;
+  const roundType = ROUND_TYPE_BY_STEP_KIND[stepKind] || 'initial';
   const deadline = trimStr_(row.deadline) || null;
   const memo = trimStr_(row.memo);
   const stepTypes = ctx.stepTypes || DEFAULT_STEP_TYPES;
@@ -508,10 +602,11 @@ function buildTaskRecords_(row, ctx) {
 
   const wants = [];
   if (kind === KIND.PHOTO) {
-    wants.push({ typeId: '', name: KIND.PHOTO, tag: 'photo', hours: Math.round((white + color) * 100) / 100 });
+    wants.push({ typeId: '', name: KIND.PHOTO, tag: 'photo', hours: Math.round((white + color + other) * 100) / 100 });
   } else {
     if (white > 0) wants.push({ typeId: stepTypeIdFor_('white', stepKind), hours: white });
     if (color > 0) wants.push({ typeId: stepTypeIdFor_('color', stepKind), hours: color });
+    if (other > 0) wants.push({ typeId: 'person_scene', hours: other }); // 人物・点景・色分 → 人物＋添景合成
   }
 
   const records = [];
@@ -526,6 +621,8 @@ function buildTaskRecords_(row, ctx) {
       if ((existing.projectName || '') !== projectName) changes.projectName = projectName;
       if ((existing.projectNameInternal || '') !== projectNameInternal) changes.projectNameInternal = projectNameInternal;
       if ((existing.companyName || '') !== company) changes.companyName = company;
+      if (customerContact && (existing.customerContact || '') !== customerContact) changes.customerContact = customerContact;
+      if (viewpointNameExternal && (existing.viewpointNameExternal || '') !== viewpointNameExternal) changes.viewpointNameExternal = viewpointNameExternal;
       if ((existing.viewpointCategory || '') !== category) changes.viewpointCategory = category;
       if ((existing.deadline || null) !== deadline) changes.deadline = deadline;
       records.push({ id: existing.id, externalId, update: true, changes: Object.keys(changes).length ? changes : null });
@@ -544,8 +641,8 @@ function buildTaskRecords_(row, ctx) {
     const id = 'task-' + ctx.now + '-' + seq + '-' + Math.random().toString(36).slice(2, 7);
     const doc = {
       id,
-      projectName, projectNameInternal, companyName: company, customerContact: '',
-      viewpointName, viewpointNameExternal: '', viewpointCategory: category,
+      projectName, projectNameInternal, companyName: company, customerContact,
+      viewpointName, viewpointNameExternal, viewpointCategory: category,
       stepName: label, stepOrder: order, assignee,
       priority: 99, hours: w.hours, completedHours: 0,
       memo, tentative: false, tentativeStart: null, tentativeEnd: null,
@@ -554,7 +651,8 @@ function buildTaskRecords_(row, ctx) {
       status: 'pending', completedAt: null, createdAt, registeredDate: ctx.today,
       stepTypeId: ty ? ty.id : '', stepDeliverySuffix: deliverySuffix,
       stepAmount: '', stepRequestDate: ctx.today, stepCompletedDate: '', stepDeliveryNameOverride: '',
-      stepRoundType: '', stepOutInHouse: '', stepOutExternal: '', stepOutVND: '',
+      // 納品種類（売上・帳票の「初回/追加/修正」）。金額は工程図の請求パネルで入力する
+      stepRoundType: roundType, stepOutInHouse: '', stepOutExternal: '', stepOutVND: '',
       externalId,
     };
     records.push({ id, externalId, update: false, doc });
@@ -611,7 +709,7 @@ function runSend_(dryRun) {
 
   targets.forEach(t => {
     const row = t.row;
-    const label = (row.code + ' ' + row.cut + (row.round > 1 ? '（' + row.round + '回目）' : '')).trim();
+    const label = (row.code + ' ' + viewpointNameOf_(row.cut, row.pattern) + (row.round > 1 ? '（' + row.round + '回目）' : '')).trim();
     ctx.now = Date.now();
     const built = buildTaskRecords_(row, ctx);
     if (built.errors.length) {
@@ -710,7 +808,37 @@ function clearServiceAccountKey() {
   toastOrLog_('秘密鍵を削除しました。以後はこのGoogleアカウントの権限で接続します。');
 }
 
-/** タブ・見出し・チェックボックス・プルダウンを整える（何度実行しても安全） */
+/** スタッフ入力タブ『product schedule』を「Project Schedule」側に作る（既にあれば見出しだけ確認）。設定のタブ名・取込開始行も合わせる。 */
+function createStaffInputTab() {
+  const cfg = readSettings_();
+  const staff = SpreadsheetApp.openById(cfg.fileId);
+  let sheet = staff.getSheetByName(STAFF_TAB_DEFAULT);
+  let created = false;
+  if (!sheet) {
+    sheet = staff.insertSheet(STAFF_TAB_DEFAULT, 0);
+    created = true;
+  }
+  if (sheet.getLastRow() === 0) {
+    sheet.getRange(1, 1, 1, STAFF_INPUT_HEADERS.length).setValues([STAFF_INPUT_HEADERS]).setFontWeight('bold').setBackground('#dde5f0');
+    sheet.getRange(1, 1, 1, STAFF_INPUT_HEADERS.length).setNotes([STAFF_INPUT_NOTES]);
+    sheet.setFrozenRows(1);
+    const widths = [10, 18, 10, 10, 13, 13, 13, 10, 30, 8];
+    widths.forEach((w, i) => sheet.setColumnWidth(i + 1, w * 8));
+    const n = 1000;
+    const idx = (label) => STAFF_INPUT_HEADERS.indexOf(label) + 1;
+    sheet.getRange(2, idx('パターン'), n, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(['A', 'B', 'C', 'D'], true).setAllowInvalid(true).build());
+    sheet.getRange(2, idx('完了'), n, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build());
+    ['ホワイト時間', 'カラー時間', 'その他時間'].forEach(h => sheet.getRange(2, idx(h), n, 1).setNumberFormat('0.##'));
+  }
+  // 設定タブをこのタブ向けに合わせる
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  writeSetting_(ss, 'tabName', STAFF_TAB_DEFAULT);
+  writeSetting_(ss, 'startRow', 2);
+  alertOrLog_((created ? 'スタッフ入力タブ「' + STAFF_TAB_DEFAULT + '」を「Project Schedule」に作成しました。' : 'スタッフ入力タブ「' + STAFF_TAB_DEFAULT + '」は既にあります。') +
+    '\n『設定』のタブ名を「' + STAFF_TAB_DEFAULT + '」、取込開始行を 2 にしました。\n\n列: ' + STAFF_INPUT_HEADERS.join(' / '));
+}
+
+/** タブ・見出し・チェックボックス・プルダウン・使い方を整える（何度実行しても安全） */
 function setupSheet() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const link = ensureLinkSheet_(ss);
@@ -722,7 +850,7 @@ function setupSheet() {
 
   const company = ss.getSheetByName(SHEET.COMPANY) || ss.insertSheet(SHEET.COMPANY);
   if (company.getLastRow() === 0) {
-    const rows = [['案件コードの英字部分', '工程図の会社名', '備考']].concat(INITIAL_COMPANY_MASTER);
+    const rows = [COMPANY_MASTER_HEADERS].concat(INITIAL_COMPANY_MASTER);
     company.getRange(1, 1, rows.length, 3).setValues(rows);
   }
   company.setFrozenRows(1);
@@ -730,20 +858,51 @@ function setupSheet() {
 
   const view = ss.getSheetByName(SHEET.VIEW) || ss.insertSheet(SHEET.VIEW);
   if (view.getLastRow() === 0) {
-    const rows = [['カット名のキーワード', '区分', '種類', '備考']].concat(INITIAL_VIEW_MASTER);
-    view.getRange(1, 1, rows.length, 4).setValues(rows);
+    const rows = [VIEW_MASTER_HEADERS].concat(INITIAL_VIEW_MASTER);
+    view.getRange(1, 1, rows.length, VIEW_MASTER_HEADERS.length).setValues(rows);
+  } else {
+    ensureViewMasterExternalColumn_(view);
   }
   view.setFrozenRows(1);
-  view.getRange(1, 1, 1, Math.max(view.getLastColumn(), 4)).setFontWeight('bold');
+  view.getRange(1, 1, 1, Math.max(view.getLastColumn(), VIEW_MASTER_HEADERS.length)).setFontWeight('bold');
+
+  const project = ss.getSheetByName(SHEET.PROJECT) || ss.insertSheet(SHEET.PROJECT);
+  if (project.getLastRow() === 0) {
+    project.getRange(1, 1, 1, PROJECT_MASTER_HEADERS.length).setValues([PROJECT_MASTER_HEADERS]);
+    project.getRange(1, 1, 1, PROJECT_MASTER_HEADERS.length).setNotes([[
+      'スタッフが書く社内案件名（例 RIC.34）。大文字小文字・点・空白は無視して照合', 'お客様向けの案件名（工程図の案件名になる）',
+      '工程図の会社名（空なら会社マスタで判定）', '工程図のお客様担当者（任意）', '']]);
+    [22, 32, 22, 16, 30].forEach((w, i) => project.setColumnWidth(i + 1, w * 8));
+  }
+  project.setFrozenRows(1);
+  project.getRange(1, 1, 1, Math.max(project.getLastColumn(), PROJECT_MASTER_HEADERS.length)).setFontWeight('bold');
 
   const settings = ss.getSheetByName(SHEET.SETTINGS) || ss.insertSheet(SHEET.SETTINGS);
   if (settings.getLastRow() === 0) {
     const rows = [['項目', '値', '説明']];
-    Object.keys(SETTING_KEYS).forEach(k => rows.push([SETTING_KEYS[k], SETTING_DEFAULTS[k], '']));
+    Object.keys(SETTING_KEYS).forEach(k => rows.push([SETTING_KEYS[k], SETTING_DEFAULTS[k], SETTING_NOTES[k]]));
     settings.getRange(1, 1, rows.length, 3).setValues(rows);
   }
   settings.getRange(1, 1, 1, 3).setFontWeight('bold');
+
+  writeHowto_(ss);
   toastOrLog_('初期設定が完了しました。');
+}
+
+/** 旧バージョンの視点マスタ（社外名の列が無い）に「社外名」列を足し、EX/IN/P の初期値を入れる */
+function ensureViewMasterExternalColumn_(view) {
+  const lastCol = view.getLastColumn();
+  const headers = view.getRange(1, 1, 1, lastCol).getValues()[0].map(v => trimStr_(v));
+  if (headers.indexOf('社外名') >= 0) return;
+  const c = lastCol + 1;
+  view.getRange(1, c).setValue('社外名').setFontWeight('bold');
+  const last = view.getLastRow();
+  if (last < 2) return;
+  const kw = view.getRange(2, 1, last - 1, 1).getValues().map(r => normCut_(r[0]).replace(/[^A-Z]/g, ''));
+  const byKw = {};
+  INITIAL_VIEW_MASTER.forEach(r => { byKw[r[0]] = r[3]; });
+  const vals = kw.map(k => [byKw[k] || '']);
+  view.getRange(2, c, vals.length, 1).setValues(vals);
 }
 
 // ============ シート補助 ============
@@ -752,7 +911,8 @@ function ensureLinkSheet_(ss) {
   if (!sheet) sheet = ss.insertSheet(SHEET.LINK, 0);
   const lastCol = sheet.getLastColumn();
   const first = lastCol ? sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(v => trimStr_(v)) : [];
-  const missing = LINK_HEADER_ORDER.filter(k => first.indexOf(H[k]) < 0);
+  const has = (k) => first.indexOf(H[k]) >= 0 || (H_ALIASES[k] || []).some(a => first.indexOf(a) >= 0);
+  const missing = LINK_HEADER_ORDER.filter(k => !has(k));
   if (first.filter(Boolean).length === 0) {
     sheet.getRange(1, 1, 1, LINK_HEADER_ORDER.length).setValues([LINK_HEADER_ORDER.map(k => H[k])]);
   } else if (missing.length) {
@@ -762,12 +922,16 @@ function ensureLinkSheet_(ss) {
   return sheet;
 }
 
-/** 『連携』の見出し行 → { フィールド名: 列番号(1始まり) } */
+/** 『連携』の見出し行 → { フィールド名: 列番号(1始まり) }（旧見出しも別名として受け付ける） */
 function headerMap_(sheet) {
   const lastCol = sheet.getLastColumn();
   const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(v => trimStr_(v));
   const col = {};
-  Object.keys(H).forEach(k => { const i = headers.indexOf(H[k]); if (i >= 0) col[k] = i + 1; });
+  Object.keys(H).forEach(k => {
+    let i = headers.indexOf(H[k]);
+    if (i < 0) (H_ALIASES[k] || []).some(a => { i = headers.indexOf(a); return i >= 0; });
+    if (i >= 0) col[k] = i + 1;
+  });
   const missing = Object.keys(H).filter(k => !col[k]);
   if (missing.length) throw new Error('『連携』タブの見出しが見つかりません: ' + missing.map(k => H[k]).join('、') + '（メニュー「初期設定」を実行してください）');
   return col;
@@ -796,7 +960,7 @@ function applyValidations_(sheet, col, startRow, numRows) {
   sheet.getRange(startRow, col.exclude, numRows, 1).setDataValidation(checkbox);
   sheet.getRange(startRow, col.category, numRows, 1).setDataValidation(list([CATEGORY.EX, CATEGORY.IN]));
   sheet.getRange(startRow, col.kind, numRows, 1).setDataValidation(list([KIND.PERS, KIND.PHOTO]));
-  sheet.getRange(startRow, col.stepKind, numRows, 1).setDataValidation(list([STEP_KIND.NEW, STEP_KIND.FIX, STEP_KIND.CHANGE]));
+  sheet.getRange(startRow, col.stepKind, numRows, 1).setDataValidation(list([STEP_KIND.NEW, STEP_KIND.ADD, STEP_KIND.FIX, STEP_KIND.CHANGE]));
   sheet.getRange(startRow, col.status, numRows, 1).setDataValidation(list([STATUS.NEW, STATUS.CHECK, STATUS.UPDATED, STATUS.SENT, STATUS.ERROR, STATUS.GONE]));
 }
 
@@ -821,26 +985,45 @@ function readSettings_() {
   if (!cfg.fileId) throw new Error('『設定』タブの「スタッフシートのファイルID」が空です');
   return cfg;
 }
+/** 『設定』タブの1項目を書き換える（無ければ行を足す） */
+function writeSetting_(ss, key, value) {
+  const sheet = ss.getSheetByName(SHEET.SETTINGS) || ss.insertSheet(SHEET.SETTINGS);
+  const label = SETTING_KEYS[key];
+  const last = sheet.getLastRow();
+  if (last >= 1) {
+    const labels = sheet.getRange(1, 1, last, 1).getValues().map(r => trimStr_(r[0]));
+    const i = labels.indexOf(label);
+    if (i >= 0) { sheet.getRange(i + 1, 2).setValue(value); return; }
+  }
+  sheet.appendRow([label, value, SETTING_NOTES[key] || '']);
+}
 
+/** マスタ3種を見出し名で読む（列の順番が変わっても追従） */
 function readMasters_(ss) {
+  const table = (name) => {
+    const sh = ss.getSheetByName(name);
+    if (!sh || sh.getLastRow() < 2) return [];
+    const vals = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getValues();
+    const headers = vals[0].map(v => trimStr_(v));
+    return vals.slice(1).map(r => { const o = {}; headers.forEach((h, i) => { if (h) o[h] = r[i]; }); return o; });
+  };
   const companies = [];
-  const cs = ss.getSheetByName(SHEET.COMPANY);
-  if (cs && cs.getLastRow() > 1) {
-    cs.getRange(2, 1, cs.getLastRow() - 1, 2).getValues().forEach(r => {
-      const prefix = codePrefix_(r[0]);
-      const company = trimStr_(r[1]);
-      if (prefix && company) companies.push({ prefix, company });
-    });
-  }
+  table(SHEET.COMPANY).forEach(r => {
+    const prefix = codePrefix_(r['案件コードの英字部分']);
+    const company = trimStr_(r['工程図の会社名']);
+    if (prefix && company) companies.push({ prefix, company });
+  });
   const views = [];
-  const vs = ss.getSheetByName(SHEET.VIEW);
-  if (vs && vs.getLastRow() > 1) {
-    vs.getRange(2, 1, vs.getLastRow() - 1, 3).getValues().forEach(r => {
-      const keyword = normCut_(r[0]).replace(/[^A-Z]/g, '');
-      if (keyword) views.push({ keyword, category: trimStr_(r[1]), kind: trimStr_(r[2]) });
-    });
-  }
-  return { companies, views };
+  table(SHEET.VIEW).forEach(r => {
+    const keyword = normCut_(r['カット名のキーワード']).replace(/[^A-Z]/g, '');
+    if (keyword) views.push({ keyword, category: trimStr_(r['区分']), kind: trimStr_(r['種類']), external: trimStr_(r['社外名']) });
+  });
+  const projects = [];
+  table(SHEET.PROJECT).forEach(r => {
+    const key = normCode_(r['社内案件名']);
+    if (key) projects.push({ key, name: trimStr_(r['社外案件名']), company: trimStr_(r['会社名']), contact: trimStr_(r['お客様担当者']) });
+  });
+  return { companies, views, projects };
 }
 
 function parseJsonArray_(s) {
@@ -852,6 +1035,56 @@ function toastOrLog_(msg) {
 }
 function alertOrLog_(msg) {
   try { SpreadsheetApp.getUi().alert(msg); } catch (e) { console.log(msg); }
+}
+
+// 『使い方』タブの本文（初期設定で毎回書き直す＝スクリプトと説明がずれない）
+const HOWTO_LINES = [
+  '工程図連携シート の使い方',
+  '',
+  'このファイルは、スタッフが書く「Project Schedule」の内容を工程図（koutei-zu）に登録するための中継シートです。',
+  '一般スタッフには共有しないでください（会社名などの紐づけ情報を含みます）。',
+  '',
+  '■ スタッフ（エンジニア）が書く場所',
+  '「Project Schedule」の『product schedule』タブ（メニュー「スタッフ入力タブを作成」で作れます）。',
+  '列: 入力日 / 社内案件名（例 RIC.34）/ 視点名（外観1→EX1、内観1→IN1）/ パターン（A・B…）/ ホワイト時間 / カラー時間 / その他時間（人物・点景・色分）/ 納期 / 備考 / 完了',
+  '新規・追加・修正を問わず、1カット1行で書きます。同じ案件＋視点が2回目以降なら自動で「修正」扱いになります。',
+  '',
+  '■ 毎日の流れ（管理者）',
+  '1. メニュー「工程図連携」→「1. スタッフシートから転記」。『連携』タブに新しい行が追加されます（既にある行は上書きしません）。',
+  '2. 状態が「要確認」の行の 社外案件名・会社名・区分・種類 を直し、必要なら お客様担当者・担当者・メモ を入れる。',
+  '3. 工程図に登録したい行の「工程図へ」にチェック。',
+  '4. メニュー「工程図連携」→「2. 工程図へ送信」。状態が「登録済み」になれば完了。',
+  '   → 工程図でスケジュールが自動生成されます。金額（売上・見積・請求）は工程図の請求パネルで入力します。',
+  '',
+  '■ 自動判定のしくみ',
+  '・社外案件名・会社名・お客様担当者：『案件マスタ』で社内案件名から引きます（無ければ『会社マスタ』で案件コードの英字部分から会社名だけ判定）。',
+  '・区分（外観/内観）・種類（パース/写真合成）・社外視点名：『視点マスタ』で視点名の英字から引きます。EX1 → 外観視点①、IN2 → 内観視点②。パターンAなら「外観視点①_パターンA」。',
+  '・ステップ種類：同じ案件＋視点の2回目以降は「修正（無料）」。人が「追加」「変更（有料）」に変えられます。',
+  '・登録されるステップ：ホワイト時間 → ホワイト、カラー時間 → カラー、その他時間 → 人物＋添景合成。写真合成は1ステップ（時間は合計）。',
+  '・売上・帳票の「初回/追加/修正」は、ステップ種類（新規→初回、追加→追加、修正・変更→修正）から自動で入ります。',
+  '',
+  '■ 列の見方（『連携』タブ）',
+  '・自動で入る列：取込キー・状態・社内案件名・視点名・パターン・回・納期・各時間・制作項目・元シート備考・転記日時・送信日時・結果・元シート行・サーバリンク',
+  '・人が直す列：工程図へ・社外案件名・社外視点名・会社名・お客様担当者・区分・種類・ステップ種類・担当者・メモ・対象外（自動判定の結果が入り、次の転記で上書きされません）',
+  '・状態：未送信 / 要確認（会社名・種類などが未確定）/ 更新あり（登録後にスタッフ側が変わった）/ 登録済み / エラー / 元シートから消えた',
+  '',
+  '■ 登録後のルール',
+  '・担当者・優先度・完了時間・完了状態は工程図側が正。シートからは上書きしません。',
+  '・「更新あり」の行をもう一度送信すると、未完了ステップの時間と案件名・会社名・区分・納期・社外視点名だけ更新します。',
+  '・工程図側で削除したタスクは、再送信しても復活しません。',
+  '',
+  '■ 初回だけ',
+  '・メニュー「初期設定」→「スタッフ入力タブを作成」→「工程図との接続テスト」→「工程図の会社名一覧を取り込む」の順に実行。',
+  '・接続テストが失敗する場合は手順書（docs/08_スプレッドシート連携.md）の「秘密鍵を設定」を行う。',
+  '・『案件マスタ』に、よく使う社内案件名 → 社外案件名・会社名 を登録しておくと「要確認」が減ります。',
+];
+function writeHowto_(ss) {
+  const sh = ss.getSheetByName(SHEET.HOWTO) || ss.insertSheet(SHEET.HOWTO);
+  sh.clearContents();
+  sh.getRange(1, 1, HOWTO_LINES.length, 1).setValues(HOWTO_LINES.map(l => [l]));
+  sh.getRange(1, 1).setFontWeight('bold').setFontSize(14);
+  HOWTO_LINES.forEach((l, i) => { if (l.indexOf('■') === 0) sh.getRange(i + 1, 1).setFontWeight('bold'); });
+  sh.setColumnWidth(1, 960);
 }
 
 // ============ 認証 ============
