@@ -74,7 +74,7 @@ const SETTING_KEYS = {
   workspaceId: 'ワークスペースID',
 };
 const SETTING_DEFAULTS = {
-  fileId: '12IfXNtu67LNuqRnB6Iako0pvI1A3k1CzyQTS4F3u5fU',
+  fileId: '1BjPKtiHLsYuWcyKLg8FzB4zhmhq5Y5kI8Z2JOXVJuyo', // 「工程図 エンジニア入力シート」
   tabName: STAFF_TAB_DEFAULT,
   startRow: 2,
   defaultAssignee: '未割当',
@@ -82,7 +82,7 @@ const SETTING_DEFAULTS = {
   workspaceId: 'liebe-asia-team',
 };
 const SETTING_NOTES = {
-  fileId: '「Project Schedule」のURLの /d/ と /edit の間の文字列',
+  fileId: '「工程図 エンジニア入力シート」のURLの /d/ と /edit の間の文字列',
   tabName: 'スタッフが書くタブの名前（見出し「社内案件名」がある行から下を読みます）',
   startRow: 'この行より上は取り込みません。旧レイアウト『案件シート(一覧)』を読むときは 4800 などにする',
   defaultAssignee: '『連携』の担当者が空のときに使う名前。工程図で後から変更できます',
