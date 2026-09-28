@@ -6,3 +6,5 @@ dist
 *.log
 service-account.json
 *-firebase-adminsdk-*.json
+# LINE Bot の GAS 貼り付け用ファイルはコミットする
+!line-bot/dist/
