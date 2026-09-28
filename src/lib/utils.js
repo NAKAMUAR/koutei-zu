@@ -134,7 +134,23 @@ const dateToDtLocal = (d) => {
 const VIEWPOINT_PRESETS = [
   { id: 'pers', name: 'パース', steps: ['white', 'color'] },
   { id: 'photo', name: '写真合成', steps: [{ name: '写真合成' }] },
+  // スプレッドシート連携（視点マスタの種類）と同じ名前のステップ
+  { id: 'model', name: 'モデル', steps: [{ name: 'モデル作成' }] },
+  { id: 'vr', name: 'VR', steps: [{ name: 'VR制作' }] },
+  { id: 'video', name: '動画', steps: [{ name: '動画制作' }] },
 ];
+
+// 視点の「区分」（制作種類）の候補：外観・内観 ＋ 登録済みのタスクで使われている区分
+// （スプレッドシート連携の視点マスタで「外観目線」「外観鳥瞰」などを使うと、それも候補に出る）。外観… → 内観… → その他 の順
+function viewpointCategoryOptions(tasks) {
+  const set = new Set(['外観', '内観']);
+  for (const t of (tasks || [])) {
+    const c = ((t && t.viewpointCategory) || '').trim();
+    if (c) set.add(c);
+  }
+  const rank = (c) => c.startsWith('外観') ? 0 : c.startsWith('内観') ? 1 : 2;
+  return [...set].sort((a, b) => (rank(a) - rank(b)) || (a === '外観' || a === '内観' ? -1 : b === '外観' || b === '内観' ? 1 : a.localeCompare(b, 'ja')));
+}
 // ステップ1件分の空テンプレート（種類・外注などの請求情報を含む）。
 // stepTypeId: ステップ種類マスタの選択ID（プルダウン）。name は表示・検証用の素の名称。
 function makeEmptyStep(name = '', stepTypeId = '') {
@@ -316,7 +332,7 @@ export {
   PRIORITY_COLORS, priorityColor, PROJECT_PALETTE, assignProjectColors, getProjectColor, pastelize,
   fmtMD, fmtYMD, fmtYMDJP, dayName, isWeekend, syncHolidays, isWorkingSaturday, isNonWorkingDay,
   addDays, startOfDay, isSameDay, timeToMin, minToTime, fmtHM, kanaNormalize, parseHM,
-  dtLocalToDate, dateToDtLocal, VIEWPOINT_PRESETS, makeEmptyStep, makeStepFromPreset, makeViewpointFromPreset,
+  dtLocalToDate, dateToDtLocal, VIEWPOINT_PRESETS, viewpointCategoryOptions, makeEmptyStep, makeStepFromPreset, makeViewpointFromPreset,
   COMPANY_PRESETS, genId, normalizeCustomerMaster, VN_LUNAR_HOLIDAYS, vietnamHolidayCandidates, expandHolidayDates,
   DEFAULT_SETTINGS, getDailySlots, getDaySlots, getDayWorkingHours, getHoursPerDay, parseYMD, sheetsLabel,
 };

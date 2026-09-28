@@ -748,7 +748,7 @@ function ViewpointCard({ group, allSortedIds, companyFirstIds, companyLastIds })
             <span style={{ color: colors.textMute, fontWeight: 400, margin: '0 8px' }}>／</span>
             {group.viewpointName}
             {group.viewpointCategory && (
-              <span style={{ fontSize: 10, fontWeight: 700, color: '#fff', background: group.viewpointCategory === '外観' ? '#3a7bd5' : '#7a8471', borderRadius: 10, padding: '1px 7px', marginLeft: 8, verticalAlign: 'middle' }}>{group.viewpointCategory}</span>
+              <span style={{ fontSize: 10, fontWeight: 700, color: '#fff', background: String(group.viewpointCategory).startsWith('外観') ? '#3a7bd5' : '#7a8471', borderRadius: 10, padding: '1px 7px', marginLeft: 8, verticalAlign: 'middle' }}>{group.viewpointCategory}</span>
             )}
             {group.viewpointNameExternal && (
               <span style={{ fontSize: 11, color: colors.textMute, fontWeight: 400, marginLeft: 8 }}>（社外: {group.viewpointNameExternal}）</span>

@@ -17,7 +17,8 @@ const exportsList = ['normCode_', 'codePrefix_', 'normCut_', 'normPattern_', 'vi
   'judgeStepKind_', 'requestStepKind_', 'judgeRow_', 'parseDeadline_', 'toHours_', 'collectSourceRows_', 'buildTaskRecords_', 'resolveStepLabel_',
   'resolveDeliverySuffix_', 'normalizeStepTypes_', 'staffHeaderMap_', 'mapStaffColumns_', 'joinCode_', 'fsEncodeFields_', 'fsDecodeDoc_', 'rowObjToArray_', 'arrayToRowObj_',
   'STATUS', 'KIND', 'STEP_KIND', 'DEFAULT_STEP_TYPES', 'H', 'STAFF_INPUT_HEADERS', 'STAFF_INPUT_COLUMNS', 'INITIAL_VIEW_MASTER',
-  'VIEW_CODE_OPTIONS', 'HOUR_OPTIONS', 'REQUEST_OPTIONS'];
+  'HOUR_OPTIONS', 'REQUEST_OPTIONS', 'deriveExternal_', 'viewCodeOptions_', 'viewCodeLines_', 'linkChoiceLists_',
+  'isAutoSendTarget_', 'planCompanyAdditions_', 'companyKey_', 'parseDateTime_'];
 const g = vm.runInContext(src + '\n;({' + exportsList.join(',') + '})', ctx);
 
 let passed = 0;
@@ -149,22 +150,50 @@ test('会社コード＋案件番号 → 社内案件名', () => {
   assert.equal(g.normCode_(g.joinCode_('Ric', 34)), 'RIC34');
 });
 
-// 初期の視点マスタ（シートに入れる値）をそのまま判定に使う
-const initialViews = g.INITIAL_VIEW_MASTER.map(r => ({ keyword: r[0], category: r[1], kind: r[2], external: r[3] }));
+// 2026-09-28 に管理者が直した『視点マスタ』（キーワード・区分・種類。社外名の列は無い）を readMasters_ と同じ形にする
+const userViews = [
+  ['EX', '外観目線', 'パース'], ['IN', '内観目線', 'パース'], ['EXCB', '外観鳥瞰', 'パース'], ['INCB', '鳥瞰内観', 'パース'],
+  ['EXM', '外観モデル', 'モデル'], ['INM', '内観モデル', 'モデル'], ['EXP', '外観写真合成', '写真合成'], ['INP', '内観写真合成', '写真合成'],
+  ['VR', '', 'VR'], ['VIDEO', '', '動画'],
+].map(r => ({ keyword: r[0], category: r[1], kind: r[2], external: g.deriveExternal_(r[1], r[2]) }));
 
-test('入力シートの視点コード（EX・IN・EXCB・INCM・P・EXM・INM）が初期の視点マスタで判定できる', () => {
-  const ext = (cut, pattern) => { const v = g.judgeViewpoint_(cut, '', initialViews); return [v.category, v.kind, g.externalViewpointName_(v.external, g.cutNumber_(cut), pattern)]; };
-  eq(ext('EX1', ''), ['外観', 'パース', '外観視点①']);
-  eq(ext('IN3', 'B'), ['内観', 'パース', '内観視点③_パターンB']);
-  eq(ext('EXCB1', ''), ['外観', 'パース', '外観鳥瞰視点①']);
-  eq(ext('INCM2', ''), ['内観', 'パース', '内観鳥瞰視点②']);
-  eq(ext('INCB1', ''), ['内観', 'パース', '内観鳥瞰視点①']);
-  eq(ext('P1', ''), ['', '写真合成', '写真合成視点①']);
-  eq(ext('EXM1', ''), ['外観', 'モデル', '外観モデル①']);
-  eq(ext('INM2', ''), ['内観', 'モデル', '内観モデル②']);
-  // プルダウンの視点コードはすべて種類まで判定できる
-  g.VIEW_CODE_OPTIONS.forEach(c => assert.ok(g.judgeViewpoint_(c, '', initialViews).kind, c + ' の種類が判定できる'));
-  assert.ok(g.VIEW_CODE_OPTIONS.includes('EXCB1') && g.VIEW_CODE_OPTIONS.includes('INM5') && g.VIEW_CODE_OPTIONS.includes('IN20'));
+test('社外名が空なら「区分＋視点」（モデルは区分のまま）', () => {
+  assert.equal(g.deriveExternal_('外観目線', 'パース'), '外観目線視点');
+  assert.equal(g.deriveExternal_('外観', 'パース'), '外観視点'); // 9/18 版の視点マスタ（外観/内観）でも今までと同じ名前
+  assert.equal(g.deriveExternal_('外観モデル', 'モデル'), '外観モデル');
+  assert.equal(g.deriveExternal_('外観写真合成', '写真合成'), '外観写真合成視点');
+  assert.equal(g.deriveExternal_('', 'VR'), '');
+});
+
+test('管理者が直した視点マスタで、入力シートの視点コードが判定できる', () => {
+  const ext = (cut, pattern) => { const v = g.judgeViewpoint_(cut, '', userViews); return [v.category, v.kind, g.externalViewpointName_(v.external, g.cutNumber_(cut), pattern)]; };
+  eq(ext('EX1', ''), ['外観目線', 'パース', '外観目線視点①']);
+  eq(ext('IN3', 'B'), ['内観目線', 'パース', '内観目線視点③_パターンB']);
+  eq(ext('EXCB1', ''), ['外観鳥瞰', 'パース', '外観鳥瞰視点①']);
+  eq(ext('INCB2', ''), ['鳥瞰内観', 'パース', '鳥瞰内観視点②']);
+  eq(ext('EXM1', ''), ['外観モデル', 'モデル', '外観モデル①']);
+  eq(ext('EXP1', ''), ['外観写真合成', '写真合成', '外観写真合成視点①']);
+  eq(ext('VR1', ''), ['', 'VR', '']);
+  eq(ext('video2', ''), ['', '動画', '']);
+  eq(ext('P1', ''), ['', '', '']); // P は今の視点マスタに無い → 要確認
+});
+
+test('視点マスタ → エンジニアの視点プルダウン・記入ルールの視点コード表・『連携』の区分／種類の選択肢', () => {
+  const opts = g.viewCodeOptions_(userViews);
+  ['EX1', 'EX10', 'IN20', 'EXCB1', 'INCB1', 'EXM1', 'EXP1', 'INP1', 'VR1', 'VIDEO1'].forEach(c => assert.ok(opts.includes(c), c));
+  ['P1', 'INCM1', 'IN21', 'EX11'].forEach(c => assert.ok(!opts.includes(c), c + ' は出さない'));
+  opts.forEach(c => assert.ok(g.judgeViewpoint_(c, '', userViews).kind, c + ' の種類が判定できる'));
+  const lines = g.viewCodeLines_(userViews);
+  assert.equal(lines[0], 'EX1 → 外観目線視点① ／ ngoại thất – góc nhìn ngang tầm mắt ①');
+  assert.ok(lines.includes('EXM1 → 外観モデル① ／ dựng model – phần ngoại thất ①'));
+  assert.ok(lines.includes('VR1 → VR ／ VR'));
+  assert.ok(lines.includes('VIDEO1 → 動画 ／ video'));
+  const ch = g.linkChoiceLists_({ views: userViews });
+  eq(ch.categories, ['外観目線', '内観目線', '外観鳥瞰', '鳥瞰内観', '外観モデル', '内観モデル', '外観写真合成', '内観写真合成']);
+  eq(ch.kinds, ['パース', '写真合成', 'モデル', 'VR', '動画']);
+  eq(g.linkChoiceLists_({ views: [] }).categories, ['外観', '内観']);
+  // 視点マスタが空のときは初期値（今の管理者シートと同じ）
+  assert.ok(g.viewCodeOptions_([]).includes('EXCB1'));
   assert.equal(g.HOUR_OPTIONS[0], '0'); assert.ok(g.HOUR_OPTIONS.includes('0.5') && g.HOUR_OPTIONS.includes('40'));
 });
 
@@ -345,6 +374,18 @@ test('レコード生成：モデル作成は1ステップ（時間は合計）�
   assert.equal(photoFix.records[0].doc.stepName, '写真合成（修正）'); assert.equal(photoFix.records[0].externalId, 'REN72::P1::2::photo');
 });
 
+test('レコード生成：VR・動画・マスタで増やした種類も1ステップ／種類が空ならエラー', () => {
+  const row = { key: 'REN72::VR1::1', code: 'REN.72', name: '戸建て', cut: 'VR1', pattern: '', extName: '', round: 1, deadline: '', white: 3, color: 1, other: 0, company: 'X', contact: '', category: '', kind: 'VR', stepKind: '新規', assignee: '', memo: '' };
+  const vr = g.buildTaskRecords_(row, baseCtx()).records[0];
+  assert.equal(vr.doc.stepName, 'VR制作'); assert.equal(vr.doc.hours, 4); assert.equal(vr.externalId, 'REN72::VR1::1::vr');
+  const video = g.buildTaskRecords_(Object.assign({}, row, { key: 'REN72::VIDEO1::1', cut: 'VIDEO1', kind: '動画' }), baseCtx()).records[0];
+  assert.equal(video.doc.stepName, '動画制作'); assert.equal(video.externalId, 'REN72::VIDEO1::1::video');
+  const other = g.buildTaskRecords_(Object.assign({}, row, { kind: 'CG図面' }), baseCtx()).records[0];
+  assert.equal(other.doc.stepName, 'CG図面'); assert.equal(other.externalId, 'REN72::VR1::1::single');
+  const none = g.buildTaskRecords_(Object.assign({}, row, { kind: '' }), baseCtx());
+  assert.equal(none.records.length, 0); assert.ok(none.errors.join().includes('種類'));
+});
+
 test('レコード生成：2回目は修正ステップとして既存視点に続く（順番・回数・担当者を引き継ぐ、納品種類は修正）', () => {
   const c = baseCtx();
   const existing = [
@@ -387,6 +428,43 @@ test('レコード生成：工程図で削除済みは送らない／必須チ�
   const bad = g.buildTaskRecords_({ key: 'k', code: 'A1', cut: '', white: 0, color: 0, other: 0, company: '', kind: '' }, c);
   assert.ok(bad.errors.length >= 3);
   assert.equal(bad.records.length, 0);
+});
+
+test('自動登録の対象：未送信は待ち時間の後、要確認・更新ありはチェックしたら、エラー・登録済み・対象外・記入途中は送らない', () => {
+  const now = new Date(2026, 8, 28, 12, 0);
+  const ago = (min) => new Date(now.getTime() - min * 60000);
+  const row = (o) => Object.assign({ key: 'K', status: '未送信', send: false, exclude: false, transferredAt: ago(40) }, o);
+  const t = (o, waiting) => g.isAutoSendTarget_(row(o), now, 25, new Set(waiting || []));
+  assert.equal(t({}), true);
+  assert.equal(t({ transferredAt: ago(10) }), false, '変わってから25分たっていない');
+  assert.equal(t({ transferredAt: '2026-09-28 11:00' }), true, '文字の日時も読める');
+  assert.equal(t({}, ['K']), false, 'エンジニアが打ち直している最中');
+  assert.equal(t({ status: '要確認' }), false);
+  assert.equal(t({ status: '要確認', send: true }), true, '人がチェックしたら送る');
+  assert.equal(t({ status: '更新あり' }), false);
+  assert.equal(t({ status: '更新あり', send: true }), true);
+  assert.equal(t({ status: 'エラー', send: true }), false, 'エラーは手で送る');
+  assert.equal(t({ status: '登録済み', send: true }), false);
+  assert.equal(t({ status: '元シートから消えた', send: true }), false);
+  assert.equal(t({ exclude: true }), false);
+  assert.equal(t({ key: '' }), false);
+  assert.equal(t({ transferredAt: '' }), true, '転記日時が空（古い行）なら待たない');
+});
+
+test('日時セルの読み取り', () => {
+  const d = g.parseDateTime_('2026-09-28 10:05');
+  eq([d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes()], [2026, 8, 28, 10, 5]);
+  assert.equal(g.parseDateTime_('2026/9/28').getDate(), 28);
+  assert.equal(g.parseDateTime_(''), null);
+  const x = new Date(); assert.equal(g.parseDateTime_(x), x);
+});
+
+test('工程図の顧客マスタに足す会社：無い会社だけ足し、表記ゆれ（株式会社・全角など）は二重に作らない', () => {
+  const master = [{ company: 'リノべる株式会社' }, { company: 'サンゲツ' }, { company: 'ＳＵＭＵＳ' }, { company: '' }];
+  const plan = g.planCompanyAdditions_(master, ['リノべる株式会社', '株式会社サンゲツ', 'SUMUS', 'ソーシャルインテリア', 'FRYGALLERY', 'FRYGALLERY', '']);
+  eq(plan.added, ['ソーシャルインテリア', 'FRYGALLERY']);
+  eq(plan.similar, [{ name: '株式会社サンゲツ', existing: 'サンゲツ' }, { name: 'SUMUS', existing: 'ＳＵＭＵＳ' }]);
+  assert.equal(g.companyKey_('株式会社 リック デザイン'), g.companyKey_('リックデザイン'));
 });
 
 test('Firestore の値エンコード／デコードが往復する', () => {

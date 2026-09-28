@@ -10,13 +10,15 @@
  *      会社コード（REN/RIC…）・案件番号・社外案件名・サーバーリンク・新規or修正・視点（EX1/IN1/EXCB1…）・
  *      パターン（A/B…）・White/Color/pts の時間・メモ
  *      （旧「product schedule」タブや旧「Project Schedule」の『案件シート(一覧)』も読める。列は見出し名で探す）
- *   2. 「転記」で『連携』タブへ新しい行だけ追加し（入力日＝最初に転記した日を自動で入れる）、
- *      『案件マスタ』『会社マスタ』『視点マスタ』で 会社名・お客様担当者・区分（外観/内観）・
- *      種類（パース/写真合成/モデル）・社外視点名（外観視点①）を自動判定。記入途中の行（時間が空など）は待つ
- *   3. 人が『連携』タブで不足・紐づけ違い（お客様名・社内担当者・納期など）を直し、「工程図へ」にチェック
- *   4. 「工程図へ送信」で、チェック済みの行を工程図（Firestore）にタスクとして登録
+ *   2. 30分ごとの自動実行（または「転記」ボタン）で『連携』タブへ新しい行・変わった行だけ反映し（入力日＝最初に転記した日）、
+ *      『案件マスタ』『会社マスタ』『視点マスタ』で 会社名・お客様担当者・区分（外観目線など）・
+ *      種類（パース/写真合成/モデル/VR/動画）・社外視点名（外観目線視点①）を自動判定。記入途中の行（時間が空など）は待つ
+ *   3. 自動判定がすべてできた「未送信」の行は、同じ自動実行で工程図へ自動登録（入力ミスを直す時間として25分待つ）。
+ *      「要確認」「更新あり」の行は、人が『連携』タブで直して「工程図へ」にチェックすると次の自動実行（または送信ボタン）で登録
+ *   4. 工程図（Firestore）にタスクとして登録
  *      - White → 「ホワイト」、Color → 「カラー」、pts → 「人物＋添景合成」のステップ
- *      - 写真合成（P1…）・モデル（EXM1/INM1）は1ステップ（時間は合計）
+ *      - パース以外（写真合成・モデル・VR・動画）は1ステップ（時間は合計）
+ *      - 『会社マスタ』にあって工程図の顧客マスタに無い会社は、顧客マスタに追加してから登録
  *      - 「修正」の行は「修正」ステップとして同じ視点に追加（有料の変更は人が「変更（有料）」に直す）
  *      - 種類（新規/追加/修正）は売上・帳票の「初回/追加/修正」として登録（金額は工程図側で入力）
  *      - 登録後の担当者・優先度・完了時間・状態は工程図側が正。シートからは上書きしない
@@ -52,7 +54,9 @@ const LINK_HEADER_ORDER = ['key', 'status', 'send', 'inputDate', 'code', 'name',
   'transferredAt', 'sentAt', 'result', 'srcRow', 'link'];
 
 const STATUS = { NEW: '未送信', CHECK: '要確認', UPDATED: '更新あり', SENT: '登録済み', ERROR: 'エラー', GONE: '元シートから消えた' };
-const KIND = { PERS: 'パース', PHOTO: '写真合成', MODEL: 'モデル' };
+const KIND = { PERS: 'パース', PHOTO: '写真合成', MODEL: 'モデル', VR: 'VR', VIDEO: '動画' };
+// パース以外の種類は1ステップで登録する：[ステップ名, 取込キーの末尾]。表に無い種類は、種類名のステップにする
+const SINGLE_STEP = { '写真合成': ['写真合成', 'photo'], 'モデル': ['モデル作成', 'model'], 'VR': ['VR制作', 'vr'], '動画': ['動画制作', 'video'] };
 const CATEGORY = { EX: '外観', IN: '内観' };
 const STEP_KIND = { NEW: '新規', ADD: '追加', FIX: '修正（無料）', CHANGE: '変更（有料）' };
 // 工程図の売上・帳票で使う「納品種類」（viewpointUtils.js の ROUND_TYPES と同じ id）
@@ -78,6 +82,9 @@ const SETTING_KEYS = {
   defaultAssignee: '既定の担当者',
   projectId: 'FirebaseプロジェクトID',
   workspaceId: 'ワークスペースID',
+  autoSend: '自動登録',
+  autoWait: '自動登録の待ち時間（分）',
+  lastAuto: '最後の自動実行',
 };
 const SETTING_DEFAULTS = {
   fileId: '1BjPKtiHLsYuWcyKLg8FzB4zhmhq5Y5kI8Z2JOXVJuyo', // 「工程図 エンジニア入力シート」
@@ -86,6 +93,9 @@ const SETTING_DEFAULTS = {
   defaultAssignee: '未割当',
   projectId: 'koutei-zu',
   workspaceId: 'liebe-asia-team',
+  autoSend: 'する',
+  autoWait: 25,
+  lastAuto: '',
 };
 const SETTING_NOTES = {
   fileId: '「工程図 エンジニア入力シート」のURLの /d/ と /edit の間の文字列',
@@ -94,6 +104,9 @@ const SETTING_NOTES = {
   defaultAssignee: '『連携』の担当者が空のときに使う名前。工程図で後から変更できます',
   projectId: '通常は変更不要',
   workspaceId: '通常は変更不要',
+  autoSend: '「する」：30分ごとの自動実行で、状態が「未送信」の行と「工程図へ」にチェックした行を工程図に登録（「要確認」「更新あり」はチェックするまで待つ）。「しない」：転記だけ自動',
+  autoWait: '「未送信」の行は、最後に内容が変わってからこの分数がたってから自動登録する（エンジニアが入力ミスを直す時間）',
+  lastAuto: '30分ごとの自動実行が最後に動いた日時と結果（自動で書き込み）',
 };
 
 const PROP_SERVICE_ACCOUNT = 'SERVICE_ACCOUNT_JSON';
@@ -118,8 +131,8 @@ const STAFF_INPUT_COLUMNS = [
   { key: 'request', label: '新規or修正', vi: 'Mới / Sửa', width: 11,
     note: 'その視点の初回依頼は「新規」、2回目以降はすべて「修正」\nYêu cầu lần đầu của góc nhìn: 「新規 / Mới」. Từ lần thứ 2 trở đi: 「修正 / Sửa」' },
   { key: 'cut', label: '視点', vi: 'Góc nhìn', width: 9,
-    note: 'EX1 外観目線① / IN1 内観目線① / EXCB1 外観鳥瞰① / INCM1 内観鳥瞰① / P1 写真合成① / EXM1 モデル（外観）/ INM1 モデル（内観）。末尾の数字＝①②…\n' +
-      'EX1 ngoại thất tầm mắt ① / IN1 nội thất tầm mắt ① / EXCB1 ngoại thất chim bay ① / INCM1 nội thất chim bay ① / P1 ghép ảnh ① / EXM1 model ngoại thất / INM1 model nội thất. Số cuối = ①②…' },
+    note: 'リストから選ぶ（EX1＝外観目線視点① など。一覧は『記入ルール/説明』タブ）。末尾の数字＝①②…\n' +
+      'Chọn từ danh sách (EX1 = ngoại thất tầm mắt ①…, xem bảng ở tab『記入ルール/説明』). Số cuối = ①②…' },
   { key: 'pattern', label: 'パターン', vi: 'Phương án', width: 9,
     note: '同じ視点でパターン違いがあれば A・B・C…（無ければ空欄）\nNếu cùng góc nhìn có nhiều phương án: A, B, C… (không có thì để trống)' },
   { key: 'white', label: 'White', vi: 'Trắng (giờ)', width: 9, hours: true,
@@ -137,78 +150,57 @@ const STAFF_INPUT_HINT = '1視点（パターン違いも別）＝1行。書き�
 // プルダウンの選択肢
 const REQUEST_OPTIONS = ['新規 / Mới', '修正 / Sửa'];
 const PATTERN_OPTIONS = ['A', 'B', 'C', 'D', 'E', 'F'];
-// 視点コード：[英字, 個数, 日本語, ベトナム語]（EX1〜EX10 のようにプルダウンに並べる。リストに無いコードも入力はできる）
-const VIEW_CODES = [
-  ['EX', 10, '外観目線視点', 'ngoại thất – góc nhìn ngang tầm mắt'],
-  ['IN', 20, '内観目線視点', 'nội thất – góc nhìn ngang tầm mắt'],
-  ['EXCB', 5, '外観鳥瞰視点', 'ngoại thất – góc nhìn chim bay'],
-  ['INCM', 5, '内観鳥瞰視点', 'nội thất – góc nhìn chim bay'],
-  ['P', 10, '写真合成視点', 'ghép ảnh'],
-  ['EXM', 5, 'モデル作成（外観部）', 'dựng model – phần ngoại thất'],
-  ['INM', 5, 'モデル作成（内観部）', 'dựng model – phần nội thất'],
-];
-const VIEW_CODE_OPTIONS = [].concat.apply([], VIEW_CODES.map(v => Array.from({ length: v[1] }, (_, i) => v[0] + (i + 1))));
+// 視点コードのベトナム語（『記入ルール/説明』の視点コード表に使う。キーワードは『視点マスタ』の英字。無いものは日本語だけ出す）
+const VIEW_VI = {
+  EX: 'ngoại thất – góc nhìn ngang tầm mắt', IN: 'nội thất – góc nhìn ngang tầm mắt',
+  EXCB: 'ngoại thất – góc nhìn chim bay', INCB: 'nội thất – góc nhìn chim bay', INCM: 'nội thất – góc nhìn chim bay',
+  EXM: 'dựng model – phần ngoại thất', INM: 'dựng model – phần nội thất',
+  EXP: 'ghép ảnh ngoại thất', INP: 'ghép ảnh nội thất', P: 'ghép ảnh', VR: 'VR', VIDEO: 'video',
+};
+// 視点のプルダウンに並べる番号の数（IN は多いので 20、ほかは 10。リストに無い番号も入力はできる）
+const VIEW_OPTION_COUNT = { IN: 20 };
+const VIEW_OPTION_COUNT_DEFAULT = 10;
 // 時間：0〜10 は 0.5 刻み、11〜40 は 1 刻み（リストに無い数字も入力はできる）
 const HOUR_OPTIONS = Array.from({ length: 21 }, (_, i) => String(i / 2)).concat(Array.from({ length: 30 }, (_, i) => String(i + 11)));
 
-// 『会社マスタ』『視点マスタ』が空のときに「初期設定」で入れる初期値（シート上で自由に直してよい）
-// [案件コードの英字部分, 工程図の会社名, 備考, 入力シートに出さない（表記ゆれは TRUE ＝エンジニアのプルダウンに出さない）]
+// 『会社マスタ』『視点マスタ』が空のときに「初期設定」で入れる初期値（シート上で自由に直してよい。2026-09-28 時点の管理者シートと同じ）
+// [案件コードの英字部分, 工程図の会社名, 備考, 入力シートに出さない（表記ゆれの行は TRUE ＝エンジニアのプルダウンに出さない）]
 const INITIAL_COMPANY_MASTER = [
-  ['REN', 'リノべる株式会社', '工程図の既定の会社順にある表記。顧客マスタの表記と違えば直す', false],
-  ['RENOBERU', 'リノべる株式会社', '同上（表記ゆれ）', true],
-  ['RENOVERU', 'リノべる株式会社', '同上（表記ゆれ）', true],
+  ['REN', 'リノべる株式会社', '', false],
   ['SUM', 'SUMUS', '', false],
-  ['SUMUS', 'SUMUS', '表記ゆれ', true],
-  ['TAMAZEN', 'TAMAZEN', '要確認：工程図側が「玉善」表記なら直す', false],
+  ['TAMAZEN', '玉善', '', false],
   ['OFFICE', 'オフィスコム', '', false],
   ['TANAKA', '田中建設', '', false],
-  ['TANAK', '田中建設', '表記ゆれ（TANAK.284 など）', true],
   ['CG', 'CG工房', '', false],
-  ['RIC', '株式会社リックデザイン', '要確認：サーバリンクのフォルダ名から。工程図の表記に合わせる', false],
-  ['DESIGN', 'デザイン経営研究舎', '要確認：サーバリンクのフォルダ名から', false],
-  ['CONTE', '', '要確認：工程図の会社名を入力', false],
-  ['SAN', '', '要確認：工程図の会社名を入力', false],
-  ['ATO', '', '要確認：工程図の会社名を入力', false],
-  ['GRAY', '', '要確認：工程図の会社名を入力', false],
-  ['ALEG', '', '要確認：工程図の会社名を入力', false],
-  ['ESAKI', '', '要確認：工程図の会社名を入力', false],
-  ['WUNDER', '', '要確認：工程図の会社名を入力', false],
+  ['RIC', '株式会社リックデザイン', '', false],
+  ['DESIGN', 'デザイン経営研究舎', '', false],
+  ['CONTE', 'CONTE', '', false],
+  ['SAN', '株式会社サンゲツ', '', false],
+  ['ATO', 'アトリエジグゾー', '', false],
+  ['GRAY', 'グレイ美術', '', false],
+  ['ALEG', 'ALEG', '', false],
+  ['ESAKI', 'エサキホーム', '', false],
+  ['WUNDER', 'ヴンダー', '', false],
+  ['SOCIAL', 'ソーシャルインテリア', '', false],
+  ['FRY', 'FRYGALLERY', '', false],
 ];
-// [キーワード, 区分, 種類, 社外名, 備考]
+// [キーワード, 区分, 種類, 社外名, 備考]。社外名が空なら「区分＋視点」（モデルは区分のまま）を社外視点名に使う
 const INITIAL_VIEW_MASTER = [
-  ['EX', '外観', 'パース', '外観視点', 'EX1 → 外観視点①。先に書いた行が優先'],
-  ['IN', '内観', 'パース', '内観視点', 'IN2 → 内観視点②。HOTEL_IN1(D), CAFE_IN2 なども IN として判定'],
-  ['EXCB', '外観', 'パース', '外観鳥瞰視点', 'EXCB1 → 外観鳥瞰視点①'],
-  ['INCM', '内観', 'パース', '内観鳥瞰視点', 'INCM1 → 内観鳥瞰視点①'],
-  ['INCB', '内観', 'パース', '内観鳥瞰視点', 'INCM の書き方ゆれ'],
-  ['EXM', '外観', 'モデル', '外観モデル', 'EXM1 → モデル作成（外観部）。時間の合計を1ステップ「モデル作成」で登録'],
-  ['INM', '内観', 'モデル', '内観モデル', 'INM1 → モデル作成（内観部）'],
-  ['LDK', '内観', 'パース', '内観視点', 'A-LDK2, 七番町ⅣT2_LDK1 など'],
-  ['BED', '内観', 'パース', '内観視点', ''],
-  ['LAVABO', '内観', 'パース', '内観視点', ''],
-  ['KITCHEN', '内観', 'パース', '内観視点', ''],
-  ['BATH', '内観', 'パース', '内観視点', ''],
-  ['ENTRANCE', '内観', 'パース', '内観視点', ''],
-  ['LOBBY', '内観', 'パース', '内観視点', ''],
-  ['FRONT', '内観', 'パース', '内観視点', ''],
-  ['CAFE', '内観', 'パース', '内観視点', ''],
-  ['RESTAURANT', '内観', 'パース', '内観視点', ''],
-  ['HOTEL', '内観', 'パース', '内観視点', ''],
-  ['ROOM', '内観', 'パース', '内観視点', ''],
-  ['WC', '内観', 'パース', '内観視点', ''],
-  ['TOILET', '内観', 'パース', '内観視点', ''],
-  ['P', '', '写真合成', '写真合成視点', 'P1 → 写真合成視点①（P-1 も可。制作項目に「写真」「合成」があれば自動で写真合成）'],
-  ['PHOTO', '', '写真合成', '写真合成', ''],
-  ['CAD', '', '', '', '要確認：CAD図の扱いは人が判断（種類が空なので「要確認」になります）'],
-  ['AREA', '', '', '', '要確認：オフショア案件の area1… は人が判断'],
-  ['CAM', '', '', '', '要確認'],
-  ['VR', '', '', '', '要確認'],
+  ['EX', '外観目線', 'パース', '', 'EX1 → 外観目線視点①'],
+  ['IN', '内観目線', 'パース', '', 'IN2 → 内観目線視点②'],
+  ['EXCB', '外観鳥瞰', 'パース', '', ''],
+  ['INCB', '内観鳥瞰', 'パース', '', ''],
+  ['EXM', '外観モデル', 'モデル', '', 'White にモデル制作時間。工程図には「モデル作成」1ステップ'],
+  ['INM', '内観モデル', 'モデル', '', ''],
+  ['EXP', '外観写真合成', '写真合成', '', ''],
+  ['INP', '内観写真合成', '写真合成', '', ''],
+  ['VR', '', 'VR', '', ''],
+  ['VIDEO', '', '動画', '', ''],
 ];
 const COMPANY_MASTER_HEADERS = ['案件コードの英字部分', '工程図の会社名', '備考', '入力シートに出さない'];
 const COMPANY_HIDE_HEADER = COMPANY_MASTER_HEADERS[3];
 const VIEW_MASTER_HEADERS = ['カット名のキーワード', '区分', '種類', '社外名', '備考'];
-// 2026-09 の入力シートで増えた視点コード。既存の『視点マスタ』に無ければ「初期設定」で下に追加する
-const ADDED_VIEW_KEYWORDS = ['EXCB', 'INCM', 'INCB', 'EXM', 'INM'];
+const VIEW_EXTERNAL_NOTE = 'お客様向けの視点名（社外視点名）のもと。空なら「区分＋視点」（例 外観目線 → 外観目線視点①、モデルは 外観モデル①）';
 const PROJECT_MASTER_HEADERS = ['社内案件名', '社外案件名', '会社名', 'お客様担当者', '備考'];
 
 // ============ メニュー ============
@@ -218,10 +210,15 @@ function onOpen() {
     .addItem('0. かんたん初期設定（最初に1回だけ）', 'quickSetup')
     .addSeparator()
     .addItem('1. エンジニア入力シートから転記', 'transferFromStaffSheet')
-    .addItem('2. 工程図へ送信', 'sendToKoutei')
+    .addItem('2. 工程図へ送信（「工程図へ」にチェックした行）', 'sendToKoutei')
     .addItem('送信内容のプレビュー（書き込まない）', 'previewSend')
     .addSeparator()
+    .addItem('自動実行（30分ごと）を今すぐ1回動かす', 'runAutoNow')
+    .addItem('自動実行を始める', 'startAutoRun')
+    .addItem('自動実行を止める', 'stopAutoRun')
+    .addSeparator()
     .addItem('工程図の会社名一覧を取り込む', 'fetchCompanyNames')
+    .addItem('会社マスタの会社を工程図の顧客マスタに追加', 'addCompaniesToKoutei')
     .addItem('工程図との接続テスト', 'testConnection')
     .addSeparator()
     .addItem('初期設定（タブ・チェックボックスを整える）', 'setupSheet')
@@ -233,6 +230,18 @@ function onOpen() {
 
 // ============ 1. 転記 ============
 function transferFromStaffSheet() {
+  return withLock_(() => {
+    const t = transfer_();
+    toastOrLog_(t.msg);
+    return t.msg;
+  });
+}
+
+/**
+ * 転記の本体。入力シートの新しい行を『連携』に足し、変わった行だけ書き換える（何も変わっていなければ何も書かない）。
+ * 戻り値: { msg, added, updated, waitingKeys: 記入途中の行の取込キー }
+ */
+function transfer_() {
   const cfg = readSettings_();
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const link = ensureLinkSheet_(ss);
@@ -250,12 +259,13 @@ function transferFromStaffSheet() {
   }
 
   const now = new Date();
-  const stamp = fmtDateTime_(now);
+  const stamp = now; // 転記日時は日時の値で書く（シートとスクリプトのタイムゾーンが違っても、自動登録の待ち時間を正しく測れる）
   const today = fmtYMD_(now);
   const appends = [];
   const cellUpdates = []; // { row(1-based), col, value }
   let updated = 0;
   const seen = new Set();
+  const waiting = new Set(sourceRows.waitingKeys || []);
 
   sourceRows.forEach(s => {
     seen.add(s.key);
@@ -279,8 +289,11 @@ function transferFromStaffSheet() {
         cellUpdates.push({ row: r + 1, col: col.transferredAt, value: stamp });
         if (status === STATUS.SENT) cellUpdates.push({ row: r + 1, col: col.status, value: STATUS.UPDATED });
       }
-      // 一度消えた行（時間を消して書き直した等）がまた出てきたら、内容が同じでも未送信に戻す
-      if (status === STATUS.GONE) cellUpdates.push({ row: r + 1, col: col.status, value: STATUS.NEW });
+      // 一度消えた行がまた出てきたら「要確認」に戻す（自動登録の前に人が見る）
+      if (status === STATUS.GONE) {
+        cellUpdates.push({ row: r + 1, col: col.status, value: STATUS.CHECK });
+        cellUpdates.push({ row: r + 1, col: col.result, value: '入力シートから一度消えて、また出てきた行です。内容を確認して「工程図へ」にチェックしてください' });
+      }
       return;
     }
     const j = judgeRow_(s, masters);
@@ -295,11 +308,16 @@ function transferFromStaffSheet() {
     appends.push(rowObjToArray_(rowObj, col));
   });
 
-  // 元シートから消えた（完了チェック・削除・取込開始行より上になった）未送信行に印を付ける
+  // 入力シートから消えた行（削除・視点などの書き換え・旧レイアウトの完了チェック）に印を付ける。
+  // 記入途中（時間を消して打ち直している最中など）の行は、行自体は残っているので印を付けない
   byKey.forEach((r, k) => {
-    if (seen.has(k)) return;
+    if (seen.has(k) || waiting.has(k)) return;
     const status = String(data[r][col.status - 1] || '');
     if (status === STATUS.NEW || status === STATUS.CHECK) cellUpdates.push({ row: r + 1, col: col.status, value: STATUS.GONE });
+    else if (status === STATUS.SENT || status === STATUS.UPDATED) {
+      cellUpdates.push({ row: r + 1, col: col.status, value: STATUS.GONE });
+      cellUpdates.push({ row: r + 1, col: col.result, value: '登録済みの行が入力シートから消えました。工程図のタスクは残っているので、不要なら工程図側で削除してください' });
+    }
   });
 
   cellUpdates.forEach(u => link.getRange(u.row, u.col).setValue(u.value));
@@ -307,15 +325,14 @@ function transferFromStaffSheet() {
     const startRow = link.getLastRow() + 1;
     ensureSize_(link, startRow + appends.length - 1, appends[0].length);
     link.getRange(startRow, 1, appends.length, appends[0].length).setValues(appends);
-    applyValidations_(link, col, startRow, appends.length);
+    applyValidations_(link, col, startRow, appends.length, masters);
   }
 
   const needCheck = appends.filter(a => a[col.status - 1] === STATUS.CHECK).length;
   const msg = `転記完了\n  入力シートの対象行: ${sourceRows.length}\n  新規追加: ${appends.length}（うち要確認 ${needCheck}）\n  内容更新: ${updated}` +
     (sourceRows.waiting ? `\n  記入途中で待っている行: ${sourceRows.waiting}（案件番号・新規or修正・時間がそろうと次の転記で追加）` : '');
   console.log(msg);
-  toastOrLog_(msg);
-  return msg;
+  return { msg, added: appends.length, needCheck, updated, waitingKeys: sourceRows.waitingKeys || [] };
 }
 
 /** スタッフシートを読み、必要な列だけ抜き出す。見出し名で列を探すので、新旧どのレイアウトでも読める。 */
@@ -446,6 +463,7 @@ function collectSourceRows_(staffRows, today) {
   const counts = new Map();
   const out = [];
   let waiting = 0;
+  const waitingKeys = [];
   staffRows.forEach(r => {
     if (!r.code || !r.cut) return;
     const vpName = viewpointNameOf_(r.cut, r.pattern);
@@ -453,7 +471,7 @@ function collectSourceRows_(staffRows, today) {
     const n = (counts.get(base) || 0) + 1;
     counts.set(base, n);
     if (r.done) return;
-    if (r.noNumber || r.request === '' || (r.white <= 0 && r.color <= 0 && r.other <= 0)) { waiting++; return; }
+    if (r.noNumber || r.request === '' || (r.white <= 0 && r.color <= 0 && r.other <= 0)) { waiting++; waitingKeys.push(base + '::' + n); return; }
     out.push({
       key: base + '::' + n,
       round: n,
@@ -464,6 +482,7 @@ function collectSourceRows_(staffRows, today) {
     });
   });
   out.waiting = waiting;
+  out.waitingKeys = waitingKeys;
   return out;
 }
 
@@ -561,6 +580,51 @@ function judgeViewpoint_(cut, item, viewMaster) {
   return { category, kind, external };
 }
 
+/** 社外名が空のときの社外視点名のもと：区分＋「視点」（外観目線 → 外観目線視点）。モデルは区分のまま、区分が空なら空 */
+function deriveExternal_(category, kind) {
+  const c = trimStr_(category);
+  if (!c) return '';
+  return trimStr_(kind) === KIND.MODEL ? c : c + '視点';
+}
+/** 視点マスタ（readMasters_ の views）。空なら初期値を使う */
+function viewsOrDefault_(views) {
+  if (views && views.length) return views;
+  return INITIAL_VIEW_MASTER.map(r => ({ keyword: r[0], category: r[1], kind: r[2], external: r[3] || deriveExternal_(r[1], r[2]) }));
+}
+/** 視点マスタのキーワードの並び（重複なし） */
+function viewKeywords_(views) {
+  const out = [];
+  viewsOrDefault_(views).forEach(v => { if (v.keyword && out.indexOf(v.keyword) < 0) out.push(v.keyword); });
+  return out;
+}
+/** エンジニアの視点プルダウン：キーワード＋番号（EX1〜EX10、IN1〜IN20 …） */
+function viewCodeOptions_(views) {
+  const out = [];
+  viewKeywords_(views).forEach(k => {
+    const n = VIEW_OPTION_COUNT[k] || VIEW_OPTION_COUNT_DEFAULT;
+    for (let i = 1; i <= n; i++) out.push(k + i);
+  });
+  return out;
+}
+/** 『記入ルール/説明』の視点コード表の1行ずつ（'EX1 → 外観目線視点① ／ ngoại thất – góc nhìn ngang tầm mắt ①'） */
+function viewCodeLines_(views) {
+  const all = viewsOrDefault_(views);
+  return viewKeywords_(views).map(k => {
+    const v = all.filter(x => x.keyword === k)[0];
+    const ja = v.external ? v.external + '①' : (v.category || v.kind || k);
+    const vi = VIEW_VI[k] ? VIEW_VI[k] + (v.external ? ' ①' : '') : '';
+    return k + '1 → ' + ja + (vi ? ' ／ ' + vi : '');
+  });
+}
+/** 『連携』の区分・種類のプルダウン：視点マスタにある値（無ければ基本の値） */
+function linkChoiceLists_(masters) {
+  const views = (masters && masters.views) || [];
+  const uniq = (arr) => arr.filter((x, i) => x && arr.indexOf(x) === i);
+  const categories = uniq(views.map(v => v.category));
+  const kinds = uniq([KIND.PERS, KIND.PHOTO, KIND.MODEL].concat(views.map(v => v.kind)));
+  return { categories: categories.length ? categories : [CATEGORY.EX, CATEGORY.IN], kinds };
+}
+
 /**
  * ステップ種類：制作項目に「変更」→変更（有料）、「修正」→修正（無料）、「追加」→追加（旧レイアウト）、
  * 次に入力シートの「新規or修正」、どちらも無ければ 2回目以降→修正（無料）、それ以外→新規
@@ -599,8 +663,8 @@ function judgeRow_(s, masters) {
   if (!name) notes.push('社外案件名を入力してください（案件マスタに「' + s.code + '」を追加すると次回から自動。空のままなら社内案件名で登録）');
   if (!c.company) notes.push('会社名を入力してください（案件マスタか会社マスタに「' + codePrefix_(s.code) + '」を追加すると次回から自動）');
   else if (c.guessed) notes.push('会社名はサーバリンクから推定しました。確認してください');
-  if (!v.kind) notes.push('種類（パース/写真合成/モデル）を選んでください');
-  if (!v.category && v.kind === KIND.PERS) notes.push('区分（外観/内観）が未判定です（空のままでも送信できます）');
+  if (!v.kind) notes.push('種類（パース・写真合成・モデル など）を選んでください（視点マスタに「' + (cutTokens_(s.cut)[0] || s.cut) + '」を追加すると次回から自動）');
+  if (!v.category && v.kind === KIND.PERS) notes.push('区分が未判定です（空のままでも送信できます）');
   // 「新規」なのに同じ案件・視点の行が前にもある → 書き間違いか、同じ依頼の二重入力のおそれ
   const newTwice = req === STEP_KIND.NEW && (s.round || 1) >= 2;
   if (newTwice) notes.push('同じ案件・視点の' + s.round + '回目ですが「新規」になっています。修正なら ステップ種類 を「修正（無料）」か「変更（有料）」に、二重入力なら「対象外」にしてください');
@@ -647,6 +711,12 @@ function sameCell_(a, b) {
 function pad2_(n) { return (n < 10 ? '0' : '') + n; }
 function fmtYMD_(d) { return d.getFullYear() + '-' + pad2_(d.getMonth() + 1) + '-' + pad2_(d.getDate()); }
 function fmtDateTime_(d) { return fmtYMD_(d) + ' ' + pad2_(d.getHours()) + ':' + pad2_(d.getMinutes()); }
+/** 日時セル → Date（日時の値 / 'YYYY-MM-DD HH:mm' の文字）。読めなければ null */
+function parseDateTime_(v) {
+  if (isDate_(v)) return v;
+  const m = String(v || '').trim().match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})(?:[ T](\d{1,2}):(\d{2}))?/);
+  return m ? new Date(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0)) : null;
+}
 
 // ============ タスクレコード生成（純ロジック） ============
 /** 回数付きの表示名（アプリ側 resolveStepLabel と同じ）。'カラー修正（無料）', true, 2 → 'カラー修正2回目（無料）' */
@@ -696,7 +766,7 @@ function buildTaskRecords_(row, ctx) {
   const other = toHours_(row.other);
   if (!cut) errors.push('視点名が空です');
   if (!company) errors.push('会社名が空です');
-  if (kind !== KIND.PERS && kind !== KIND.PHOTO && kind !== KIND.MODEL) errors.push('種類は「パース」「写真合成」「モデル」のどれかを選んでください');
+  if (!kind) errors.push('種類（パース・写真合成・モデル など）を選んでください');
   if (white <= 0 && color <= 0 && other <= 0) errors.push('White・Color・pts（ホワイト・カラー・その他）の時間がすべて0です');
   if (errors.length) return { records: [], errors };
 
@@ -735,11 +805,11 @@ function buildTaskRecords_(row, ctx) {
   });
 
   const wants = [];
-  if (kind === KIND.PHOTO || kind === KIND.MODEL) {
-    // 写真合成・モデル作成は1ステップ（時間は合計）。修正・変更の回は名前に付ける
-    const base = kind === KIND.PHOTO ? '写真合成' : 'モデル作成';
+  if (kind !== KIND.PERS) {
+    // パース以外（写真合成・モデル・VR・動画など）は1ステップ（時間は合計）。修正・変更の回は名前に付ける
+    const single = SINGLE_STEP[kind] || [kind, 'single'];
     const suffix = stepKind === STEP_KIND.FIX ? '（修正）' : stepKind === STEP_KIND.CHANGE ? '（変更）' : '';
-    wants.push({ typeId: '', name: base + suffix, tag: kind === KIND.PHOTO ? 'photo' : 'model', hours: Math.round((white + color + other) * 100) / 100 });
+    wants.push({ typeId: '', name: single[0] + suffix, tag: single[1], hours: Math.round((white + color + other) * 100) / 100 });
   } else {
     if (white > 0) wants.push({ typeId: stepTypeIdFor_('white', stepKind), hours: white });
     if (color > 0) wants.push({ typeId: stepTypeIdFor_('color', stepKind), hours: color });
@@ -799,10 +869,33 @@ function buildTaskRecords_(row, ctx) {
 }
 
 // ============ 2. 送信 ============
-function sendToKoutei() { return runSend_(false); }
+function sendToKoutei() { return withLock_(() => runSend_(false)); }
 function previewSend() { return runSend_(true); }
 
-function runSend_(dryRun) {
+/**
+ * 自動登録の対象か（30分ごとの自動実行で使う。純ロジック）。
+ * - 対象外・登録済み・元シートから消えた・エラーの行は送らない（エラーは人が直してからチェック）
+ * - 「工程図へ」にチェックがある行は、人が確認済みとして送る（要確認・更新ありの行も）
+ * - チェックが無くても「未送信」（自動判定がすべてできた行）は送る。ただし エンジニアが打ち直している最中の行（記入途中）と、
+ *   最後に内容が変わってから waitMin 分たっていない行は次回に回す（入力ミスを直す時間をとる）
+ */
+function isAutoSendTarget_(row, now, waitMin, waitingKeys) {
+  if (!row.key || isChecked_(row.exclude)) return false;
+  if (row.status === STATUS.SENT || row.status === STATUS.GONE || row.status === STATUS.ERROR) return false;
+  if (isChecked_(row.send)) return true;
+  if (row.status !== STATUS.NEW) return false;
+  if (waitingKeys && waitingKeys.has(String(row.key))) return false;
+  const at = parseDateTime_(row.transferredAt);
+  if (at && now.getTime() - at.getTime() < (waitMin || 0) * 60000) return false;
+  return true;
+}
+
+/**
+ * 送信の本体。opts.auto のときは自動登録の対象（isAutoSendTarget_）を送り、ダイアログは出さない。
+ * それ以外は「工程図へ」にチェックした行を送る。
+ */
+function runSend_(dryRun, opts) {
+  const auto = !!(opts && opts.auto);
   const cfg = readSettings_();
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const link = ensureLinkSheet_(ss);
@@ -810,22 +903,33 @@ function runSend_(dryRun) {
   const data = link.getDataRange().getValues();
 
   const targets = [];
+  const nowDate = new Date();
+  const waitingKeys = new Set((opts && opts.waitingKeys) || []);
   for (let r = 1; r < data.length; r++) {
     const row = arrayToRowObj_(data[r], col);
     if (!row.key) continue;
-    if (!isChecked_(row.send) || isChecked_(row.exclude)) continue;
-    if (row.status === STATUS.SENT || row.status === STATUS.GONE) continue;
+    if (auto) {
+      if (!isAutoSendTarget_(row, nowDate, cfg.autoWait, waitingKeys)) continue;
+    } else {
+      if (!isChecked_(row.send) || isChecked_(row.exclude)) continue;
+      if (row.status === STATUS.SENT || row.status === STATUS.GONE) continue;
+    }
     targets.push({ r, row });
   }
   if (!targets.length) {
-    alertOrLog_('送信対象がありません。\n「工程図へ」にチェックが入っていて、状態が「登録済み」以外の行が対象です。\n（登録済みの行を送り直すには、状態を「更新あり」に変えてください）');
+    if (!auto) alertOrLog_('送信対象がありません。\n「工程図へ」にチェックが入っていて、状態が「登録済み」以外の行が対象です。\n（登録済みの行を送り直すには、状態を「更新あり」にして「工程図へ」にチェックしてください）');
     return '対象なし';
   }
 
   const auth = getAuth_();
   const existing = fsListAll_(auth, cfg, 'workspaces/' + cfg.workspaceId + '/tasks');
   const deleted = new Set(parseJsonArray_(fsGetValueString_(auth, cfg, 'deletedExternalIds')));
-  const customerMaster = parseJsonArray_(fsGetValueString_(auth, cfg, 'customerMaster'));
+  let customerMaster = parseJsonArray_(fsGetValueString_(auth, cfg, 'customerMaster'));
+  // 送る行の会社のうち、『会社マスタ』にあって工程図の顧客マスタに無い会社は、先に顧客マスタへ追加する
+  if (!dryRun) {
+    const add = ensureKouteiCompanies_(auth, cfg, customerMaster, companyMasterNames_(ss).filter(n => targets.some(t => trimStr_(t.row.company) === n)));
+    customerMaster = add.master;
+  }
   const companies = new Set(customerMaster.map(c => trimStr_(c && c.company)).filter(Boolean));
   const stepTypes = normalizeStepTypes_(parseJsonArray_(fsGetValueString_(auth, cfg, 'stepTypeMaster')));
 
@@ -838,9 +942,8 @@ function runSend_(dryRun) {
     byVp.get(k).push(t);
   });
 
-  const nowDate = new Date();
   const ctx = { now: nowDate.getTime(), today: fmtYMD_(nowDate), defaultAssignee: cfg.defaultAssignee, stepTypes, byVp, byExt, deleted };
-  const stamp = fmtDateTime_(nowDate);
+  const stamp = nowDate;
   const lines = [];
   let created = 0, updated = 0, errored = 0;
 
@@ -880,8 +983,9 @@ function runSend_(dryRun) {
     const summary = '新規' + c + '件・更新' + u + '件' + (s ? '・工程図で削除済み' + s + '件は送信せず' : '') + (warns.length ? ' ／ ' + warns.join('、') : '');
     if (!dryRun) {
       link.getRange(t.r + 1, col.status).setValue(STATUS.SENT);
+      link.getRange(t.r + 1, col.send).setValue(false); // 次にチェックしたら「もう一度送ってよい」の意味になるよう外す
       link.getRange(t.r + 1, col.sentAt).setValue(stamp);
-      link.getRange(t.r + 1, col.result).setValue(summary);
+      link.getRange(t.r + 1, col.result).setValue((auto ? '自動登録：' : '') + summary);
     }
     lines.push((warns.length ? '△ ' : '○ ') + label + ': ' + summary);
   });
@@ -891,8 +995,143 @@ function runSend_(dryRun) {
     : '送信完了\n対象 ' + targets.length + ' 行：新規 ' + created + ' 件・更新 ' + updated + ' 件・エラー ' + errored + ' 行\n\n';
   const msg = head + lines.slice(0, 40).join('\n') + (lines.length > 40 ? '\n…（他 ' + (lines.length - 40) + ' 行）' : '');
   console.log(msg);
-  alertOrLog_(msg);
+  if (!auto) alertOrLog_(msg);
   return msg;
+}
+
+// ============ 自動実行（30分ごと） ============
+const AUTO_HANDLER = 'autoRun';
+const AUTO_EVERY_MINUTES = 30;
+
+/**
+ * 30分ごとの自動実行（トリガーから呼ばれる）：転記 → 自動登録。
+ * 入力シートに変わりが無ければ何も書かず、自動登録の対象が無ければ工程図にもアクセスしない。
+ * 結果は『設定』の「最後の自動実行」に1行で残す（エラーもここに出る）。
+ */
+function autoRun() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) { console.log('ほかの処理が動いているので、今回の自動実行は見送りました'); return '見送り'; }
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const parts = [];
+  try {
+    const cfg = readSettings_();
+    let waitingKeys = [];
+    try {
+      const t = transfer_();
+      waitingKeys = t.waitingKeys;
+      parts.push('転記 追加' + t.added + (t.needCheck ? '（要確認' + t.needCheck + '）' : '') + '・更新' + t.updated);
+    } catch (e) {
+      parts.push('転記エラー：' + String(e && e.message || e));
+    }
+    if (cfg.autoSend) {
+      try {
+        const res = runSend_(false, { auto: true, waitingKeys });
+        parts.push(res === '対象なし' ? '自動登録 対象なし' : '自動登録 ' + res.split('\n')[1]);
+      } catch (e) {
+        parts.push('自動登録エラー：' + String(e && e.message || e));
+      }
+    } else {
+      parts.push('自動登録はしない設定');
+    }
+  } catch (e) {
+    parts.push('エラー：' + String(e && e.message || e));
+  } finally {
+    const line = fmtDateTime_(new Date()) + '　' + parts.join(' ／ ');
+    try { writeSetting_(ss, 'lastAuto', line); } catch (e) { console.log(line); }
+    lock.releaseLock();
+  }
+  return parts.join(' ／ ');
+}
+
+/** メニュー：自動実行を今すぐ1回動かして結果を出す */
+function runAutoNow() {
+  alertOrLog_('自動実行の結果\n\n' + autoRun());
+}
+
+/** 30分ごとの自動実行を設定する（既にあれば作り直す。何度実行しても1つだけ） */
+function installAutoTrigger_() {
+  ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === AUTO_HANDLER).forEach(t => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger(AUTO_HANDLER).timeBased().everyMinutes(AUTO_EVERY_MINUTES).create();
+}
+function startAutoRun() {
+  installAutoTrigger_();
+  alertOrLog_('30分ごとの自動実行を始めました（転記＋「未送信」の行の自動登録）。\n止めるときはメニュー「自動実行を止める」。');
+}
+function stopAutoRun() {
+  const n = ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === AUTO_HANDLER).map(t => ScriptApp.deleteTrigger(t)).length;
+  alertOrLog_(n ? '30分ごとの自動実行を止めました。転記・送信はメニューから手で行えます。' : '自動実行は設定されていません。');
+}
+
+/** 手で押した転記・送信と自動実行が同時に動かないようにする */
+function withLock_(fn) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) {
+    const msg = 'ほかの処理（30分ごとの自動実行など）が動いています。少し待ってから、もう一度押してください。';
+    alertOrLog_(msg);
+    return msg;
+  }
+  try { return fn(); } finally { lock.releaseLock(); }
+}
+
+// ============ 工程図の顧客マスタ ============
+/** 『会社マスタ』B列「工程図の会社名」（重複なし・空は除く） */
+function companyMasterNames_(ss) {
+  const out = [];
+  readMasters_(ss).companies.forEach(c => { if (c.company && out.indexOf(c.company) < 0) out.push(c.company); });
+  return out;
+}
+/** 会社名の比べ方：全角半角・大文字小文字・空白・「株式会社」などの違いを無視したキー */
+function companyKey_(name) {
+  return String(name || '').normalize('NFKC').replace(/株式会社|有限会社|合同会社|\(株\)|\(有\)/g, '').replace(/\s+/g, '').toLowerCase();
+}
+/**
+ * names のうち、工程図の顧客マスタ（customerMaster）に無い会社を追加して保存する。
+ * 表記だけ違う会社（「株式会社サンゲツ」と「サンゲツ」など）は二重に作らず、similar に入れて返す。
+ * 戻り値: { master: 追加後の顧客マスタ, added: [会社名], similar: [{ name, existing }] }
+ */
+function ensureKouteiCompanies_(auth, cfg, master, names) {
+  const plan = planCompanyAdditions_(master, names);
+  if (plan.added.length) {
+    const next = master.concat(plan.added.map((company, i) => ({
+      id: 'cust-' + Date.now() + '-' + i + Math.random().toString(36).slice(2, 6), company, contacts: [],
+    })));
+    fsPatch_(auth, cfg, 'workspaces/' + cfg.workspaceId + '/data/customerMaster', { value: JSON.stringify(next), updatedAt: Date.now() }, null);
+    return { master: next, added: plan.added, similar: plan.similar };
+  }
+  return { master, added: [], similar: plan.similar };
+}
+/** 顧客マスタに足す会社を決める（純ロジック） */
+function planCompanyAdditions_(master, names) {
+  const exact = new Set((master || []).map(c => trimStr_(c && c.company)).filter(Boolean));
+  const byKey = {};
+  (master || []).forEach(c => { const n = trimStr_(c && c.company); if (n) byKey[companyKey_(n)] = n; });
+  const added = [];
+  const similar = [];
+  (names || []).forEach(n => {
+    const name = trimStr_(n);
+    if (!name || exact.has(name) || added.indexOf(name) >= 0) return;
+    const hit = byKey[companyKey_(name)];
+    if (hit) { if (!similar.some(x => x.name === name)) similar.push({ name, existing: hit }); return; }
+    added.push(name);
+  });
+  return { added, similar };
+}
+/** メニュー：『会社マスタ』の会社を工程図の顧客マスタに追加する */
+function addCompaniesToKoutei() {
+  alertOrLog_(syncCompaniesToKoutei_(SpreadsheetApp.getActiveSpreadsheet()).text);
+}
+function syncCompaniesToKoutei_(ss) {
+  const cfg = readSettings_();
+  const auth = getAuth_();
+  const master = parseJsonArray_(fsGetValueString_(auth, cfg, 'customerMaster'));
+  const res = ensureKouteiCompanies_(auth, cfg, master, companyMasterNames_(ss));
+  const lines = [];
+  lines.push(res.added.length ? '工程図の顧客マスタに ' + res.added.length + ' 社を追加しました：' + res.added.join('、') : '『会社マスタ』の会社は、すべて工程図の顧客マスタにあります。');
+  if (res.similar.length) {
+    lines.push('表記が少し違う会社があります（二重登録を避けるため追加していません。『会社マスタ』B列を工程図の表記に合わせてください）：');
+    res.similar.forEach(x => lines.push('   ' + x.name + ' → 工程図では「' + x.existing + '」'));
+  }
+  return { ok: true, added: res.added, similar: res.similar, text: lines.join('\n') };
 }
 
 // ============ 補助メニュー ============
@@ -981,15 +1220,16 @@ function ensureStaffInputTab_(ss) {
   const headerRow = findStaffHeaderRow_(sheet);
   if (headerRow < 0) throw new Error('「' + staff.getName() + '」の『' + STAFF_TAB_DEFAULT + '』タブに見出し（会社コード・案件番号）の行が見つかりません');
   const codes = readCompanyCodes_(ss);
-  formatStaffInputTab_(sheet, headerRow, codes);
-  writeStaffRulesTab_(staff);
+  const views = readMasters_(ss).views;
+  formatStaffInputTab_(sheet, headerRow, { codes, views: viewCodeOptions_(views) });
+  writeStaffRulesTab_(staff, views);
   writeSetting_(ss, 'tabName', STAFF_TAB_DEFAULT);
   writeSetting_(ss, 'startRow', 2);
   const where = '「' + staff.getName() + '」';
   const head = how === 'created' ? where + 'に入力タブ『' + STAFF_TAB_DEFAULT + '』を作りました。'
     : how === 'renamed' ? where + 'の入力用タブの名前を『' + STAFF_TAB_DEFAULT + '』に合わせました。'
     : where + 'の『' + STAFF_TAB_DEFAULT + '』タブを整えました。';
-  return head + '見出しを日本語・ベトナム語の2段にし、プルダウン（会社コード ' + codes.length + ' 社・新規or修正・視点・パターン・時間）を付け、『' +
+  return head + '見出しを日本語・ベトナム語の2段にし、プルダウン（会社コード ' + codes.length + ' 社・新規or修正・視点 ' + viewKeywords_(views).join('/') + '・パターン・時間）を付け、『' +
     STAFF_RULES_TAB + '』タブを書き直しました。（『設定』のタブ名を「' + STAFF_TAB_DEFAULT + '」、取込開始行を 2 にしました）';
 }
 
@@ -1018,8 +1258,10 @@ function readCompanyCodes_(ss) {
   return out;
 }
 
-/** 入力列のプルダウン（無い列は null） */
-function staffValidation_(key, companyCodes) {
+/** 入力列のプルダウン（無い列は null）。choices: { codes: 会社コード[], views: 視点コード[] } */
+function staffValidation_(key, choices) {
+  const companyCodes = (choices && choices.codes) || [];
+  const viewOptions = (choices && choices.views && choices.views.length) ? choices.views : viewCodeOptions_([]);
   const dv = () => SpreadsheetApp.newDataValidation();
   const list = (values, allowInvalid, help) => dv().requireValueInList(values, true).setAllowInvalid(allowInvalid).setHelpText(help).build();
   switch (key) {
@@ -1030,7 +1272,7 @@ function staffValidation_(key, companyCodes) {
     case 'request':
       return list(REQUEST_OPTIONS, false, '初回依頼は「新規」、2回目以降は「修正」/ Lần đầu: Mới, từ lần 2: Sửa');
     case 'cut':
-      return list(VIEW_CODE_OPTIONS, true, 'EX1・IN1・EXCB1・INCM1・P1・EXM1・INM1 など / Chọn mã góc nhìn');
+      return list(viewOptions, true, 'リストから選ぶ（一覧は『記入ルール/説明』）/ Chọn mã góc nhìn từ danh sách');
     case 'pattern':
       return list(PATTERN_OPTIONS, true, 'パターン違いが無ければ空欄 / Không có phương án khác thì để trống');
     case 'white': case 'color': case 'other':
@@ -1044,7 +1286,7 @@ function staffValidation_(key, companyCodes) {
  * 見出しを「日本語＋ベトナム語」の2段にして注記・色を付け、見出しより下の入力行にプルダウンと数値書式を付ける（列は見出し名で探す）。
  * 旧レイアウト（案件番号の列が無い）のタブは見出しの文字を変えない。
  */
-function formatStaffInputTab_(sheet, headerRow, companyCodes) {
+function formatStaffInputTab_(sheet, headerRow, choices) {
   const n = 1000; // 見出しより下の入力行にプルダウン等を付ける行数
   const lastCol = Math.max(sheet.getLastColumn(), STAFF_INPUT_COLUMNS.length);
   ensureSize_(sheet, headerRow + n, lastCol);
@@ -1058,7 +1300,7 @@ function formatStaffInputTab_(sheet, headerRow, companyCodes) {
     if (isCurrent) head.setValue(def.label + '\n' + def.vi);
     head.setNote(def.note).setFontWeight('bold').setBackground('#dde5f0').setWrap(true).setVerticalAlignment('middle');
     sheet.setColumnWidth(c, def.width * 9);
-    const rule = staffValidation_(def.key, companyCodes || []);
+    const rule = staffValidation_(def.key, choices);
     if (rule) sheet.getRange(start, c, n, 1).setDataValidation(rule);
     if (def.hours) sheet.getRange(start, c, n, 1).setNumberFormat('0.##');
   });
@@ -1088,7 +1330,7 @@ const STAFF_RULES_LINES = [
   ['', '社外案件名：お客様の案件名を自由入力（例 マンション）', 'Tên dự án: tên dự án của khách hàng, nhập tự do (VD: マンション)'],
   ['', 'サーバーリンク：保存先フォルダのリンク（CG から始まるパス）を貼り付け', 'Link thư mục: dán đường dẫn thư mục lưu file (bắt đầu bằng CG)'],
   ['', '新規or修正：その視点の初回依頼は「新規」、2回目以降はすべて「修正」', 'Mới / Sửa: yêu cầu lần đầu của góc nhìn đó chọn「新規 / Mới」, từ lần thứ 2 trở đi chọn「修正 / Sửa」'],
-  ['', '視点：下の「視点コード」から選ぶ（①と末尾の数字は同じ。外観目線視点② → EX2）', 'Góc nhìn: chọn theo bảng「Mã góc nhìn」bên dưới (số ① = số cuối, VD: ngoại thất tầm mắt ② → EX2)'],
+  ['', '視点：下の「視点コード」から選ぶ（①と末尾の数字は同じ。外観目線視点② → EX2）。表に無い視点は管理者に連絡', 'Góc nhìn: chọn theo bảng「Mã góc nhìn」bên dưới (số ① = số cuối, VD: ngoại thất tầm mắt ② → EX2). Nếu không có, liên hệ quản lý'],
   ['', 'パターン：同じ視点でパターン違いがあれば A・B・C…（無ければ空欄）', 'Phương án: nếu cùng góc nhìn có nhiều phương án thì chọn A, B, C… (không có thì để trống)'],
   ['', 'White：ホワイトパースまでの制作時間（モデル作成の行はモデル制作時間）', 'White: số giờ làm đến phối cảnh trắng (dòng dựng model: số giờ dựng model)'],
   ['', 'Color：色付きパースまでの制作時間（White の時間は含めない）', 'Color: số giờ làm phối cảnh màu (không tính số giờ White)'],
@@ -1103,12 +1345,12 @@ const STAFF_RULES_EXAMPLES = [
   ['RIC', 34, 'マンション', '\\\\CG-SERVER2\\…\\RIC.34', '新規 / Mới', 'IN1', '', 5, 3.5, 1.5, '人物あり → pts / có người → pts'],
   ['RIC', 34, 'マンション', '\\\\CG-SERVER2\\…\\RIC.34', '修正 / Sửa', 'EX1', '', 0, 1.5, 0, '2回目の依頼（色の修正）/ yêu cầu lần 2 (sửa màu)'],
   ['REN', 72, '戸建て', '\\\\CG-SERVER2\\…\\REN.72', '新規 / Mới', 'EXCB1', '', 5, 3, 0, '外観鳥瞰 / ngoại thất chim bay'],
-  ['REN', 72, '戸建て', '\\\\CG-SERVER2\\…\\REN.72', '新規 / Mới', 'P1', '', 2, 1, 0.5, '写真合成 / ghép ảnh'],
+  ['REN', 72, '戸建て', '\\\\CG-SERVER2\\…\\REN.72', '新規 / Mới', 'EXP1', '', 2, 1, 0.5, '外観写真合成 / ghép ảnh ngoại thất'],
   ['REN', 72, '戸建て', '\\\\CG-SERVER2\\…\\REN.72', '新規 / Mới', 'EXM1', '', 8, 0, 0, 'モデル作成（外観）/ dựng model ngoại thất'],
 ];
 
 /** 『記入ルール/説明』タブを日本語・ベトナム語の併記で書き直す（本文はB列。A列は余白） */
-function writeStaffRulesTab_(staff) {
+function writeStaffRulesTab_(staff, views) {
   let sh = staff.getSheetByName(STAFF_RULES_TAB);
   if (!sh) sh = staff.insertSheet(STAFF_RULES_TAB, Math.min(1, staff.getSheets().length));
   sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).breakApart(); // 手で結合したセルがあっても書けるように
@@ -1122,7 +1364,7 @@ function writeStaffRulesTab_(staff) {
     if (l[0] === 'h') { if (r > 5) r++; push([l[1] + ' ／ ' + l[2].replace(/^■\s*/, '')], 'h'); return; }
     push([l[1]], 'ja'); push(['   ' + l[2]], 'vi');
   });
-  VIEW_CODES.forEach(v => push([v[0] + '1 → ' + v[2] + '① ／ ' + v[3] + ' ①'], 'ja'));
+  viewCodeLines_(views).forEach(l => push([l], 'ja'));
   r++;
   push(['■ 記入例（読むだけ。実際の入力は『' + STAFF_TAB_DEFAULT + '』タブへ） ／ Ví dụ (chỉ để xem, nhập thật ở tab『' + STAFF_TAB_DEFAULT + '』)'], 'h');
   push(STAFF_INPUT_COLUMNS.map(c => c.label + '\n' + c.vi), 'tableHead');
@@ -1180,8 +1422,29 @@ function quickSetup() {
   const conn = checkConnection_();
   if (!conn.ok) ok = false;
   lines.push((conn.ok ? '✓ ' : '✗ ') + conn.text);
+  if (conn.ok) {
+    try {
+      const co = syncCompaniesToKoutei_(ss);
+      lines.push((co.similar.length ? '△ ' : '✓ ') + co.text);
+    } catch (e) {
+      ok = false;
+      lines.push('✗ 工程図の顧客マスタに会社を追加できませんでした：' + String(e && e.message || e));
+    }
+  }
+  if (ok) {
+    try {
+      installAutoTrigger_();
+      lines.push('✓ 30分ごとの自動実行を設定しました（入力シートに変わりがあれば転記し、' +
+        (readSettings_().autoSend ? '状態が「未送信」の行は工程図に自動登録します。「要確認」の行は直して「工程図へ」にチェックすると次の自動実行で登録されます）。' : '自動登録は『設定』で「しない」になっているので転記だけです）。'));
+    } catch (e) {
+      ok = false;
+      lines.push('✗ 30分ごとの自動実行を設定できませんでした：' + String(e && e.message || e));
+    }
+  } else {
+    lines.push('・30分ごとの自動実行は、✗ が無くなってから設定します。');
+  }
   lines.push(ok
-    ? '準備ができました。「工程図 エンジニア入力シート」を制作メンバーに共有すれば使い始められます。'
+    ? '準備ができました。「工程図 エンジニア入力シート」を制作メンバーに共有すれば使い始められます（このファイルは共有しない）。'
     : '✗ の項目を直してから、もう一度「0. かんたん初期設定」を押してください（何度押しても安全です）。');
   alertOrLog_('かんたん初期設定の結果\n\n' + lines.join('\n\n'));
 }
@@ -1196,8 +1459,6 @@ function setupSheet_(ss) {
   const col = headerMap_(link);
   link.setFrozenRows(1);
   link.getRange(1, 1, 1, link.getLastColumn()).setFontWeight('bold');
-  const n = Math.max(link.getLastRow() - 1, 0);
-  if (n > 0) applyValidations_(link, col, 2, n);
 
   const company = ss.getSheetByName(SHEET.COMPANY) || ss.insertSheet(SHEET.COMPANY);
   if (company.getLastRow() === 0) {
@@ -1214,9 +1475,9 @@ function setupSheet_(ss) {
     const rows = [VIEW_MASTER_HEADERS].concat(INITIAL_VIEW_MASTER);
     ensureSize_(view, rows.length, VIEW_MASTER_HEADERS.length);
     view.getRange(1, 1, rows.length, VIEW_MASTER_HEADERS.length).setValues(rows);
+    view.getRange(1, 4).setNote(VIEW_EXTERNAL_NOTE);
   } else {
     ensureViewMasterExternalColumn_(view);
-    ensureViewMasterKeywords_(view);
   }
   view.setFrozenRows(1);
   view.getRange(1, 1, 1, Math.max(view.getLastColumn(), VIEW_MASTER_HEADERS.length)).setFontWeight('bold');
@@ -1239,45 +1500,30 @@ function setupSheet_(ss) {
     Object.keys(SETTING_KEYS).forEach(k => rows.push([SETTING_KEYS[k], SETTING_DEFAULTS[k], SETTING_NOTES[k]]));
     ensureSize_(settings, rows.length, 3);
     settings.getRange(1, 1, rows.length, 3).setValues(rows);
+  } else {
+    // 後から増えた項目（自動登録など）を下に足す（既にある項目の値は変えない）
+    const have = settings.getRange(1, 1, settings.getLastRow(), 1).getValues().map(r => trimStr_(r[0]));
+    Object.keys(SETTING_KEYS).forEach(k => { if (have.indexOf(SETTING_KEYS[k]) < 0) settings.appendRow([SETTING_KEYS[k], SETTING_DEFAULTS[k], SETTING_NOTES[k]]); });
   }
+  const cAuto = settings.getRange(1, 1, settings.getLastRow(), 1).getValues().map(r => trimStr_(r[0])).indexOf(SETTING_KEYS.autoSend) + 1;
+  if (cAuto) settings.getRange(cAuto, 2).setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(['する', 'しない'], true).build());
   settings.getRange(1, 1, 1, 3).setFontWeight('bold');
+
+  // 『連携』の既存行のプルダウン（区分・種類は視点マスタから作るので、マスタを整えた後に付ける）
+  const n = Math.max(link.getLastRow() - 1, 0);
+  if (n > 0) applyValidations_(link, col, 2, n, readMasters_(ss));
 
   writeHowto_(ss);
 }
 
-/** 旧バージョンの視点マスタ（社外名の列が無い）に「社外名」列を足し、EX/IN/P の初期値を入れる */
+/** 視点マスタに「社外名」列が無ければ右端に足す（中身は空＝「区分＋視点」を使う。お客様向けの呼び方を変えたい行だけ書く） */
 function ensureViewMasterExternalColumn_(view) {
   const lastCol = view.getLastColumn();
   const headers = view.getRange(1, 1, 1, lastCol).getValues()[0].map(v => trimStr_(v));
   if (headers.indexOf('社外名') >= 0) return;
   const c = lastCol + 1;
   ensureSize_(view, 1, c);
-  view.getRange(1, c).setValue('社外名').setFontWeight('bold');
-  const last = view.getLastRow();
-  if (last < 2) return;
-  const kw = view.getRange(2, 1, last - 1, 1).getValues().map(r => normCut_(r[0]).replace(/[^A-Z]/g, ''));
-  const byKw = {};
-  INITIAL_VIEW_MASTER.forEach(r => { byKw[r[0]] = r[3]; });
-  const vals = kw.map(k => [byKw[k] || '']);
-  view.getRange(2, c, vals.length, 1).setValues(vals);
-}
-
-/** 旧バージョンの視点マスタに、入力シートで増えた視点コード（EXCB・INCM・EXM・INM など）が無ければ下に追加する（既にある行は変えない） */
-function ensureViewMasterKeywords_(view) {
-  const lastCol = view.getLastColumn();
-  const headers = view.getRange(1, 1, 1, lastCol).getValues()[0].map(v => trimStr_(v));
-  const cKw = headers.indexOf(VIEW_MASTER_HEADERS[0]);
-  if (cKw < 0) return;
-  const last = view.getLastRow();
-  const have = last >= 2 ? view.getRange(2, cKw + 1, last - 1, 1).getValues().map(r => normCut_(r[0]).replace(/[^A-Z]/g, '')) : [];
-  const add = INITIAL_VIEW_MASTER.filter(r => ADDED_VIEW_KEYWORDS.indexOf(r[0]) >= 0 && have.indexOf(r[0]) < 0).map(r => {
-    const row = new Array(lastCol).fill('');
-    VIEW_MASTER_HEADERS.forEach((h, i) => { const c = headers.indexOf(h); if (c >= 0) row[c] = r[i]; });
-    return row;
-  });
-  if (!add.length) return;
-  ensureSize_(view, last + add.length, lastCol);
-  view.getRange(last + 1, 1, add.length, lastCol).setValues(add);
+  view.getRange(1, c).setValue('社外名').setFontWeight('bold').setNote(VIEW_EXTERNAL_NOTE);
 }
 
 /** 会社マスタに「入力シートに出さない」列（チェックボックス）を用意する。旧バージョンのシートでは、備考が「表記ゆれ」の行にチェックを入れる */
@@ -1364,15 +1610,18 @@ function arrayToRowObj_(arr, col) {
   return obj;
 }
 
-function applyValidations_(sheet, col, startRow, numRows) {
+function applyValidations_(sheet, col, startRow, numRows, masters) {
+  const choices = linkChoiceLists_(masters);
   const checkbox = SpreadsheetApp.newDataValidation().requireCheckbox().build();
   const list = (values) => SpreadsheetApp.newDataValidation().requireValueInList(values, true).setAllowInvalid(true).build();
   sheet.getRange(startRow, col.send, numRows, 1).setDataValidation(checkbox);
   sheet.getRange(startRow, col.exclude, numRows, 1).setDataValidation(checkbox);
-  sheet.getRange(startRow, col.category, numRows, 1).setDataValidation(list([CATEGORY.EX, CATEGORY.IN]));
-  sheet.getRange(startRow, col.kind, numRows, 1).setDataValidation(list([KIND.PERS, KIND.PHOTO, KIND.MODEL]));
+  sheet.getRange(startRow, col.category, numRows, 1).setDataValidation(list(choices.categories));
+  sheet.getRange(startRow, col.kind, numRows, 1).setDataValidation(list(choices.kinds));
   sheet.getRange(startRow, col.stepKind, numRows, 1).setDataValidation(list([STEP_KIND.NEW, STEP_KIND.ADD, STEP_KIND.FIX, STEP_KIND.CHANGE]));
   sheet.getRange(startRow, col.status, numRows, 1).setDataValidation(list([STATUS.NEW, STATUS.CHECK, STATUS.UPDATED, STATUS.SENT, STATUS.ERROR, STATUS.GONE]));
+  sheet.getRange(startRow, col.transferredAt, numRows, 1).setNumberFormat('yyyy-mm-dd hh:mm');
+  sheet.getRange(startRow, col.sentAt, numRows, 1).setNumberFormat('yyyy-mm-dd hh:mm');
 }
 
 function readSettings_() {
@@ -1393,6 +1642,8 @@ function readSettings_() {
   cfg.defaultAssignee = trimStr_(cfg.defaultAssignee) || '未割当';
   cfg.projectId = trimStr_(cfg.projectId);
   cfg.workspaceId = trimStr_(cfg.workspaceId);
+  cfg.autoSend = !/^(しない|いいえ|off|no|false)$/i.test(trimStr_(cfg.autoSend));
+  cfg.autoWait = Math.max(0, parseFloat(cfg.autoWait) || 0);
   if (!cfg.fileId) throw new Error('『設定』タブの「スタッフシートのファイルID」が空です');
   return cfg;
 }
@@ -1431,7 +1682,9 @@ function readMasters_(ss) {
   const views = [];
   table(SHEET.VIEW).forEach(r => {
     const keyword = normCut_(r['カット名のキーワード']).replace(/[^A-Z]/g, '');
-    if (keyword) views.push({ keyword, category: trimStr_(r['区分']), kind: trimStr_(r['種類']), external: trimStr_(r['社外名']) });
+    const category = trimStr_(r['区分']);
+    const kind = trimStr_(r['種類']);
+    if (keyword) views.push({ keyword, category, kind, external: trimStr_(r['社外名']) || deriveExternal_(category, kind) });
   });
   const projects = [];
   table(SHEET.PROJECT).forEach(r => {
@@ -1462,39 +1715,46 @@ const HOWTO_LINES = [
   '',
   '■ エンジニアが書く場所',
   '「工程図 エンジニア入力シート」の『入力シート』タブ。書き方は同じファイルの『記入ルール/説明』タブ（日本語・ベトナム語の併記。メニュー「0. かんたん初期設定」で整います）。',
-  '列: 会社コード（REN・RIC…）/ 案件番号 / 社外案件名 / サーバーリンク / 新規or修正 / 視点（EX1・IN1・EXCB1・INCM1・P1・EXM1・INM1）/ パターン（A・B…）/ White / Color / pts / メモ',
+  '列: 会社コード（REN・RIC…）/ 案件番号 / 社外案件名 / サーバーリンク / 新規or修正 / 視点（『視点マスタ』のキーワード＋番号。EX1・IN1・EXCB1…）/ パターン（A・B…）/ White / Color / pts / メモ',
   '1視点（パターン違いも別）1行。依頼のたびに行を足します。会社コード＋案件番号は「RIC.34」のように1つの社内案件名として扱います。',
-  '会社コードのプルダウンは『会社マスタ』から作ります（「入力シートに出さない」にチェックした行は出ません）。会社を足したらメニュー「エンジニア入力シートを整える」を押してください。',
+  '会社コード・視点のプルダウンは『会社マスタ』『視点マスタ』から作ります。マスタを変えたらメニュー「エンジニア入力シートを整える」を押してください。',
   '',
-  '■ 毎日の流れ（管理者）',
-  '1. メニュー「工程図連携」→「1. エンジニア入力シートから転記」。『連携』タブに新しい行が追加され、「入力日」に転記した日が自動で入ります（既にある行は上書きしません）。',
-  '   会社コード・案件番号・新規or修正・視点・時間がそろっていない行は「記入途中」として待ち、そろった後の転記で追加されます。',
-  '2. 状態が「要確認」の行の 社外案件名・会社名・区分・種類 を直し、必要なら 納期・お客様担当者・担当者・メモ を入れる。',
-  '3. 工程図に登録したい行の「工程図へ」にチェック。',
-  '4. メニュー「工程図連携」→「2. 工程図へ送信」。状態が「登録済み」になれば完了。',
-  '   → 工程図でスケジュールが自動生成されます。金額（売上・見積・請求）は工程図の請求パネルで入力します。',
+  '■ 自動で動くこと（30分ごと）',
+  '1. 入力シートに新しい行・変わった行があれば『連携』タブに反映します（変わりが無ければ何もしません）。新しい行の「入力日」には転記した日が入ります。',
+  '   会社コード・案件番号・新規or修正・視点・時間がそろっていない行は「記入途中」として待ちます。',
+  '2. 状態が「未送信」（自動判定がすべてできた行）で、最後に変わってから『設定』の待ち時間（25分）がたった行を、工程図に自動登録します。',
+  '   『会社マスタ』にあって工程図の顧客マスタに無い会社は、先に顧客マスタへ追加します。',
+  '3. 結果は『設定』の「最後の自動実行」に出ます。',
+  '',
+  '■ 人がすること（管理者）',
+  '・状態が「要確認」の行：「結果」列の理由を見て、社外案件名・会社名・区分・種類・ステップ種類 などを直し、「工程図へ」にチェック → 次の自動実行で登録されます（すぐ登録したいときはメニュー「2. 工程図へ送信」）。',
+  '・状態が「更新あり」の行（登録後にエンジニアが時間などを直した）：内容を見て「工程図へ」にチェック → 工程図の未完了ステップの時間などを更新します。',
+  '・状態が「エラー」の行：理由を直して「工程図へ」にチェックし、メニュー「2. 工程図へ送信」。',
+  '・必要に応じて 納期・お客様担当者・担当者（社内担当者）・メモ を入れる（登録前に入れたものが工程図に入ります）。工程図に入れない行は「対象外」にチェック。',
+  '・金額（売上・見積・請求）は工程図の請求パネルで入力します。',
+  '・自動登録を止めたいとき：『設定』の「自動登録」を「しない」にする（転記だけ自動）。自動実行そのものを止めるときはメニュー「自動実行を止める」。',
   '',
   '■ 自動判定のしくみ',
   '・社外案件名：入力シートの社外案件名。空なら『案件マスタ』で社内案件名（RIC.34）から引きます。お客様担当者・会社名も『案件マスタ』から（無ければ『会社マスタ』で会社コードから会社名だけ判定）。',
-  '・区分（外観/内観）・種類（パース/写真合成/モデル）・社外視点名：『視点マスタ』で視点コードの英字から引きます。EX1 → 外観視点①、EXCB2 → 外観鳥瞰視点②、パターンAなら「外観視点①_パターンA」。',
+  '・区分・種類・社外視点名：『視点マスタ』で視点コードの英字から引きます。社外名が空なら「区分＋視点」＋丸数字（EX1 → 外観目線視点①、パターンAなら「外観目線視点①_パターンA」。モデルは 外観モデル①）。',
   '・ステップ種類：入力シートの「新規or修正」から（新規 → 新規、修正 → 修正（無料））。有料の変更・追加は人が「変更（有料）」「追加」に直します。',
   '  同じ案件＋視点の2回目以降なのに「新規」の行は「要確認」になります（書き間違い・二重入力のおそれ）。',
-  '・登録されるステップ：White → ホワイト、Color → カラー、pts → 人物＋添景合成。写真合成（P1…）・モデル（EXM1・INM1）は1ステップ（時間は合計）。',
+  '・登録されるステップ：White → ホワイト、Color → カラー、pts → 人物＋添景合成。写真合成は「写真合成」、モデルは「モデル作成」、VR は「VR制作」、動画は「動画制作」の1ステップ（時間は合計）。',
   '・売上・帳票の「初回/追加/修正」は、ステップ種類（新規→初回、追加→追加、修正・変更→修正）から自動で入ります。',
   '',
   '■ 列の見方（『連携』タブ）',
   '・自動で入る列：取込キー・状態・入力日（最初に転記した日。あとで変わりません）・社内案件名・視点名・パターン・回・新規or修正・各時間・元シート備考（メモ）・転記日時（最後に内容が変わった日時）・送信日時・結果・元シート行・サーバリンク',
   '・人が直す列：工程図へ・社外案件名・社外視点名・納期・会社名・お客様担当者・区分・種類・ステップ種類・担当者・メモ・対象外（自動判定の結果が入り、次の転記で上書きされません）',
-  '・状態：未送信 / 要確認（会社名・種類などが未確定）/ 更新あり（登録後にエンジニア側が変わった）/ 登録済み / エラー / 元シートから消えた',
+  '・状態：未送信（自動登録を待っている）/ 要確認 / 更新あり / 登録済み / エラー / 元シートから消えた（登録済みの行が消えた場合、工程図のタスクは残ります）',
+  '・登録が済むと「工程図へ」のチェックは外れます（次にチェックすると「もう一度送ってよい」の意味になります）。',
   '',
   '■ 登録後のルール',
   '・担当者・優先度・完了時間・完了状態は工程図側が正。シートからは上書きしません。',
-  '・「更新あり」の行をもう一度送信すると、未完了ステップの時間と案件名・会社名・区分・納期・社外視点名だけ更新します。',
+  '・「更新あり」の行を送ると、未完了ステップの時間と案件名・会社名・区分・納期・社外視点名だけ更新します。',
   '・工程図側で削除したタスクは、再送信しても復活しません。',
   '',
   '■ 初回だけ',
-  '・メニュー「0. かんたん初期設定」を押す（管理者シートの整備・読み込み先の切り替え・エンジニア入力シートの整備・接続テストをまとめて行います）。',
-  '・続けて「工程図の会社名一覧を取り込む」を押し、『会社マスタ』の表記を工程図に合わせる。',
+  '・メニュー「0. かんたん初期設定」を押す（管理者シートの整備・読み込み先の切り替え・エンジニア入力シートの整備・接続テスト・顧客マスタへの会社の追加・30分ごとの自動実行の設定をまとめて行います）。',
   '・「工程図 エンジニア入力シート」だけを制作メンバーに「編集者」で共有する（このファイルは共有しない）。',
   '・接続テストが失敗する場合は手順書（docs/08_スプレッドシート連携.md）の「秘密鍵を設定」を行う。',
   '・『案件マスタ』に、よく使う社内案件名 → 社外案件名・会社名・お客様担当者 を登録しておくと「要確認」が減ります。',
