@@ -14,9 +14,10 @@ vm.createContext(ctx);
 // スクリプト末尾で必要な名前をまとめて返す。
 const exportsList = ['normCode_', 'codePrefix_', 'normCut_', 'normPattern_', 'viewpointNameOf_', 'cutTokens_', 'cutNumber_', 'circled_',
   'externalViewpointName_', 'guessCompanyFromLink_', 'findProject_', 'judgeCompany_', 'judgeViewpoint_',
-  'judgeStepKind_', 'judgeRow_', 'parseDeadline_', 'toHours_', 'collectSourceRows_', 'buildTaskRecords_', 'resolveStepLabel_',
-  'resolveDeliverySuffix_', 'normalizeStepTypes_', 'staffHeaderMap_', 'fsEncodeFields_', 'fsDecodeDoc_', 'rowObjToArray_', 'arrayToRowObj_',
-  'STATUS', 'KIND', 'STEP_KIND', 'DEFAULT_STEP_TYPES', 'H', 'STAFF_INPUT_HEADERS'];
+  'judgeStepKind_', 'requestStepKind_', 'judgeRow_', 'parseDeadline_', 'toHours_', 'collectSourceRows_', 'buildTaskRecords_', 'resolveStepLabel_',
+  'resolveDeliverySuffix_', 'normalizeStepTypes_', 'staffHeaderMap_', 'mapStaffColumns_', 'joinCode_', 'fsEncodeFields_', 'fsDecodeDoc_', 'rowObjToArray_', 'arrayToRowObj_',
+  'STATUS', 'KIND', 'STEP_KIND', 'DEFAULT_STEP_TYPES', 'H', 'STAFF_INPUT_HEADERS', 'STAFF_INPUT_COLUMNS', 'INITIAL_VIEW_MASTER',
+  'VIEW_CODE_OPTIONS', 'HOUR_OPTIONS', 'REQUEST_OPTIONS'];
 const g = vm.runInContext(src + '\n;({' + exportsList.join(',') + '})', ctx);
 
 let passed = 0;
@@ -119,6 +120,52 @@ test('ステップ種類の判定', () => {
   assert.equal(g.judgeStepKind_('パース修正', 1), '修正（無料）');
   assert.equal(g.judgeStepKind_('パース変更', 1), '変更（有料）');
   assert.equal(g.judgeStepKind_('追加制作', 1), '追加');
+  // 入力シートの「新規or修正」（回数より優先）
+  assert.equal(g.judgeStepKind_(undefined, 1, '修正 / Sửa'), '修正（無料）');
+  assert.equal(g.judgeStepKind_(undefined, 2, '新規 / Mới'), '新規');
+  assert.equal(g.judgeStepKind_(undefined, 2, ''), '修正（無料）');
+});
+
+test('「新規or修正」欄の読み取り（日本語・ベトナム語・英語）', () => {
+  g.REQUEST_OPTIONS.forEach(o => assert.ok(g.requestStepKind_(o), o + ' が読める'));
+  assert.equal(g.requestStepKind_('新規 / Mới'), '新規');
+  assert.equal(g.requestStepKind_('修正 / Sửa'), '修正（無料）');
+  assert.equal(g.requestStepKind_('Mới'), '新規');
+  assert.equal(g.requestStepKind_('sửa'), '修正（無料）');
+  assert.equal(g.requestStepKind_('new'), '新規');
+  assert.equal(g.requestStepKind_('add'), '追加');
+  assert.equal(g.requestStepKind_('変更'), '変更（有料）');
+  assert.equal(g.requestStepKind_(''), '');
+  assert.equal(g.requestStepKind_('?'), '');
+});
+
+test('会社コード＋案件番号 → 社内案件名', () => {
+  assert.equal(g.joinCode_('RIC', 34), 'RIC.34');
+  assert.equal(g.joinCode_(' REN ', '72'), 'REN.72');
+  assert.equal(g.joinCode_('RIC', ''), 'RIC');          // 番号が空 → 記入途中（コードのまま）
+  assert.equal(g.joinCode_('RIC.34', ''), 'RIC.34');    // コードに番号まで書いてある
+  assert.equal(g.joinCode_('RIC.34', 34), 'RIC.34');
+  assert.equal(g.joinCode_('', 34), '');
+  assert.equal(g.normCode_(g.joinCode_('Ric', 34)), 'RIC34');
+});
+
+// 初期の視点マスタ（シートに入れる値）をそのまま判定に使う
+const initialViews = g.INITIAL_VIEW_MASTER.map(r => ({ keyword: r[0], category: r[1], kind: r[2], external: r[3] }));
+
+test('入力シートの視点コード（EX・IN・EXCB・INCM・P・EXM・INM）が初期の視点マスタで判定できる', () => {
+  const ext = (cut, pattern) => { const v = g.judgeViewpoint_(cut, '', initialViews); return [v.category, v.kind, g.externalViewpointName_(v.external, g.cutNumber_(cut), pattern)]; };
+  eq(ext('EX1', ''), ['外観', 'パース', '外観視点①']);
+  eq(ext('IN3', 'B'), ['内観', 'パース', '内観視点③_パターンB']);
+  eq(ext('EXCB1', ''), ['外観', 'パース', '外観鳥瞰視点①']);
+  eq(ext('INCM2', ''), ['内観', 'パース', '内観鳥瞰視点②']);
+  eq(ext('INCB1', ''), ['内観', 'パース', '内観鳥瞰視点①']);
+  eq(ext('P1', ''), ['', '写真合成', '写真合成視点①']);
+  eq(ext('EXM1', ''), ['外観', 'モデル', '外観モデル①']);
+  eq(ext('INM2', ''), ['内観', 'モデル', '内観モデル②']);
+  // プルダウンの視点コードはすべて種類まで判定できる
+  g.VIEW_CODE_OPTIONS.forEach(c => assert.ok(g.judgeViewpoint_(c, '', initialViews).kind, c + ' の種類が判定できる'));
+  assert.ok(g.VIEW_CODE_OPTIONS.includes('EXCB1') && g.VIEW_CODE_OPTIONS.includes('INM5') && g.VIEW_CODE_OPTIONS.includes('IN20'));
+  assert.equal(g.HOUR_OPTIONS[0], '0'); assert.ok(g.HOUR_OPTIONS.includes('0.5') && g.HOUR_OPTIONS.includes('40'));
 });
 
 test('行の判定と状態', () => {
@@ -145,6 +192,20 @@ test('行の判定と状態', () => {
   assert.ok(chk2.note.includes('種類'));
 });
 
+test('行の判定：入力シートの「新規or修正」', () => {
+  const row = (round, request) => ({ code: 'Ric.34', cut: 'EX1', pattern: '', link: '', item: undefined, round, name: 'マンション', request });
+  const fix = g.judgeRow_(row(2, '修正 / Sửa'), masters);
+  assert.equal(fix.stepKind, '修正（無料）'); assert.equal(fix.status, g.STATUS.NEW);
+  // 2回目以降なのに「新規」→ 書き間違い・二重入力のおそれで要確認
+  const twice = g.judgeRow_(row(3, '新規 / Mới'), masters);
+  assert.equal(twice.stepKind, '新規'); assert.equal(twice.status, g.STATUS.CHECK);
+  assert.ok(twice.note.includes('3回目'));
+  // 入力シートより前からの案件の「修正」は、そのまま修正（注意書きだけ）
+  const first = g.judgeRow_(row(1, '修正 / Sửa'), masters);
+  assert.equal(first.stepKind, '修正（無料）'); assert.equal(first.status, g.STATUS.NEW);
+  assert.ok(first.note.includes('前の行が無い'));
+});
+
 test('納期の解釈', () => {
   const today = new Date(2026, 8, 18); // 2026-09-18
   assert.equal(g.parseDeadline_('6/24 ', today), '2027-06-24'); // 60日以上前 → 来年
@@ -165,12 +226,23 @@ test('時間の解釈', () => {
   assert.equal(g.toHours_('abc'), 0);
 });
 
-test('スタッフシートの見出し → 列（新レイアウト product schedule）', () => {
-  const m = g.staffHeaderMap_(g.STAFF_INPUT_HEADERS);
+test('入力シートの見出し → 列（今のレイアウト。日本語＋ベトナム語の2段見出しでも読める）', () => {
+  const expected = { code: 1, number: 2, name: 3, link: 4, request: 5, cut: 6, pattern: 7, white: 8, color: 9, other: 10, note: 11, deadline: 0, item: 0, done: 0 };
+  const plainHeaders = g.staffHeaderMap_(g.STAFF_INPUT_HEADERS);
+  Object.keys(expected).forEach(k => assert.equal(plainHeaders[k], expected[k], k));
+  const bilingual = g.staffHeaderMap_(g.STAFF_INPUT_COLUMNS.map(c => c.label + '\n' + c.vi));
+  Object.keys(expected).forEach(k => assert.equal(bilingual[k], expected[k], k));
+  // 1列目の見出しを「社外案件名」と書き間違えていても、案件番号のすぐ左なら会社コードとみなす
+  const typo = g.staffHeaderMap_(['社外案件名', '案件番号', '社外案件名', 'サーバーリンク', '新規or修正', '視点', 'パターン', 'White', 'Color', 'pts', 'メモ']);
+  Object.keys(expected).forEach(k => assert.equal(typo[k], expected[k], k));
+});
+
+test('スタッフシートの見出し → 列（旧レイアウト product schedule）', () => {
+  const m = g.staffHeaderMap_(['入力日', '社内案件名', '視点名', 'パターン', 'ホワイト時間', 'カラー時間', 'その他時間', '納期', '備考', '完了']);
   assert.equal(m.code, 2); assert.equal(m.cut, 3); assert.equal(m.pattern, 4);
   assert.equal(m.white, 5); assert.equal(m.color, 6); assert.equal(m.other, 7);
   assert.equal(m.deadline, 8); assert.equal(m.note, 9); assert.equal(m.done, 10);
-  assert.equal(m.name, 0); assert.equal(m.link, 0); assert.equal(m.item, 0);
+  assert.equal(m.name, 0); assert.equal(m.link, 0); assert.equal(m.item, 0); assert.equal(m.number, 0); assert.equal(m.request, 0);
 });
 
 test('スタッフシートの見出し → 列（旧レイアウト：予想時間は1つ目White・2つ目Color）', () => {
@@ -198,6 +270,26 @@ test('取込キー：同じ案件＋視点（パターン込み）は n回目、
   assert.equal(out[1].key, 'RIC34::EX1-A::1'); // パターンAは別の視点として1回目
   assert.equal(out[1].pattern, 'A');
   assert.equal(out[2].key, 'RIC34::IN1::1');
+});
+
+test('取込キー：記入途中の行（案件番号・新規or修正が空、時間がすべて0）は数えるが出力せず、そろえば同じキーで出る', () => {
+  const r = (srcRow, code, cut, request, white, extra) => Object.assign({ srcRow, code, name: 'マンション', cut, pattern: '', link: '', request, deadlineRaw: undefined, item: undefined, note: '', white, color: 0, other: 0, done: false }, extra);
+  const rows = [
+    r(3, 'RIC.34', 'EX1', '新規 / Mới', 6),
+    r(4, 'RIC.34', 'EX1', '修正 / Sửa', 0),                       // 時間がまだ → 待つ（回数には数える）
+    r(5, 'RIC.34', 'EX1', '修正 / Sửa', 1),                       // 3回目
+    r(6, 'RIC', 'IN1', '新規 / Mới', 3, { noNumber: true }),       // 案件番号がまだ
+    r(7, 'RIC.34', 'IN1', '', 3),                                  // 新規or修正がまだ
+  ];
+  const out = g.collectSourceRows_(rows, new Date(2026, 8, 28));
+  eq(out.map(o => o.key), ['RIC34::EX1::1', 'RIC34::EX1::3']);
+  assert.equal(out.waiting, 3);
+  assert.equal(out[1].request, '修正 / Sửa');
+  assert.equal(out[0].deadline, undefined, '納期の列が無ければ undefined（『連携』の値を消さない）');
+  rows[1].white = 2;
+  const again = g.collectSourceRows_(rows, new Date(2026, 8, 28));
+  eq(again.map(o => o.key), ['RIC34::EX1::1', 'RIC34::EX1::2', 'RIC34::EX1::3']);
+  assert.equal(again.waiting, 2);
 });
 
 const baseCtx = () => ({ now: 1700000000000, today: '2026-09-18', defaultAssignee: '未割当', stepTypes: g.DEFAULT_STEP_TYPES, byVp: new Map(), byExt: new Map(), deleted: new Set() });
@@ -237,6 +329,20 @@ test('レコード生成：写真合成は1ステップ（時間は合計）', (
   assert.equal(d.stepName, '写真合成'); assert.equal(d.stepTypeId, ''); assert.equal(d.hours, 4); assert.equal(d.assignee, '田中'); assert.equal(d.deadline, null);
   assert.equal(d.viewpointName, 'P-1'); assert.equal(d.viewpointNameExternal, '写真合成①');
   assert.equal(d.externalId, 'RIC35::P-1::1::photo');
+});
+
+test('レコード生成：モデル作成は1ステップ（時間は合計）、写真合成・モデルの修正回は名前に（修正）', () => {
+  const row = { key: 'REN72::EXM1::1', code: 'REN.72', name: '戸建て', cut: 'EXM1', pattern: '', extName: '外観モデル①', round: 1, deadline: '', white: 8, color: 0, other: 0.5, company: 'X', contact: '', category: '外観', kind: 'モデル', stepKind: '新規', assignee: '', memo: '' };
+  const r = g.buildTaskRecords_(row, baseCtx());
+  eq(r.errors, []);
+  assert.equal(r.records.length, 1);
+  const d = r.records[0].doc;
+  assert.equal(d.stepName, 'モデル作成'); assert.equal(d.stepTypeId, ''); assert.equal(d.hours, 8.5); assert.equal(d.viewpointCategory, '外観');
+  assert.equal(d.externalId, 'REN72::EXM1::1::model'); assert.equal(d.stepRoundType, 'initial');
+  const fix = g.buildTaskRecords_(Object.assign({}, row, { key: 'REN72::EXM1::2', round: 2, stepKind: '修正（無料）' }), baseCtx());
+  assert.equal(fix.records[0].doc.stepName, 'モデル作成（修正）'); assert.equal(fix.records[0].doc.stepRoundType, 'fix');
+  const photoFix = g.buildTaskRecords_(Object.assign({}, row, { key: 'REN72::P1::2', cut: 'P1', kind: '写真合成', stepKind: '修正（無料）' }), baseCtx());
+  assert.equal(photoFix.records[0].doc.stepName, '写真合成（修正）'); assert.equal(photoFix.records[0].externalId, 'REN72::P1::2::photo');
 });
 
 test('レコード生成：2回目は修正ステップとして既存視点に続く（順番・回数・担当者を引き継ぐ、納品種類は修正）', () => {
