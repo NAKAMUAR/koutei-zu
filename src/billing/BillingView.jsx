@@ -9,7 +9,7 @@ import { useApp } from '../appContext.js';
 import BillingDocument from './BillingDocument.jsx';
 import {
   DOC_TYPES, docTypeOf, blankDoc, blankItem, formatYen, formatJDate, computeTotals,
-  CONDITION_SECTIONS, SCHEDULE_TIME_ROWS,
+  CONDITION_SECTIONS, SCHEDULE_TIME_ROWS, SCHEDULE_PROCESS_COLUMNS,
   INVOICE_STATUSES, invoiceStatusOf, migrateBillingDoc, todayStr,
   REBEG_ESTIMATE, REBEG_INVOICE, INVOICE_BANK_LINES,
   DOC_FONTS, defaultFontId,
@@ -756,10 +756,28 @@ function ConditionsEditor({ doc, upd, input, colors }) {
 }
 
 // ---- 工程予定表 編集 ----
+// 列（工程）ごとに 作業項目名・お客様/当社・日付・完了予定時間 を編集。列の追加・削除・並べ替え、既定の7工程に戻すこともできる。
+const SCHEDULE_MAX_COLS = 10;
 function ScheduleEditor({ doc, upd, input, label, colors }) {
+  const { confirmDialog } = useApp();
   const s = doc.schedule || {};
+  const cols = s.columns || [];
   const setS = (patch) => upd({ schedule: { ...s, ...patch } });
-  const setCol = (i, patch) => setS({ columns: s.columns.map((c, ci) => ci === i ? { ...c, ...patch } : c) });
+  const setCol = (i, patch) => setS({ columns: cols.map((c, ci) => ci === i ? { ...c, ...patch } : c) });
+  const addCol = () => { if (cols.length < SCHEDULE_MAX_COLS) setS({ columns: [...cols, { label: '新しい工程', party: 'us', date: '', times: {} }] }); };
+  const removeCol = (i) => { if (cols.length > 1) setS({ columns: cols.filter((_, ci) => ci !== i) }); };
+  const moveCol = (i, d) => {
+    const j = i + d;
+    if (j < 0 || j >= cols.length) return;
+    const next = cols.slice();
+    [next[i], next[j]] = [next[j], next[i]];
+    setS({ columns: next });
+  };
+  const resetCols = async () => {
+    if (!(await confirmDialog({ title: '既定の7工程に戻す', message: '工程の列を既定の7工程に戻します。入力した日付・完了予定時間もクリアされます。よろしいですか？', confirmLabel: '戻す' }))) return;
+    setS({ columns: SCHEDULE_PROCESS_COLUMNS.map(c => ({ label: c.label, party: c.party, date: '', times: {} })) });
+  };
+  const miniBtn = { padding: '1px 5px', fontSize: 10, lineHeight: '14px', background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 3, cursor: 'pointer', color: colors.textMute };
   const toggleTime = (i, tr) => {
     const c = s.columns[i];
     const times = { ...(c.times || {}) };
@@ -778,16 +796,29 @@ function ScheduleEditor({ doc, upd, input, label, colors }) {
       </Row>
       <div><label style={label}>特記事項</label><input value={s.special} onChange={e => setS({ special: e.target.value })} style={input()} /></div>
 
-      <div style={{ fontSize: 12, fontWeight: 700, marginTop: 6 }}>工程（各列の日付・完了予定時間）</div>
+      <div style={{ fontSize: 12, fontWeight: 700, marginTop: 6 }}>工程（各列の作業項目・日付・完了予定時間）</div>
+      <div style={{ fontSize: 11, color: colors.textMute, marginTop: -6 }}>作業項目名は書き換えられます（例：ホワイトパース提出）。「お客様／当社」で印字の色が変わります。</div>
       <div style={{ overflowX: 'auto' }}>
         <table style={{ borderCollapse: 'collapse', fontSize: 10 }}>
           <thead>
             <tr>
-              <th style={{ border: `1px solid ${colors.border}`, padding: 4, position: 'sticky', left: 0, background: '#f7f6f2' }}>時間＼工程</th>
-              {(s.columns || []).map((c, i) => (
-                <th key={i} style={{ border: `1px solid ${colors.border}`, padding: 4, minWidth: 90 }}>
-                  <div style={{ fontSize: 9, marginBottom: 3 }}>{c.label}</div>
+              <th style={{ border: `1px solid ${colors.border}`, padding: 4, position: 'sticky', left: 0, zIndex: 1, background: '#f7f6f2', whiteSpace: 'nowrap' }}>時間＼工程</th>
+              {cols.map((c, i) => (
+                <th key={i} style={{ border: `1px solid ${colors.border}`, padding: 4, minWidth: 110, verticalAlign: 'top', background: c.party === 'client' ? '#eef4fb' : '#f3f7f1' }}>
+                  <select value={c.party === 'client' ? 'client' : 'us'} onChange={e => setCol(i, { party: e.target.value })}
+                    title="この工程を行う側（印字の色が変わります）"
+                    style={{ width: '100%', fontSize: 10, border: `1px solid ${colors.border}`, borderRadius: 3, padding: 1, marginBottom: 3, background: '#fff' }}>
+                    <option value="client">お客様</option>
+                    <option value="us">当社</option>
+                  </select>
+                  <textarea value={c.label || ''} onChange={e => setCol(i, { label: e.target.value })} rows={2} aria-label={`工程${i + 1}の作業項目名`}
+                    style={{ width: '100%', boxSizing: 'border-box', fontSize: 10, fontWeight: 600, border: `1px solid ${colors.border}`, borderRadius: 3, padding: 2, resize: 'vertical', fontFamily: 'inherit', marginBottom: 3 }} />
                   <input type="date" value={c.date || ''} onChange={e => setCol(i, { date: e.target.value })} style={{ width: '100%', fontSize: 9, border: `1px solid ${colors.border}`, borderRadius: 3, padding: 2 }} />
+                  <div style={{ display: 'flex', gap: 3, marginTop: 3, justifyContent: 'center' }}>
+                    <button type="button" onClick={() => moveCol(i, -1)} disabled={i === 0} title="左へ" style={{ ...miniBtn, opacity: i === 0 ? 0.4 : 1 }}>◀</button>
+                    <button type="button" onClick={() => moveCol(i, 1)} disabled={i === cols.length - 1} title="右へ" style={{ ...miniBtn, opacity: i === cols.length - 1 ? 0.4 : 1 }}>▶</button>
+                    <button type="button" onClick={() => removeCol(i)} disabled={cols.length <= 1} title="この工程を削除" style={{ ...miniBtn, color: '#c0392b', opacity: cols.length <= 1 ? 0.4 : 1 }}>×</button>
+                  </div>
                 </th>
               ))}
             </tr>
@@ -796,7 +827,7 @@ function ScheduleEditor({ doc, upd, input, label, colors }) {
             {SCHEDULE_TIME_ROWS.map(tr => (
               <tr key={tr}>
                 <td style={{ border: `1px solid ${colors.border}`, padding: '2px 6px', textAlign: 'right', position: 'sticky', left: 0, background: '#faf9f5' }}>{tr}</td>
-                {(s.columns || []).map((c, i) => (
+                {cols.map((c, i) => (
                   <td key={i} style={{ border: `1px solid ${colors.border}`, textAlign: 'center', padding: 2 }}>
                     <input type="checkbox" checked={!!(c.times || {})[tr]} onChange={() => toggleTime(i, tr)} />
                   </td>
@@ -805,6 +836,16 @@ function ScheduleEditor({ doc, upd, input, label, colors }) {
             ))}
           </tbody>
         </table>
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <button type="button" onClick={addCol} disabled={cols.length >= SCHEDULE_MAX_COLS}
+          style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 12px', background: 'transparent', border: `1px dashed ${colors.border}`, borderRadius: 4, cursor: cols.length >= SCHEDULE_MAX_COLS ? 'default' : 'pointer', fontSize: 12, opacity: cols.length >= SCHEDULE_MAX_COLS ? 0.5 : 1 }}>
+          <Plus size={13} />工程の列を追加{cols.length >= SCHEDULE_MAX_COLS ? `（最大${SCHEDULE_MAX_COLS}列）` : ''}
+        </button>
+        <button type="button" onClick={resetCols}
+          style={{ padding: '6px 12px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontSize: 12, color: colors.textMute }}>
+          既定の7工程に戻す
+        </button>
       </div>
       <div><label style={label}>備考</label><textarea value={s.note} onChange={e => setS({ note: e.target.value })} style={input({ minHeight: 40, resize: 'vertical' })} /></div>
       <div><label style={label}>特殊規定</label><textarea value={s.specialRule} onChange={e => setS({ specialRule: e.target.value })} style={input({ minHeight: 40, resize: 'vertical' })} /></div>
