@@ -283,15 +283,39 @@ const DEFAULT_SETTINGS = {
   companyOrder: ['CG工房', 'リノべる株式会社', 'オフィスコム', '田中建設', 'SUMUS', '玉善', 'オフショア（その他）'],
 };
 
-function getDailySlots(settings) {
+// ---- 担当者ごとの稼働時間 ----
+// 従業員マスタの workHours（{ morningStart, morningEnd, afternoonStart, afternoonEnd }。時刻はチーム共通の時間＝カレンダーと同じ時計）を
+// withAssigneeHours() で settings.assigneeHours（{ 担当者名: workHours }）にまとめ、スケジューラ・カレンダーが参照する。
+// 未設定・不正な担当者は全体設定（settings の午前・午後）を使う。
+const HM_RE = /^\d{1,2}:\d{2}$/;
+function isValidWorkHours(h) {
+  if (!h || ![h.morningStart, h.morningEnd, h.afternoonStart, h.afternoonEnd].every(v => HM_RE.test(String(v || '')))) return false;
+  const ms = timeToMin(h.morningStart), me = timeToMin(h.morningEnd), as = timeToMin(h.afternoonStart), ae = timeToMin(h.afternoonEnd);
+  return ms < me && me <= as && as < ae;
+}
+function withAssigneeHours(settings, employeeMaster) {
+  const map = {};
+  for (const e of (employeeMaster || [])) {
+    const name = ((e && e.name) || '').trim();
+    if (name && isValidWorkHours(e.workHours)) map[name] = e.workHours;
+  }
+  return Object.keys(map).length ? { ...settings, assigneeHours: map } : settings;
+}
+function workHoursOf(settings, assignee) {
+  const h = assignee && settings && settings.assigneeHours && settings.assigneeHours[assignee];
+  return isValidWorkHours(h) ? h : settings;
+}
+// 1日の営業スロット（午前・午後）。assignee を渡すとその担当者の稼働時間（設定があれば）
+function getDailySlots(settings, assignee) {
+  const src = workHoursOf(settings, assignee);
   return [
-    { start: timeToMin(settings.morningStart), end: timeToMin(settings.morningEnd) },
-    { start: timeToMin(settings.afternoonStart), end: timeToMin(settings.afternoonEnd) },
+    { start: timeToMin(src.morningStart), end: timeToMin(src.morningEnd) },
+    { start: timeToMin(src.afternoonStart), end: timeToMin(src.afternoonEnd) },
   ];
 }
 // その日の営業スロット（土曜は午前のみ）
-function getDaySlots(d, settings) {
-  const all = getDailySlots(settings);
+function getDaySlots(d, settings, assignee) {
+  const all = getDailySlots(settings, assignee);
   if (d.getDay() === 6) return [all[0]];
   return all;
 }
@@ -335,4 +359,5 @@ export {
   dtLocalToDate, dateToDtLocal, VIEWPOINT_PRESETS, viewpointCategoryOptions, makeEmptyStep, makeStepFromPreset, makeViewpointFromPreset,
   COMPANY_PRESETS, genId, normalizeCustomerMaster, VN_LUNAR_HOLIDAYS, vietnamHolidayCandidates, expandHolidayDates,
   DEFAULT_SETTINGS, getDailySlots, getDaySlots, getDayWorkingHours, getHoursPerDay, parseYMD, sheetsLabel,
+  isValidWorkHours, withAssigneeHours,
 };

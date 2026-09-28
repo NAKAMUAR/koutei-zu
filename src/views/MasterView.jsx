@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useApp } from '../appContext.js';
 import { ChevronDown, ChevronUp, GripVertical, Plus, Search, Trash2, X } from 'lucide-react';
-import { VN_LUNAR_HOLIDAYS, dayName, expandHolidayDates, fmtMD, fmtYMD, getProjectColor, vietnamHolidayCandidates } from '../lib/utils.js';
+import { VN_LUNAR_HOLIDAYS, dayName, expandHolidayDates, fmtMD, fmtYMD, getProjectColor, isValidWorkHours, minToTime, timeToMin, vietnamHolidayCandidates } from '../lib/utils.js';
 import { TimeSelect } from '../components/common.jsx';
 
 function MasterView() {
@@ -69,6 +69,20 @@ function MasterView() {
   const addEmployee = () => { editingEmployees.current = false; const next = [...employees, { id: newId('emp'), name: '', role: '' }]; setEmployees(next); saveEmployeeMaster(next); };
   const setEmployeeField = (id, field, val) => { editingEmployees.current = true; setEmployees(es => es.map(e => e.id === id ? { ...e, [field]: val } : e)); };
   const commitEmployees = () => { editingEmployees.current = false; saveEmployeeMaster(employees); };
+  // 担当者ごとの稼働時間（workHours。null で全体設定に戻す）
+  const [openHours, setOpenHours] = useState(null);
+  const saveEmployeeHours = (id, workHours) => {
+    editingEmployees.current = false;
+    const next = employees.map(e => {
+      if (e.id !== id) return e;
+      const rest = { ...e };
+      delete rest.workHours;
+      return workHours ? { ...rest, workHours } : rest;
+    });
+    setEmployees(next);
+    saveEmployeeMaster(next);
+    setOpenHours(null);
+  };
   const removeEmployee = (id) => { editingEmployees.current = false; const next = employees.filter(e => e.id !== id); setEmployees(next); saveEmployeeMaster(next); };
   // 並び順の変更（この順がカレンダー・担当者別・サマリーの表示順になる）
   const moveEmployee = (id, dir) => {
@@ -348,7 +362,8 @@ function MasterView() {
         <h2 style={{ fontFamily: fontDisplay, fontSize: 18, margin: '0 0 4px 0', fontWeight: 500 }}>従業員マスタ</h2>
         <p style={{ fontSize: 12, color: colors.textMute, margin: '0 0 16px 0' }}>
           制作担当者（従業員）を登録します。案件入力時の「担当者」の候補に表示されます。<br />
-          ここでの並び順が、カレンダー・担当者別・サマリーの担当者の表示順になります（つまみをドラッグ＆ドロップ、または▲▼で変更）。
+          ここでの並び順が、カレンダー・担当者別・サマリーの担当者の表示順になります（つまみをドラッグ＆ドロップ、または▲▼で変更）。<br />
+          「稼働時間」で担当者ごとの午前・午後の時間を設定できます（ベトナム側など時差のある担当者向け。未設定なら上の全体設定の時間）。
         </p>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -356,6 +371,7 @@ function MasterView() {
             <div style={{ width: 48, flexShrink: 0, ...labelStyle }}>順</div>
             <div style={{ flex: '1 1 0', ...labelStyle }}>氏名</div>
             <div style={{ flex: '1 1 0', ...labelStyle }}>役割・備考</div>
+            <div style={{ width: 190, flexShrink: 0, ...labelStyle }}>稼働時間</div>
             <div style={{ width: 34, flexShrink: 0 }} />
           </div>
           {employees.length === 0 && (
@@ -363,8 +379,8 @@ function MasterView() {
               まだ登録がありません。「＋ 従業員を追加」から登録してください。
             </div>
           )}
-          {employees.map((e, ei) => (
-            <div key={e.id}
+          {employees.map((e, ei) => (<div key={e.id}>
+            <div
               onDragOver={(ev) => { if (empDragSrc && empDragSrc !== e.id) { ev.preventDefault(); ev.dataTransfer.dropEffect = 'move'; if (empDragOver !== e.id) setEmpDragOver(e.id); } }}
               onDragLeave={() => { if (empDragOver === e.id) setEmpDragOver(null); }}
               onDrop={(ev) => { ev.preventDefault(); if (empDragSrc) reorderEmployees(empDragSrc, e.id); setEmpDragSrc(null); setEmpDragOver(null); }}
@@ -411,11 +427,22 @@ function MasterView() {
                 onChange={(ev) => setEmployeeField(e.id, 'role', ev.target.value)}
                 onBlur={commitEmployees}
                 placeholder="例: パース担当 / 主任" style={{ ...inputStyle, flex: '1 1 0' }} />
+              <button type="button" onClick={() => setOpenHours(openHours === e.id ? null : e.id)}
+                title="この担当者の稼働時間（午前・午後）を設定"
+                style={{ width: 190, flexShrink: 0, textAlign: 'left', padding: '7px 9px', background: openHours === e.id ? colors.accentSoft : '#fff', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, color: isValidWorkHours(e.workHours) ? colors.text : colors.textMute, display: 'flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {isValidWorkHours(e.workHours) ? `${e.workHours.morningStart}〜${e.workHours.morningEnd} / ${e.workHours.afternoonStart}〜${e.workHours.afternoonEnd}` : '全体設定と同じ'}
+                </span>
+                {openHours === e.id ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+              </button>
               <button type="button" onClick={() => removeEmployee(e.id)} style={delBtnStyle} title="この行を削除">
                 <Trash2 size={14} />
               </button>
             </div>
-          ))}
+            {openHours === e.id && (
+              <WorkHoursEditor employee={e} settings={settings} onSave={(wh) => saveEmployeeHours(e.id, wh)} colors={colors} fontJP={fontJP} />
+            )}
+          </div>))}
         </div>
         <button type="button" onClick={addEmployee} style={{ ...addBtnStyle, marginTop: 14 }}>
           <Plus size={14} /> 従業員を追加
@@ -524,6 +551,53 @@ function MasterView() {
 }
 
 // ============ 残業の登録（担当者ごとの稼働枠追加） ============
+// ---- 担当者ごとの稼働時間の編集（従業員マスタの workHours）----
+// 時刻はチーム共通の時間（カレンダーと同じ時計）で入れる。「全体から±N時間」で時差のある担当者をまとめて入れられる
+function WorkHoursEditor({ employee, settings, onSave, colors, fontJP }) {
+  const base = {
+    morningStart: settings?.morningStart || '08:00', morningEnd: settings?.morningEnd || '12:00',
+    afternoonStart: settings?.afternoonStart || '13:00', afternoonEnd: settings?.afternoonEnd || '17:00',
+  };
+  const [draft, setDraft] = useState(() => (isValidWorkHours(employee.workHours) ? { ...employee.workHours } : { ...base }));
+  const valid = isValidWorkHours(draft);
+  const shift = (h) => {
+    const mv = (t) => minToTime(Math.min(24 * 60 - 15, Math.max(0, timeToMin(t) + h * 60)));
+    setDraft({ morningStart: mv(base.morningStart), morningEnd: mv(base.morningEnd), afternoonStart: mv(base.afternoonStart), afternoonEnd: mv(base.afternoonEnd) });
+  };
+  const hours = valid ? ((timeToMin(draft.morningEnd) - timeToMin(draft.morningStart)) + (timeToMin(draft.afternoonEnd) - timeToMin(draft.afternoonStart))) / 60 : 0;
+  const btn = { padding: '4px 10px', background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12 };
+  const set = (k) => (v) => setDraft(d => ({ ...d, [k]: v }));
+  return (
+    <div style={{ margin: '4px 0 8px 58px', padding: 10, border: `1px dashed ${colors.border}`, borderRadius: 4, background: '#fbf9f4', display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 13 }}>
+        <span style={{ color: colors.textMute }}>午前</span>
+        <TimeSelect value={draft.morningStart} onChange={set('morningStart')} colors={colors} fontJP={fontJP} />
+        <span style={{ color: colors.textMute }}>〜</span>
+        <TimeSelect value={draft.morningEnd} onChange={set('morningEnd')} colors={colors} fontJP={fontJP} />
+        <span style={{ color: colors.textMute, marginLeft: 8 }}>午後</span>
+        <TimeSelect value={draft.afternoonStart} onChange={set('afternoonStart')} colors={colors} fontJP={fontJP} />
+        <span style={{ color: colors.textMute }}>〜</span>
+        <TimeSelect value={draft.afternoonEnd} onChange={set('afternoonEnd')} colors={colors} fontJP={fontJP} />
+        <span style={{ fontSize: 11, color: valid ? colors.textMute : '#c0392b' }}>{valid ? `1日 ${hours}時間` : '時刻の順番を確認してください（午前開始 < 午前終了 ≦ 午後開始 < 午後終了）'}</span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 11, color: colors.textMute }}>全体設定（{base.morningStart}〜{base.morningEnd} / {base.afternoonStart}〜{base.afternoonEnd}）から時差でずらす：</span>
+        {[-2, -1, 1, 2].map(h => (
+          <button key={h} type="button" onClick={() => shift(h)} style={btn}>{h > 0 ? `+${h}` : h}時間</button>
+        ))}
+      </div>
+      <div style={{ fontSize: 11, color: colors.textMute }}>
+        時刻はカレンダーと同じ時計（チーム共通の時間）で入れてください。例：全体が日本時間 8:00〜17:00 で、ベトナムの担当者が現地 8:00〜17:00 なら「+2時間」（10:00〜19:00）。
+      </div>
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <button type="button" onClick={() => onSave(null)} style={{ ...btn, color: colors.textMute }}>全体設定と同じに戻す</button>
+        <button type="button" onClick={() => valid && onSave(draft)} disabled={!valid}
+          style={{ ...btn, background: valid ? '#1a1a1a' : '#ccc', color: '#fff', border: 'none', fontWeight: 600, cursor: valid ? 'pointer' : 'default' }}>この稼働時間で保存</button>
+      </div>
+    </div>
+  );
+}
+
 function OvertimeManager({ overtimes, assigneeList, settings, onAdd, onRemove, colors, fontJP }) {
   const { notify } = useApp();
   const todayStr = fmtYMD(new Date());

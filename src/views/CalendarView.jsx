@@ -2,7 +2,7 @@
 import { useState, useRef, useLayoutEffect } from 'react';
 import { useApp } from '../appContext.js';
 import { addDays, dayName, fmtMD, fmtYMD, fmtYMDJP, getDailySlots, getHoursPerDay, getProjectColor, isNonWorkingDay, isSameDay, minToTime, pastelize, priorityColor, startOfDay } from '../lib/utils.js';
-import { buildDoneSlots, computeFreeHours, dayAbsence, dayOvertimeIntervals, dayWorkSlots, maxOvertimeEndMin, sortAssigneesByMaster, subtractBusy } from '../lib/schedule.js';
+import { buildDoneSlots, computeFreeHours, dayAbsence, dayWorkSlots, maxOvertimeEndMin, sortAssigneesByMaster, subtractBusy } from '../lib/schedule.js';
 import { Calendar as CalIcon, GripVertical } from 'lucide-react';
 import { tabStyle } from '../components/common.jsx';
 
@@ -122,8 +122,6 @@ function CalendarView() {
   const dailySlots = getDailySlots(settings);
   const morningSlot = dailySlots[0];
   const afternoonSlot = dailySlots[1];
-  const morningHours = (morningSlot.end - morningSlot.start) / 60;
-  const afternoonHours = (afternoonSlot.end - afternoonSlot.start) / 60;
   const hoursPerDay = getHoursPerDay(settings);
 
   const assignees = sortAssigneesByMaster([...new Set([...scheduled.active.map(t => t.assignee), ...scheduled.done.map(t => t.assignee)])], assigneeOrder);
@@ -243,6 +241,9 @@ function CalendarView() {
       </h2>
       <p style={{ fontSize: 12, color: colors.textMute, margin: '0 0 20px 0' }}>
         残り時間ベース ・ ステップごとに表示 ・ 1日 {hoursPerDay}h（{settings.morningStart}〜{settings.morningEnd} / {settings.afternoonStart}〜{settings.afternoonEnd}）
+        {settings.assigneeHours && Object.keys(settings.assigneeHours).length > 0 && (
+          <> ・ 担当者ごとの稼働時間あり（{Object.entries(settings.assigneeHours).map(([n, h]) => `${n} ${h.morningStart}〜${h.afternoonEnd}`).join('、')}。マスタ→従業員設定で変更）</>
+        )}
       </p>
 
       <style>{`
@@ -358,7 +359,10 @@ function CalendarView() {
         // 残業が登録されている場合は時間軸を残業の最遅終了まで延長する
         const dayDate = allDates[0];
         const ymd = fmtYMD(dayDate);
-        const dayStart = morningSlot.start, dayEnd = Math.max(afternoonSlot.end, maxOvertimeEndMin(settings));
+        // 担当者ごとの稼働時間がある場合は、全員の稼働時間が入るように時間軸を広げる
+        const perSlots = assignees.map(a => getDailySlots(settings, a));
+        const dayStart = Math.min(morningSlot.start, ...perSlots.map(s => s[0].start));
+        const dayEnd = Math.max(afternoonSlot.end, maxOvertimeEndMin(settings), ...perSlots.map(s => s[1].end));
         const totalMin = dayEnd - dayStart;
         const halfHours = [];
         for (let m = dayStart; m < dayEnd; m += 30) halfHours.push(m);
@@ -369,8 +373,6 @@ function CalendarView() {
           const nm = now.getHours() * 60 + now.getMinutes();
           if (nm >= dayStart && nm <= dayEnd) dayNowFrac = (nm - dayStart) / totalMin;
         }
-        const lunchLeft = ((morningSlot.end - dayStart) / totalMin) * 100;
-        const lunchWidth = ((afternoonSlot.start - morningSlot.end) / totalMin) * 100;
         return (
           <div className="compact-scroll" style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 6, overflow: 'auto' }}>
             <div style={{ minWidth: 760, position: 'relative' }}>
@@ -431,14 +433,8 @@ function CalendarView() {
                           background: m % 60 === 0 ? '#ece4d2' : '#f5f0e3',
                         }} />
                       ))}
-                      {/* 昼休み */}
-                      <div style={{
-                        position: 'absolute', top: 0, bottom: 0,
-                        left: `${lunchLeft}%`, width: `${lunchWidth}%`,
-                        background: 'repeating-linear-gradient(45deg, #f3efe4, #f3efe4 4px, #faf7ee 4px, #faf7ee 8px)',
-                      }} />
-                      {/* 定時後（この担当者の残業枠が無い時間帯）は薄いストライプ */}
-                      {dayEnd > afternoonSlot.end && subtractBusy(afternoonSlot.end, dayEnd, dayOvertimeIntervals(assignee, dayDate, settings.overtimes || [])).map(([s, e], k) => (
+                      {/* 稼働時間外（始業前・昼休み・終業後で残業枠も無い時間帯。担当者ごとの稼働時間に従う）は薄いストライプ */}
+                      {subtractBusy(dayStart, dayEnd, dayWorkSlots(assignee, dayDate, settings)).map(([s, e], k) => (
                         <div key={'ah' + k} style={{
                           position: 'absolute', top: 0, bottom: 0,
                           left: `${((s - dayStart) / totalMin) * 100}%`, width: `${((e - s) / totalMin) * 100}%`,
@@ -550,14 +546,17 @@ function CalendarView() {
               {allDates.map((d, di) => {
                 const key = fmtYMD(d);
                 const slots = (matrix[assignee] && matrix[assignee][key]) || [];
-                const morningRaw = slots.filter(({ slot }) => slot.startMin < morningSlot.end);
-                const afternoonRaw = slots.filter(({ slot }) => slot.startMin >= afternoonSlot.start);
+                // 午前・午後の枠はこの担当者の稼働時間（従業員マスタで設定があればそれ、無ければ全体設定）
+                const [amSlot, pmSlot] = getDailySlots(settings, assignee);
+                const amHours = (amSlot.end - amSlot.start) / 60;
+                const morningRaw = slots.filter(({ slot }) => slot.startMin < amSlot.end);
+                const afternoonRaw = slots.filter(({ slot }) => slot.startMin >= pmSlot.start);
                 // 簡易表示は同一視点のステップを1ブロックに統合
                 const morningItems = simpleMode ? mergeByViewpoint(morningRaw) : morningRaw;
                 const afternoonItems = simpleMode ? mergeByViewpoint(afternoonRaw) : afternoonRaw;
                 // 午後の枠時間（残業を含む）。残業ぶんブロックが溢れないよう高さの分母にする
-                const pmCapMin = dayWorkSlots(assignee, d, settings).reduce((s, [a, b]) => s + Math.max(0, b - Math.max(a, afternoonSlot.start)), 0);
-                const pmHours = Math.max(afternoonHours, pmCapMin / 60);
+                const pmCapMin = dayWorkSlots(assignee, d, settings).reduce((s, [a, b]) => s + Math.max(0, b - Math.max(a, pmSlot.start)), 0);
+                const pmHours = Math.max((pmSlot.end - pmSlot.start) / 60, pmCapMin / 60);
                 const isToday = isSameDay(d, new Date());
                 const isWorkSat = d.getDay() === 6;
                 // 休日・不在
@@ -566,10 +565,10 @@ function CalendarView() {
                 const overlayRects = [];
                 if (!abs.allDay) {
                   for (const [s, e] of abs.intervals) {
-                    const ms = Math.max(s, morningSlot.start), me = Math.min(e, morningSlot.end);
-                    if (me > ms) overlayRects.push({ left: '0%', width: '50%', top: ((ms - morningSlot.start) / (morningSlot.end - morningSlot.start) * 100) + '%', height: ((me - ms) / (morningSlot.end - morningSlot.start) * 100) + '%' });
-                    const as = Math.max(s, afternoonSlot.start), ae = Math.min(e, afternoonSlot.end);
-                    if (ae > as) overlayRects.push({ left: '50%', width: '50%', top: ((as - afternoonSlot.start) / (afternoonSlot.end - afternoonSlot.start) * 100) + '%', height: ((ae - as) / (afternoonSlot.end - afternoonSlot.start) * 100) + '%' });
+                    const ms = Math.max(s, amSlot.start), me = Math.min(e, amSlot.end);
+                    if (me > ms) overlayRects.push({ left: '0%', width: '50%', top: ((ms - amSlot.start) / (amSlot.end - amSlot.start) * 100) + '%', height: ((me - ms) / (amSlot.end - amSlot.start) * 100) + '%' });
+                    const as = Math.max(s, pmSlot.start), ae = Math.min(e, pmSlot.end);
+                    if (ae > as) overlayRects.push({ left: '50%', width: '50%', top: ((as - pmSlot.start) / (pmSlot.end - pmSlot.start) * 100) + '%', height: ((ae - as) / (pmSlot.end - pmSlot.start) * 100) + '%' });
                   }
                 }
                 return (
@@ -584,7 +583,7 @@ function CalendarView() {
                     <div style={{ width: '50%', display: 'flex', flexDirection: 'column', borderRight: `1px dashed ${colors.border}`, boxSizing: 'border-box' }}>
                       {morningItems.map(({ task, slot, done }, si) => (
                         <TaskBlock key={si} task={task} slot={slot} done={done} compact={compact} simple={simpleMode}
-                          heightPct={(slot.hours / morningHours) * 100}
+                          heightPct={(slot.hours / amHours) * 100}
                           projectColor={getProjectColor(task.projectName)}
                           separator={si === 0 ? null : (morningItems[si - 1].task.projectName !== task.projectName ? 'strong' : 'weak')}
                           projDrag={projDrag} onProjDragStart={onReorderProject ? setProjDrag : null} onDropProject={onReorderProject} onVpDragStart={(!simpleMode && onReassignViewpoint) ? setVpDrag : null} vpDrag={vpDrag} onReassign={simpleMode ? null : onReassignViewpoint}

@@ -3,7 +3,7 @@
 // ============ メイン ============
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { AppCtx } from './appContext.js';
-import { COMPANY_PRESETS, DEFAULT_SETTINGS, VIEWPOINT_PRESETS, assignProjectColors, dateToDtLocal, expandHolidayDates, fmtHM, fmtYMD, genId, getHoursPerDay, kanaNormalize, makeEmptyStep, makeViewpointFromPreset, normalizeCustomerMaster, parseHM, startOfDay, syncHolidays } from './lib/utils.js';
+import { COMPANY_PRESETS, DEFAULT_SETTINGS, VIEWPOINT_PRESETS, withAssigneeHours, assignProjectColors, dateToDtLocal, expandHolidayDates, fmtHM, fmtYMD, genId, getHoursPerDay, kanaNormalize, makeEmptyStep, makeViewpointFromPreset, normalizeCustomerMaster, parseHM, startOfDay, syncHolidays } from './lib/utils.js';
 import { DEFAULT_STEP_TYPES, deliveryBaseName, findStepType, normalizeHistory, normalizeStepTypes, num as vpNum, resolveViewpointSteps, roundTypeOf, stepDeliveryName } from './viewpoint/viewpointUtils.js';
 import { billingStore, memberList, salesStore, signIn, signOutUser, storage, subscribeAuth, tasksStore } from './firebase.js';
 import { computeDeadlineReorder, computeProjectOrder, deadlineInsertPriority, deadlineKey, isOnLeaveAt, latestActualEnd, migrateTask, normalizePriorities, projectEndTs, scheduleTasks, simulateFormSchedule, workingHoursBetweenTs } from './lib/schedule.js';
@@ -57,6 +57,9 @@ export default function App() {
   // お客様マスタ（[{ id, company, contact }]）・従業員マスタ（[{ id, name, role }]）
   const [customerMaster, setCustomerMaster] = useState([]);
   const [employeeMaster, setEmployeeMaster] = useState([]);
+  // スケジュール計算用の設定：全体の稼働時間＋従業員マスタの担当者ごとの稼働時間（settings.assigneeHours）。
+  // 保存するのは settings（担当者ごとの稼働時間は従業員マスタ側に保存）。ビューにはこちらを settings として渡す
+  const schedSettings = useMemo(() => withAssigneeHours(settings, employeeMaster), [settings, employeeMaster]);
   // ステップ種類マスタ（新規案件のステップ・プルダウンの選択肢）。「マスタ」タブで編集可能。
   const [stepTypeMaster, setStepTypeMaster] = useState(() => DEFAULT_STEP_TYPES.map(t => ({ ...t })));
   // 売上登録表（自動同期用）。null=未ロード, {}=空。視点の制作履歴から売上行を生成する。
@@ -857,14 +860,14 @@ export default function App() {
   const handleSubmit = async () => {
     if (submitInFlight.current) return; // 送信処理中の再クリックは無視（二重登録防止）
     if (form.projectName.trim()) {
-      const sim = simulateFormSchedule(form, tasksRef.current, settings, projectOrder, new Date());
+      const sim = simulateFormSchedule(form, tasksRef.current, schedSettings, projectOrder, new Date());
       const hasStartPin = (form.viewpoints || []).some(v => v.manualStart);
       const moved = !!(sim && sim.moved && hasStartPin);
       const violations = (sim && sim.deadlineViolations) || [];
       if (moved || violations.length > 0) {
         let reorder = null;
         if (violations.length > 0) {
-          try { reorder = computeDeadlineReorder(form, tasksRef.current, settings, projectOrder, new Date()); }
+          try { reorder = computeDeadlineReorder(form, tasksRef.current, schedSettings, projectOrder, new Date()); }
           catch (e) { console.warn('並べ替え提案の算出に失敗:', e); }
         }
         setStartMoveConfirm({
@@ -1876,7 +1879,7 @@ export default function App() {
     });
     // 差分の稼働時間。新しい終了予定が稼働時間外（残業なしの夜間など）の場合は0でもよく、
     // その場合は終了時間の指定だけを動かす
-    const addH = workingHoursBetweenTs(currentEndTs, newEndTs, last.assignee, settings);
+    const addH = workingHoursBetweenTs(currentEndTs, newEndTs, last.assignee, schedSettings);
     const newEndStr = dateToDtLocal(new Date(newEndTs));
     const delay = { at: Date.now(), from: currentEndTs, to: newEndTs };
     saveTasks(prev => normalizePriorities(prev.map(t =>
@@ -2005,8 +2008,8 @@ export default function App() {
   const scheduled = useMemo(() => {
     assignProjectColors(tasks); // 案件の色割り当てを更新（登録順・重複なし）
     syncHolidays(settings);     // 全体共通の祝日（非稼働日）をモジュールに反映
-    return scheduleTasks(tasks, settings, projectOrder, now);
-  }, [tasks, settings, projectOrder, now]);
+    return scheduleTasks(tasks, schedSettings, projectOrder, now);
+  }, [tasks, settings, schedSettings, projectOrder, now]);
 
   // 終了予定を過ぎた視点（機能B）。1分ごとの now と endPromptState で再評価
   const overdueViewpoints = useMemo(() => {
@@ -2153,7 +2156,7 @@ export default function App() {
     // UIテーマ
     colors, fontJP, fontDisplay,
     // 共有データ
-    tasks, scheduled, settings, now, memos,
+    tasks, scheduled, settings: schedSettings, now, memos,
     projectOrder, projectList, projectInternalList, viewpointList,
     assigneeList, assigneeOrder, companyList, customerMaster, employeeMaster,
     stepTypeMaster, vpDeliveryCount, offshoreCompanies,
