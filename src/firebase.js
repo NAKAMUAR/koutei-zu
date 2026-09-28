@@ -168,7 +168,7 @@ export const storage = {
       const unsub = onSnapshot(ref, (snap) => {
         unsub();
         if (!snap.exists()) resolve(null);
-        else resolve({ key, value: snap.data().value, shared: true });
+        else resolve({ key, value: snap.data().value, updatedAt: snap.data().updatedAt || null, shared: true });
       }, () => resolve(null));
     });
   },

@@ -12,6 +12,7 @@ import { blankDoc, blankItem } from './billing/billingUtils.js';
 import { CheckCircle2, ClipboardList, FileText, Folder, MessageSquare, Plus, RotateCcw, Settings as SettingsIcon, StickyNote, Table, TrendingUp } from 'lucide-react';
 import { CompleteDialog, ConfirmModal, DeadlineConfirmModal, NavButton, NavGroup, PromptModal, TimeSelect, ToastStack } from './components/common.jsx';
 import { MemberSettings } from './components/MemberSettings.jsx';
+import { MaintenanceSettings } from './components/MaintenanceSettings.jsx';
 import { InputView } from './views/InputView.jsx';
 import { EndPromptModal } from './components/modals.jsx';
 // 毎日使う「案件」タブ以外のビューは、開いたときに読み込む（初回ロードを軽くする）
@@ -2275,6 +2276,7 @@ export default function App() {
               <span style={{ fontSize: 11, color: colors.textMute, marginLeft: 'auto' }}>1日 {hoursPerDay}時間 ・ 土日除外</span>
             </div>
             <MemberSettings memberEmails={memberEmails} isOwner={!!auth.user?.isOwner} colors={colors} fontJP={fontJP} />
+            {auth.user?.isOwner && <MaintenanceSettings colors={colors} fontJP={fontJP} />}
             <div style={{ maxWidth: 1600, margin: '16px auto 0', borderTop: `1px solid ${colors.border}`, paddingTop: 12, fontSize: 11, color: colors.textMute }}>
               残業・欠勤（休日・不在）の登録は「マスタ」タブに移動しました。
             </div>
