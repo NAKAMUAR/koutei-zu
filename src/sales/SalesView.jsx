@@ -6,7 +6,7 @@ import { Plus, Trash2, Edit2, ChevronLeft, ChevronRight, Printer, Download, Fold
 import { salesStore, storage } from '../firebase.js';
 import { useApp } from '../appContext.js';
 import {
-  SALES_CATEGORIES, catOf, OUTSOURCERS, DEFAULT_SETTINGS,
+  SALES_CATEGORIES, catOf, OUTSOURCERS, DEFAULT_SETTINGS, parseOutsourcers,
   blankRow, computeRow, computeSummary, computeCategoryTotal,
   computeDeliverySummary,
   currentMonth, monthLabel, shiftMonth, num, formatYen,
@@ -77,7 +77,18 @@ export default function SalesView({ tasks, customerMaster, now, onEditProject, c
   const addRow = (catId, prefill) => setRows([...rows, { ...blankRow(catId || activeCat), ...(prefill || {}) }]);
   const removeRow = (id) => setRows(rows.filter(r => r.id !== id));
 
-  const summary = useMemo(() => computeSummary(rows, settings), [rows, settings]);
+  // 外注費用カードの集計対象者（チーム共有。storage 'salesOutsourcers'）
+  const [outsourcers, setOutsourcers] = useState(OUTSOURCERS);
+  useEffect(() => {
+    const unsub = storage.subscribe('salesOutsourcers', (val) => setOutsourcers(parseOutsourcers(val)));
+    return () => unsub && unsub();
+  }, []);
+  const saveOutsourcers = (list) => {
+    setOutsourcers(list);
+    storage.set('salesOutsourcers', JSON.stringify(list)).catch(e => console.error('外注費集計対象者の保存エラー:', e));
+  };
+
+  const summary = useMemo(() => computeSummary(rows, settings, outsourcers), [rows, settings, outsourcers]);
 
   // 請求・入金の漏れ検知（この月の行）：
   //  - 完了済みなのに請求書送付日が空 → 請求漏れの疑い
@@ -170,7 +181,7 @@ export default function SalesView({ tasks, customerMaster, now, onEditProject, c
         <div className="kz-print-only" style={{ display: 'none', fontSize: 16, fontWeight: 700, marginBottom: 8 }}>{monthLabel(ym)} 売上総合</div>
 
         {/* 総合サマリーパネル */}
-        <SummaryPanel summary={summary} billAlerts={billAlerts} settings={settings} setSettings={setSettings} colors={colors} fontJP={fontJP} />
+        <SummaryPanel summary={summary} billAlerts={billAlerts} settings={settings} setSettings={setSettings} outsourcers={outsourcers} saveOutsourcers={saveOutsourcers} colors={colors} fontJP={fontJP} />
 
         {/* 区分タブ */}
         <div className="kz-no-print" style={{ display: 'flex', gap: 6, margin: '16px 0 10px', flexWrap: 'wrap' }}>
@@ -494,12 +505,58 @@ function ProjectQuoteModal({ projects, existingSrcRounds, ym, onAdd, onClose, co
   );
 }
 
+// ===== 外注費用カードの集計対象者の編集（チーム共有で保存）=====
+// リストに無い名前も、売上行に入っていれば自動でカードに出る（ここは「常に並べる人」と並び順の設定）
+function OutsourcerEditor({ list, onChange, colors, fontJP }) {
+  const { notify } = useApp();
+  const [name, setName] = useState('');
+  const add = () => {
+    const n = name.trim();
+    if (!n) return;
+    if (list.includes(n)) { notify(`「${n}」は既に対象者にいます`, { type: 'error' }); return; }
+    onChange([...list, n]);
+    setName('');
+  };
+  const remove = (i) => {
+    const prev = list;
+    onChange(list.filter((_, j) => j !== i));
+    notify(`外注費の集計対象者から「${list[i]}」を外しました`, { undo: () => onChange(prev) });
+  };
+  const move = (i, d) => {
+    const j = i + d;
+    if (j < 0 || j >= list.length) return;
+    const next = list.slice();
+    [next[i], next[j]] = [next[j], next[i]];
+    onChange(next);
+  };
+  const mini = { padding: '0 5px', fontSize: 10, lineHeight: '16px', background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 3, cursor: 'pointer', color: colors.textMute };
+  return (
+    <div className="kz-no-print" style={{ border: `1px dashed ${colors.border}`, borderRadius: 4, padding: 6, marginBottom: 6, background: '#fbf9f4' }}>
+      {list.map((p, i) => (
+        <div key={p} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '2px 0', fontSize: 12 }}>
+          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p}</span>
+          <button type="button" onClick={() => move(i, -1)} disabled={i === 0} title="上へ" style={{ ...mini, opacity: i === 0 ? 0.4 : 1 }}>▲</button>
+          <button type="button" onClick={() => move(i, 1)} disabled={i === list.length - 1} title="下へ" style={{ ...mini, opacity: i === list.length - 1 ? 0.4 : 1 }}>▼</button>
+          <button type="button" onClick={() => remove(i)} title="対象者から外す" style={{ ...mini, color: '#c0392b' }}>×</button>
+        </div>
+      ))}
+      <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
+        <input value={name} onChange={e => setName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') add(); }} placeholder="外注者の名前を追加"
+          style={{ flex: 1, minWidth: 0, padding: '3px 6px', border: `1px solid ${colors.border}`, borderRadius: 3, fontSize: 12, fontFamily: fontJP }} />
+        <button type="button" onClick={add} style={{ ...mini, lineHeight: '20px', padding: '0 8px', color: colors.text }}>追加</button>
+      </div>
+      <div style={{ fontSize: 10, color: colors.textMute, marginTop: 4 }}>ここに無い名前も、売上行に入っていればカードに自動で出ます。</div>
+    </div>
+  );
+}
+
 // ===== 総合サマリーパネル =====
-function SummaryPanel({ summary, billAlerts, settings, setSettings, colors, fontJP }) {
+function SummaryPanel({ summary, billAlerts, settings, setSettings, outsourcers, saveOutsourcers, colors, fontJP }) {
+  const [editOut, setEditOut] = useState(false);
   const card = { border: `1px solid ${colors.border}`, borderRadius: 6, padding: '10px 12px', background: '#fff' };
   const head = { fontSize: 11, color: colors.textMute, marginBottom: 6, fontWeight: 600 };
   const kv = (label, val, strong) => (
-    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '2px 0', fontSize: strong ? 14 : 12, fontWeight: strong ? 700 : 400 }}>
+    <div key={label} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '2px 0', fontSize: strong ? 14 : 12, fontWeight: strong ? 700 : 400 }}>
       <span style={{ color: '#555' }}>{label}</span><span>{val}</span>
     </div>
   );
@@ -528,9 +585,17 @@ function SummaryPanel({ summary, billAlerts, settings, setSettings, colors, font
       </div>
       {/* 外注費用 */}
       <div style={card}>
-        <div style={head}>外注費用（円換算）</div>
-        {OUTSOURCERS.map(p => kv(p, formatYen(summary.outsourceByPerson[p] || 0)))}
-        {Object.keys(summary.outsourceByPerson).filter(p => !OUTSOURCERS.includes(p)).map(p => kv(p, formatYen(summary.outsourceByPerson[p])))}
+        <div style={{ ...head, display: 'flex', alignItems: 'center' }}>
+          外注費用（円換算）
+          <button type="button" className="kz-no-print" onClick={() => setEditOut(v => !v)}
+            title="この欄に常に並べる外注者（集計対象者）を編集"
+            style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 3, padding: '1px 7px', background: editOut ? '#1a1a1a' : 'transparent', color: editOut ? '#fff' : colors.textMute, border: `1px solid ${editOut ? '#1a1a1a' : colors.border}`, borderRadius: 3, cursor: 'pointer', fontFamily: fontJP, fontSize: 10, fontWeight: 400 }}>
+            <Edit2 size={10} />{editOut ? '閉じる' : '対象者を編集'}
+          </button>
+        </div>
+        {editOut && <OutsourcerEditor list={outsourcers} onChange={saveOutsourcers} colors={colors} fontJP={fontJP} />}
+        {outsourcers.map(p => kv(p, formatYen(summary.outsourceByPerson[p] || 0)))}
+        {Object.keys(summary.outsourceByPerson).filter(p => !outsourcers.includes(p)).map(p => kv(p, formatYen(summary.outsourceByPerson[p])))}
         {kv('外注費 合計', formatYen(summary.totalOutsourceJPY), true)}
         <div className="kz-no-print" style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
           <span style={{ fontSize: 11, color: '#555' }}>VND為替（1円=</span>

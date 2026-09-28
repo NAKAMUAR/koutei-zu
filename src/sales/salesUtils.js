@@ -12,8 +12,21 @@ export const SALES_CATEGORIES = [
 ];
 export function catOf(id) { return SALES_CATEGORIES.find(c => c.id === id) || SALES_CATEGORIES[0]; }
 
-// 外注費用の集計対象者（サマリーの列）。必要に応じて編集。
+// 外注費用の集計対象者（サマリーの列）の既定値。売上登録表の「外注費用」カードで編集でき、
+// storage キー 'salesOutsourcers'（JSON: string[]）に保存される。未設定ならこの既定値。
 export const OUTSOURCERS = ['Quynh', 'ĐẶNG THỊ TÚ MĨ', '中村'];
+// 保存値（JSON文字列）→ 対象者リスト。読めない・空なら既定値
+export function parseOutsourcers(val) {
+  if (!val) return OUTSOURCERS.slice();
+  try {
+    const arr = JSON.parse(val);
+    if (Array.isArray(arr)) {
+      const names = arr.map(s => String(s || '').trim()).filter((s, i, a) => s && a.indexOf(s) === i);
+      if (names.length) return names;
+    }
+  } catch (e) { /* 既定値を使う */ }
+  return OUTSOURCERS.slice();
+}
 
 export const DEFAULT_SETTINGS = {
   exchangeRate: 165, // 1円 = 165VND（外注金額VND ÷ レート = 円）。実態に合わせて編集可。
@@ -77,7 +90,8 @@ export function computeRow(row, settings) {
 }
 
 // ---- 月次サマリー（全区分横断）----
-export function computeSummary(rows, settings) {
+// outsourcers：外注費用カードに常に並べる対象者（既定は OUTSOURCERS）。リストに無い名前も行にあれば自動で追加される
+export function computeSummary(rows, settings, outsourcers = OUTSOURCERS) {
   const sum = {
     totalSales: 0,        // 合計売上（税込）
     totalTax: 0,          // 消費税合計
@@ -88,7 +102,7 @@ export function computeSummary(rows, settings) {
     intl: { offshore: 0, lab: 0 },
     outsourceByPerson: {}, // { name: 円 }
   };
-  for (const name of OUTSOURCERS) sum.outsourceByPerson[name] = 0;
+  for (const name of (outsourcers || OUTSOURCERS)) sum.outsourceByPerson[name] = 0;
 
   for (const row of rows || []) {
     const c = computeRow(row, settings);
