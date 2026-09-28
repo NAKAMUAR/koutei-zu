@@ -4,9 +4,11 @@
  * このスクリプトは「工程図連携」スプレッドシート（スタッフには共有しない別ファイル）に貼り付けて使う。
  *
  * 流れ:
- *   1. スタッフ（エンジニア）が「Project Schedule」の『product schedule』タブに
+ *   1. エンジニアが「工程図 エンジニア入力シート」（別ファイル）の『product schedule』タブに
  *      社内案件名・視点名（EX1/IN1…）・パターン（A/B…）・制作時間（ホワイト/カラー/その他）を書く
- *      （旧レイアウトの『案件シート(一覧)』タブも読める。列は見出し名で探す）
+ *      （旧「Project Schedule」の『案件シート(一覧)』タブも読める。列は見出し名で探す）
+ *   0. 最初に1回だけ、メニュー「0. かんたん初期設定」で 管理者シートの整備・読み込み先の切り替え・
+ *      エンジニア入力タブの整備・接続テスト をまとめて行う
  *   2. 「転記」で『連携』タブへ新しい行だけ追加し、『案件マスタ』『会社マスタ』『視点マスタ』で
  *      社外案件名・会社名・お客様担当者・区分（外観/内観）・種類（パース/写真合成）・社外視点名（外観視点①）を自動判定
  *   3. 人が『連携』タブで不足・紐づけ違い（お客様名・社内担当者など）を直し、「工程図へ」にチェック
@@ -92,6 +94,11 @@ const SETTING_NOTES = {
 
 const PROP_SERVICE_ACCOUNT = 'SERVICE_ACCOUNT_JSON';
 
+// 旧スタッフシート（「Project Schedule」の『案件シート(一覧)』）。『設定』がこれを指したままなら
+// 「かんたん初期設定」でエンジニア入力シートへ切り替える（意図して旧ファイルを読む設定は触らない）
+const LEGACY_STAFF_FILE_ID = '12IfXNtu67LNuqRnB6Iako0pvI1A3k1CzyQTS4F3u5fU';
+const LEGACY_STAFF_TAB = '案件シート(一覧)';
+
 // スタッフ入力タブ『product schedule』の見出し（メニュー「スタッフ入力タブを作成」で作る）
 const STAFF_INPUT_HEADERS = ['入力日', '社内案件名', '視点名', 'パターン', 'ホワイト時間', 'カラー時間', 'その他時間', '納期', '備考', '完了'];
 const STAFF_INPUT_NOTES = ['例: 9/18', '例: RIC.34（案件名＋番号）', '外観1 → EX1、内観1 → IN1', 'A / B / C（無ければ空）',
@@ -152,6 +159,8 @@ const PROJECT_MASTER_HEADERS = ['社内案件名', '社外案件名', '会社名
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('工程図連携')
+    .addItem('0. かんたん初期設定（最初に1回だけ）', 'quickSetup')
+    .addSeparator()
     .addItem('1. スタッフシートから転記', 'transferFromStaffSheet')
     .addItem('2. 工程図へ送信', 'sendToKoutei')
     .addItem('送信内容のプレビュー（書き込まない）', 'previewSend')
@@ -236,6 +245,7 @@ function transferFromStaffSheet() {
   cellUpdates.forEach(u => link.getRange(u.row, u.col).setValue(u.value));
   if (appends.length) {
     const startRow = link.getLastRow() + 1;
+    ensureSize_(link, startRow + appends.length - 1, appends[0].length);
     link.getRange(startRow, 1, appends.length, appends[0].length).setValues(appends);
     applyValidations_(link, col, startRow, appends.length);
   }
@@ -256,12 +266,7 @@ function readStaffRows_(cfg) {
   const lastCol = sheet.getLastColumn();
   if (lastRow < 2) return [];
 
-  // 見出し行：A〜F列のどこかに「社内案件名」がある最初の行
-  const probe = sheet.getRange(1, 1, Math.min(lastRow, 200), Math.min(lastCol, 6)).getValues();
-  let headerRow = -1;
-  for (let r = 0; r < probe.length; r++) {
-    if (probe[r].some(v => String(v || '').trim() === '社内案件名')) { headerRow = r + 1; break; }
-  }
+  const headerRow = findStaffHeaderRow_(sheet);
   if (headerRow < 0) throw new Error('スタッフシートに見出し「社内案件名」の行が見つかりません（先頭200行を探しました）');
 
   const headers = sheet.getRange(headerRow, 1, 1, lastCol).getValues()[0].map(v => String(v || '').trim());
@@ -300,6 +305,18 @@ function readStaffRows_(cfg) {
  * 新レイアウト（product schedule）: 社内案件名 / 視点名 / パターン / ホワイト時間 / カラー時間 / その他時間 / 納期 / 備考 / 完了
  * 旧レイアウト（案件シート(一覧)）: 社内案件名 / 社外案件名 / カット名 / サーバリンク / 納期 / 制作項目 / 予想時間×2 / 作業完了
  */
+/** 見出し行：A〜F列のどこかに「社内案件名」がある最初の行（先頭200行）。無ければ -1。上に書き方などがあってもよい */
+function findStaffHeaderRow_(sheet) {
+  const lastRow = sheet.getLastRow();
+  const lastCol = sheet.getLastColumn();
+  if (lastRow < 1 || lastCol < 1) return -1;
+  const probe = sheet.getRange(1, 1, Math.min(lastRow, 200), Math.min(lastCol, 6)).getValues();
+  for (let r = 0; r < probe.length; r++) {
+    if (probe[r].some(v => String(v || '').trim() === '社内案件名')) return r + 1;
+  }
+  return -1;
+}
+
 function staffHeaderMap_(headers) {
   const find = (pred) => { for (let i = 0; i < headers.length; i++) if (pred(headers[i])) return i + 1; return 0; };
   const starts = (list) => (h) => list.some(p => h.indexOf(p) === 0);
@@ -773,13 +790,17 @@ function fetchCompanyNames() {
 }
 
 function testConnection() {
+  alertOrLog_(checkConnection_().text);
+}
+/** 工程図（Firestore）に接続できるか確かめる。{ ok, text } を返す（ダイアログは出さない） */
+function checkConnection_() {
   const cfg = readSettings_();
   try {
     const auth = getAuth_();
     const docs = fsListAll_(auth, cfg, 'workspaces/' + cfg.workspaceId + '/tasks', 1);
-    alertOrLog_('接続OK（認証方式: ' + (auth.mode === 'service-account' ? 'サービスアカウントの秘密鍵' : 'このGoogleアカウントの権限') + '）\n工程図のタスクを読み取れました（先頭 ' + docs.length + ' 件を確認）。');
+    return { ok: true, text: '接続OK（認証方式: ' + (auth.mode === 'service-account' ? 'サービスアカウントの秘密鍵' : 'このGoogleアカウントの権限') + '）\n工程図のタスクを読み取れました（先頭 ' + docs.length + ' 件を確認）。' };
   } catch (e) {
-    alertOrLog_('接続に失敗しました。\n\n' + String(e && e.message || e) + '\n\n対処:\n1) このスクリプトを実行しているGoogleアカウントが、工程図のFirebaseプロジェクト（' + cfg.projectId + '）のオーナーまたは編集者か確認\n2) それでも失敗する場合は、メニュー「秘密鍵を設定」でサービスアカウントの鍵を登録（手順書を参照）');
+    return { ok: false, text: '接続に失敗しました。\n\n' + String(e && e.message || e) + '\n\n対処:\n1) このスクリプトを実行しているGoogleアカウントが、工程図のFirebaseプロジェクト（' + cfg.projectId + '）のオーナーまたは編集者か確認\n2) それでも失敗する場合は、メニュー「秘密鍵を設定」でサービスアカウントの鍵を登録（手順書を参照）' };
   }
 }
 
@@ -808,39 +829,124 @@ function clearServiceAccountKey() {
   toastOrLog_('秘密鍵を削除しました。以後はこのGoogleアカウントの権限で接続します。');
 }
 
-/** スタッフ入力タブ『product schedule』を「Project Schedule」側に作る（既にあれば見出しだけ確認）。設定のタブ名・取込開始行も合わせる。 */
+/** メニュー：エンジニア入力タブ『product schedule』を整える（読み込み先が旧ファイルのままなら先に切り替える） */
 function createStaffInputTab() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const moved = migrateLegacyStaffSetting_(ss);
+  alertOrLog_((moved ? moved + '\n\n' : '') + ensureStaffInputTab_(ss) + '\n\n列: ' + STAFF_INPUT_HEADERS.join(' / '));
+}
+
+/**
+ * エンジニア入力タブ『product schedule』を整え、結果の文を返す（何度実行しても安全）。
+ * - 『product schedule』タブがあればそれを使う
+ * - 無ければ、今の列構成の見出し行（入力日〜完了）を持つ既存タブ（書き方・記入例つきで配ったタブなど）の名前を合わせて使う
+ * - それも無ければ新しく作る
+ * 見出しに注記、入力行にプルダウン・チェックボックスを付け、『設定』のタブ名・取込開始行も合わせる。
+ */
+function ensureStaffInputTab_(ss) {
   const cfg = readSettings_();
   const staff = SpreadsheetApp.openById(cfg.fileId);
   let sheet = staff.getSheetByName(STAFF_TAB_DEFAULT);
-  let created = false;
+  let how = 'existing';
   if (!sheet) {
-    sheet = staff.insertSheet(STAFF_TAB_DEFAULT, 0);
-    created = true;
+    // 旧レイアウトのタブ（予想時間など）は名前を変えない。今の10列がそろった見出しを持つタブだけを使う
+    const reuse = staff.getSheets().filter(sh => hasStaffInputHeaders_(sh))[0];
+    if (reuse) { reuse.setName(STAFF_TAB_DEFAULT); sheet = reuse; how = 'renamed'; }
+    else { sheet = staff.insertSheet(STAFF_TAB_DEFAULT, 0); how = 'created'; }
   }
   if (sheet.getLastRow() === 0) {
-    sheet.getRange(1, 1, 1, STAFF_INPUT_HEADERS.length).setValues([STAFF_INPUT_HEADERS]).setFontWeight('bold').setBackground('#dde5f0');
-    sheet.getRange(1, 1, 1, STAFF_INPUT_HEADERS.length).setNotes([STAFF_INPUT_NOTES]);
-    sheet.setFrozenRows(1);
-    const widths = [10, 18, 10, 10, 13, 13, 13, 10, 30, 8];
-    widths.forEach((w, i) => sheet.setColumnWidth(i + 1, w * 8));
-    const n = 1000;
-    const idx = (label) => STAFF_INPUT_HEADERS.indexOf(label) + 1;
-    sheet.getRange(2, idx('パターン'), n, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(['A', 'B', 'C', 'D'], true).setAllowInvalid(true).build());
-    sheet.getRange(2, idx('完了'), n, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build());
-    ['ホワイト時間', 'カラー時間', 'その他時間'].forEach(h => sheet.getRange(2, idx(h), n, 1).setNumberFormat('0.##'));
+    ensureSize_(sheet, 1, STAFF_INPUT_HEADERS.length);
+    sheet.getRange(1, 1, 1, STAFF_INPUT_HEADERS.length).setValues([STAFF_INPUT_HEADERS]);
   }
-  // 設定タブをこのタブ向けに合わせる
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const headerRow = findStaffHeaderRow_(sheet);
+  if (headerRow < 0) throw new Error('「' + staff.getName() + '」の『' + STAFF_TAB_DEFAULT + '』タブに見出し「社内案件名」の行が見つかりません');
+  formatStaffInputTab_(sheet, headerRow);
   writeSetting_(ss, 'tabName', STAFF_TAB_DEFAULT);
   writeSetting_(ss, 'startRow', 2);
-  alertOrLog_((created ? 'スタッフ入力タブ「' + STAFF_TAB_DEFAULT + '」を「Project Schedule」に作成しました。' : 'スタッフ入力タブ「' + STAFF_TAB_DEFAULT + '」は既にあります。') +
-    '\n『設定』のタブ名を「' + STAFF_TAB_DEFAULT + '」、取込開始行を 2 にしました。\n\n列: ' + STAFF_INPUT_HEADERS.join(' / '));
+  const where = '「' + staff.getName() + '」';
+  const head = how === 'created' ? where + 'にエンジニア入力タブ『' + STAFF_TAB_DEFAULT + '』を作りました。'
+    : how === 'renamed' ? where + 'の入力用タブの名前を『' + STAFF_TAB_DEFAULT + '』に合わせ、プルダウン・チェックボックスを付けました。'
+    : where + 'のエンジニア入力タブ『' + STAFF_TAB_DEFAULT + '』を整えました。';
+  return head + '（『設定』のタブ名を「' + STAFF_TAB_DEFAULT + '」、取込開始行を 2 にしました）';
+}
+
+/** そのタブに、今の列構成（入力日〜完了の10列）の見出し行があるか */
+function hasStaffInputHeaders_(sheet) {
+  const row = findStaffHeaderRow_(sheet);
+  if (row < 0) return false;
+  const headers = sheet.getRange(row, 1, 1, sheet.getLastColumn()).getValues()[0].map(v => trimStr_(v));
+  return STAFF_INPUT_HEADERS.every(h => headers.indexOf(h) >= 0);
+}
+
+/** 見出しに注記と色、見出しより下の入力行にプルダウン・チェックボックス・数値書式を付ける（列は見出し名で探す） */
+function formatStaffInputTab_(sheet, headerRow) {
+  const n = 1000; // 見出しより下の入力行にプルダウン等を付ける行数
+  const lastCol = Math.max(sheet.getLastColumn(), STAFF_INPUT_HEADERS.length);
+  ensureSize_(sheet, headerRow + n, lastCol);
+  const headers = sheet.getRange(headerRow, 1, 1, lastCol).getValues()[0].map(v => trimStr_(v));
+  const col = (label) => headers.indexOf(label) + 1;
+  const widths = { '入力日': 10, '社内案件名': 18, '視点名': 10, 'パターン': 10, 'ホワイト時間': 13, 'カラー時間': 13, 'その他時間': 13, '納期': 10, '備考': 30, '完了': 8 };
+  STAFF_INPUT_HEADERS.forEach((h, i) => {
+    const c = col(h);
+    if (!c) return;
+    sheet.getRange(headerRow, c).setNote(STAFF_INPUT_NOTES[i]).setFontWeight('bold').setBackground('#dde5f0');
+    sheet.setColumnWidth(c, widths[h] * 8);
+  });
+  if (headerRow === 1) sheet.setFrozenRows(1); // 上に書き方がある場合は固定しない（画面が埋まるため）
+  const start = headerRow + 1;
+  if (col('パターン')) sheet.getRange(start, col('パターン'), n, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(['A', 'B', 'C', 'D'], true).setAllowInvalid(true).build());
+  if (col('完了')) sheet.getRange(start, col('完了'), n, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build());
+  ['ホワイト時間', 'カラー時間', 'その他時間'].forEach(h => { if (col(h)) sheet.getRange(start, col(h), n, 1).setNumberFormat('0.##'); });
+}
+
+/**
+ * 『設定』が旧「Project Schedule」の『案件シート(一覧)』を指したままなら、エンジニア入力シートへ切り替える。
+ * 切り替えたときは説明の文を、何もしなかったときは '' を返す。
+ */
+function migrateLegacyStaffSetting_(ss) {
+  const cfg = readSettings_();
+  if (trimStr_(cfg.fileId) !== LEGACY_STAFF_FILE_ID || trimStr_(cfg.tabName) !== LEGACY_STAFF_TAB) return '';
+  writeSetting_(ss, 'fileId', SETTING_DEFAULTS.fileId, true);
+  writeSetting_(ss, 'tabName', STAFF_TAB_DEFAULT, true);
+  writeSetting_(ss, 'startRow', 2, true);
+  return '『設定』の読み込み先を、旧「Project Schedule」から「工程図 エンジニア入力シート」に切り替えました。';
+}
+
+/**
+ * メニュー「0. かんたん初期設定」：最初に1回押すだけで、
+ * 管理者シートの整備 → 読み込み先の切り替え → エンジニア入力タブの整備 → 工程図との接続テスト をまとめて行う。
+ * 途中で失敗しても残りは続け、最後に結果を1つのダイアログで出す（何度押しても安全）。
+ */
+function quickSetup() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const lines = [];
+  let ok = true;
+  setupSheet_(ss);
+  lines.push('✓ 管理者シート（連携・案件マスタ・会社マスタ・視点マスタ・設定・使い方）を整えました。');
+  const moved = migrateLegacyStaffSetting_(ss);
+  if (moved) lines.push('✓ ' + moved);
+  try {
+    lines.push('✓ ' + ensureStaffInputTab_(ss));
+  } catch (e) {
+    ok = false;
+    lines.push('✗ エンジニア入力シートを整えられませんでした：' + String(e && e.message || e) +
+      '\n   → このGoogleアカウントに「工程図 エンジニア入力シート」の編集権限があるか確認してください。');
+  }
+  const conn = checkConnection_();
+  if (!conn.ok) ok = false;
+  lines.push((conn.ok ? '✓ ' : '✗ ') + conn.text);
+  lines.push(ok
+    ? '準備ができました。「工程図 エンジニア入力シート」を制作メンバーに共有すれば使い始められます。'
+    : '✗ の項目を直してから、もう一度「0. かんたん初期設定」を押してください（何度押しても安全です）。');
+  alertOrLog_('かんたん初期設定の結果\n\n' + lines.join('\n\n'));
 }
 
 /** タブ・見出し・チェックボックス・プルダウン・使い方を整える（何度実行しても安全） */
 function setupSheet() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  setupSheet_(SpreadsheetApp.getActiveSpreadsheet());
+  toastOrLog_('初期設定が完了しました。');
+}
+function setupSheet_(ss) {
   const link = ensureLinkSheet_(ss);
   const col = headerMap_(link);
   link.setFrozenRows(1);
@@ -851,6 +957,7 @@ function setupSheet() {
   const company = ss.getSheetByName(SHEET.COMPANY) || ss.insertSheet(SHEET.COMPANY);
   if (company.getLastRow() === 0) {
     const rows = [COMPANY_MASTER_HEADERS].concat(INITIAL_COMPANY_MASTER);
+    ensureSize_(company, rows.length, 3);
     company.getRange(1, 1, rows.length, 3).setValues(rows);
   }
   company.setFrozenRows(1);
@@ -859,6 +966,7 @@ function setupSheet() {
   const view = ss.getSheetByName(SHEET.VIEW) || ss.insertSheet(SHEET.VIEW);
   if (view.getLastRow() === 0) {
     const rows = [VIEW_MASTER_HEADERS].concat(INITIAL_VIEW_MASTER);
+    ensureSize_(view, rows.length, VIEW_MASTER_HEADERS.length);
     view.getRange(1, 1, rows.length, VIEW_MASTER_HEADERS.length).setValues(rows);
   } else {
     ensureViewMasterExternalColumn_(view);
@@ -868,6 +976,7 @@ function setupSheet() {
 
   const project = ss.getSheetByName(SHEET.PROJECT) || ss.insertSheet(SHEET.PROJECT);
   if (project.getLastRow() === 0) {
+    ensureSize_(project, 1, PROJECT_MASTER_HEADERS.length);
     project.getRange(1, 1, 1, PROJECT_MASTER_HEADERS.length).setValues([PROJECT_MASTER_HEADERS]);
     project.getRange(1, 1, 1, PROJECT_MASTER_HEADERS.length).setNotes([[
       'スタッフが書く社内案件名（例 RIC.34）。大文字小文字・点・空白は無視して照合', 'お客様向けの案件名（工程図の案件名になる）',
@@ -881,12 +990,12 @@ function setupSheet() {
   if (settings.getLastRow() === 0) {
     const rows = [['項目', '値', '説明']];
     Object.keys(SETTING_KEYS).forEach(k => rows.push([SETTING_KEYS[k], SETTING_DEFAULTS[k], SETTING_NOTES[k]]));
+    ensureSize_(settings, rows.length, 3);
     settings.getRange(1, 1, rows.length, 3).setValues(rows);
   }
   settings.getRange(1, 1, 1, 3).setFontWeight('bold');
 
   writeHowto_(ss);
-  toastOrLog_('初期設定が完了しました。');
 }
 
 /** 旧バージョンの視点マスタ（社外名の列が無い）に「社外名」列を足し、EX/IN/P の初期値を入れる */
@@ -895,6 +1004,7 @@ function ensureViewMasterExternalColumn_(view) {
   const headers = view.getRange(1, 1, 1, lastCol).getValues()[0].map(v => trimStr_(v));
   if (headers.indexOf('社外名') >= 0) return;
   const c = lastCol + 1;
+  ensureSize_(view, 1, c);
   view.getRange(1, c).setValue('社外名').setFontWeight('bold');
   const last = view.getLastRow();
   if (last < 2) return;
@@ -906,6 +1016,14 @@ function ensureViewMasterExternalColumn_(view) {
 }
 
 // ============ シート補助 ============
+/** シートの行数・列数が足りなければ増やす（シートの大きさを超える範囲への書き込みは Apps Script でエラーになるため） */
+function ensureSize_(sheet, rows, cols) {
+  const mr = sheet.getMaxRows();
+  const mc = sheet.getMaxColumns();
+  if (rows > mr) sheet.insertRowsAfter(mr, rows - mr);
+  if (cols > mc) sheet.insertColumnsAfter(mc, cols - mc);
+}
+
 function ensureLinkSheet_(ss) {
   let sheet = ss.getSheetByName(SHEET.LINK);
   if (!sheet) sheet = ss.insertSheet(SHEET.LINK, 0);
@@ -914,9 +1032,11 @@ function ensureLinkSheet_(ss) {
   const has = (k) => first.indexOf(H[k]) >= 0 || (H_ALIASES[k] || []).some(a => first.indexOf(a) >= 0);
   const missing = LINK_HEADER_ORDER.filter(k => !has(k));
   if (first.filter(Boolean).length === 0) {
+    ensureSize_(sheet, 1, LINK_HEADER_ORDER.length);
     sheet.getRange(1, 1, 1, LINK_HEADER_ORDER.length).setValues([LINK_HEADER_ORDER.map(k => H[k])]);
   } else if (missing.length) {
     // 足りない見出しは右端に追加する（既存の列は動かさない）
+    ensureSize_(sheet, 1, lastCol + missing.length);
     sheet.getRange(1, lastCol + 1, 1, missing.length).setValues([missing.map(k => H[k])]);
   }
   return sheet;
@@ -985,15 +1105,19 @@ function readSettings_() {
   if (!cfg.fileId) throw new Error('『設定』タブの「スタッフシートのファイルID」が空です');
   return cfg;
 }
-/** 『設定』タブの1項目を書き換える（無ければ行を足す） */
-function writeSetting_(ss, key, value) {
+/** 『設定』タブの1項目を書き換える（無ければ行を足す）。withNote なら説明の列も今の文に直す */
+function writeSetting_(ss, key, value, withNote) {
   const sheet = ss.getSheetByName(SHEET.SETTINGS) || ss.insertSheet(SHEET.SETTINGS);
   const label = SETTING_KEYS[key];
   const last = sheet.getLastRow();
   if (last >= 1) {
     const labels = sheet.getRange(1, 1, last, 1).getValues().map(r => trimStr_(r[0]));
     const i = labels.indexOf(label);
-    if (i >= 0) { sheet.getRange(i + 1, 2).setValue(value); return; }
+    if (i >= 0) {
+      sheet.getRange(i + 1, 2).setValue(value);
+      if (withNote) sheet.getRange(i + 1, 3).setValue(SETTING_NOTES[key] || '');
+      return;
+    }
   }
   sheet.appendRow([label, value, SETTING_NOTES[key] || '']);
 }
@@ -1041,11 +1165,11 @@ function alertOrLog_(msg) {
 const HOWTO_LINES = [
   '工程図連携シート の使い方',
   '',
-  'このファイルは、スタッフが書く「Project Schedule」の内容を工程図（koutei-zu）に登録するための中継シートです。',
+  'このファイルは、エンジニアが書く「工程図 エンジニア入力シート」の内容を工程図（koutei-zu）に登録するための中継シートです。',
   '一般スタッフには共有しないでください（会社名などの紐づけ情報を含みます）。',
   '',
-  '■ スタッフ（エンジニア）が書く場所',
-  '「Project Schedule」の『product schedule』タブ（メニュー「スタッフ入力タブを作成」で作れます）。',
+  '■ エンジニアが書く場所',
+  '「工程図 エンジニア入力シート」の『product schedule』タブ（メニュー「0. かんたん初期設定」で整います）。',
   '列: 入力日 / 社内案件名（例 RIC.34）/ 視点名（外観1→EX1、内観1→IN1）/ パターン（A・B…）/ ホワイト時間 / カラー時間 / その他時間（人物・点景・色分）/ 納期 / 備考 / 完了',
   '新規・追加・修正を問わず、1カット1行で書きます。同じ案件＋視点が2回目以降なら自動で「修正」扱いになります。',
   '',
@@ -1074,13 +1198,16 @@ const HOWTO_LINES = [
   '・工程図側で削除したタスクは、再送信しても復活しません。',
   '',
   '■ 初回だけ',
-  '・メニュー「初期設定」→「スタッフ入力タブを作成」→「工程図との接続テスト」→「工程図の会社名一覧を取り込む」の順に実行。',
+  '・メニュー「0. かんたん初期設定」を押す（管理者シートの整備・読み込み先の切り替え・エンジニア入力タブの整備・接続テストをまとめて行います）。',
+  '・続けて「工程図の会社名一覧を取り込む」を押し、『会社マスタ』の表記を工程図に合わせる。',
+  '・「工程図 エンジニア入力シート」を制作メンバーに「編集者」で共有する。',
   '・接続テストが失敗する場合は手順書（docs/08_スプレッドシート連携.md）の「秘密鍵を設定」を行う。',
   '・『案件マスタ』に、よく使う社内案件名 → 社外案件名・会社名 を登録しておくと「要確認」が減ります。',
 ];
 function writeHowto_(ss) {
   const sh = ss.getSheetByName(SHEET.HOWTO) || ss.insertSheet(SHEET.HOWTO);
   sh.clearContents();
+  ensureSize_(sh, HOWTO_LINES.length, 1);
   sh.getRange(1, 1, HOWTO_LINES.length, 1).setValues(HOWTO_LINES.map(l => [l]));
   sh.getRange(1, 1).setFontWeight('bold').setFontSize(14);
   HOWTO_LINES.forEach((l, i) => { if (l.indexOf('■') === 0) sh.getRange(i + 1, 1).setFontWeight('bold'); });

@@ -65,7 +65,7 @@ src/
 - スプレッドシート連携（`sync/`）: スタッフが書く「Project Schedule」の『product schedule』タブ（社内案件名・視点名・パターン・ホワイト/カラー/その他時間）→ 別ファイル「工程図連携」シート（案件マスタ・会社マスタ・視点マスタで自動判定、人が補正）→ 工程図、という2段階。`sync/Code.gs`（Apps Script）と `sync/appsscript.json` を「工程図連携」シートに貼り付けて使う。手順・仕様は `docs/08_スプレッドシート連携.md`。
   - 工程図への書き込みは Firestore REST API。認証は実行アカウント（Firebase オーナー）の OAuth トークン、または サービスアカウント鍵（スクリプトプロパティに保存。**鍵ファイルはリポジトリに入れない**、`.gitignore` 済み）。Firestore ルールはこの経路に適用されないので、ルール変更は不要。
   - 同期で作るタスクは `externalId`（`案件コード::視点名(パターン込み)::n回目::ステップ種類`）を持ち、`stepRoundType`（新規→initial・追加→add・修正/変更→fix）と `viewpointNameExternal`（外観視点①_パターンA）を自動で入れる。アプリ側で削除すると `data/deletedExternalIds` に記録され、再送信しても復活しない（App.jsx の既存挙動）。
-  - 純ロジックのテスト: `node sync/test/logic.test.mjs`
+  - テスト: `node sync/test/logic.test.mjs`（判定・レコード生成の純ロジック）と `node sync/test/setup.test.mjs`（偽のシート環境で「かんたん初期設定」と転記を通す。Apps Script は手元で動かせないため、シートの大きさの上限も再現している）
 
 ## 確認のしかた
 
