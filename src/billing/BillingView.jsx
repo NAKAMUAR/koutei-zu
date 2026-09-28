@@ -15,6 +15,7 @@ import {
   DOC_FONTS, defaultFontId,
 } from './billingUtils.js';
 import { salesLinkCandidates, applyInvoiceToSales, compareLinkedTotal } from './salesLink.js';
+import { downscaleImage, jsonBytes, DOC_MAX_BYTES } from './imageUtils.js';
 import { computeRow, DEFAULT_SETTINGS as SALES_DEFAULT_SETTINGS, monthLabel } from '../sales/salesUtils.js';
 
 export default function BillingView({ customerMaster, tasks, now, colors, fontJP, fontDisplay }) {
@@ -556,9 +557,11 @@ function BillingEditor({ initial, customerMaster, tasks, salesLedger, onSave, on
           {tab === 'angle' && isEstimate && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <div><label style={label}>アングル（外観）見出し補足</label><input value={doc.angles.exteriorLabel} onChange={e => upd({ angles: { ...doc.angles, exteriorLabel: e.target.value } })} style={input()} placeholder="例：外観-目線" /></div>
+              <AngleImageField label="アングル（外観）参考画像" field="exteriorImage" doc={doc} upd={upd} colors={colors} fontJP={fontJP} />
               <div><label style={label}>アングル（外観）内容メモ</label><textarea value={doc.angles.exterior} onChange={e => upd({ angles: { ...doc.angles, exterior: e.target.value } })} style={input({ minHeight: 90, resize: 'vertical' })} /></div>
+              <AngleImageField label="アングル（内観-目線）参考画像" field="interiorImage" doc={doc} upd={upd} colors={colors} fontJP={fontJP} />
               <div><label style={label}>アングル（内観-目線）内容メモ</label><textarea value={doc.angles.interior} onChange={e => upd({ angles: { ...doc.angles, interior: e.target.value } })} style={input({ minHeight: 90, resize: 'vertical' })} /></div>
-              <div style={{ fontSize: 11, color: colors.textMute }}>※ アングル参考画像の貼り付けは今後対応予定です。現状はテキストメモのみ。</div>
+              <div style={{ fontSize: 11, color: colors.textMute }}>参考画像は、枠をクリックして貼り付け（Ctrl+V）・ドラッグ＆ドロップ・「画像を選ぶ」のどれかで入れられます。保存のために自動で縮小します（外観・内観 各1枚）。</div>
             </div>
           )}
         </div>
@@ -572,6 +575,67 @@ function BillingEditor({ initial, customerMaster, tasks, salesLedger, onSave, on
 
       {/* 印刷専用エリア（画面では非表示、印刷時のみ表示） */}
       <div id="kz-print-area"><BillingDocument doc={doc} /></div>
+    </div>
+  );
+}
+
+// ---- 見積書：アングルの参考画像（貼り付け・ドラッグ＆ドロップ・ファイル選択）----
+// 画像は縮小して帳票ドキュメントに保存するため、帳票全体が Firestore の上限（1MB）を超える場合は入れない
+function AngleImageField({ label, field, doc, upd, colors, fontJP }) {
+  const { notify } = useApp();
+  const fileRef = useRef(null);
+  const [busy, setBusy] = useState(false);
+  const [over, setOver] = useState(false);
+  const image = (doc.angles && doc.angles[field]) || '';
+  const setImage = (url) => upd({ angles: { ...doc.angles, [field]: url } });
+  const accept = async (file) => {
+    if (!file) return;
+    setBusy(true);
+    try {
+      const url = await downscaleImage(file);
+      const next = { ...doc, angles: { ...doc.angles, [field]: url } };
+      if (jsonBytes(next) > DOC_MAX_BYTES) { notify('画像を入れると帳票の保存容量の上限を超えます。もう一方の画像を外すか、小さい画像にしてください。', { type: 'error' }); return; }
+      setImage(url);
+    } catch (e) {
+      notify(e.message || '画像を取り込めませんでした', { type: 'error' });
+    } finally { setBusy(false); }
+  };
+  const fromItems = (items) => {
+    for (const it of (items || [])) if (it.kind === 'file' && /^image\//.test(it.type)) return it.getAsFile();
+    return null;
+  };
+  const remove = () => {
+    const prev = image;
+    setImage('');
+    notify('参考画像を外しました', { undo: () => upd({ angles: { ...doc.angles, [field]: prev } }) });
+  };
+  return (
+    <div>
+      <div style={{ fontSize: 11, color: colors.textMute, marginBottom: 3 }}>{label}</div>
+      <div tabIndex={0} role="button" aria-label={`${label}（クリックして貼り付け）`}
+        onPaste={(e) => { const f = fromItems(e.clipboardData && e.clipboardData.items); if (f) { e.preventDefault(); accept(f); } }}
+        onDragOver={(e) => { e.preventDefault(); setOver(true); }}
+        onDragLeave={() => setOver(false)}
+        onDrop={(e) => { e.preventDefault(); setOver(false); const f = (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) || null; accept(f); }}
+        style={{ border: `1px dashed ${over ? '#1a1a1a' : colors.border}`, borderRadius: 4, padding: 8, background: over ? '#f3f7f1' : '#fff', minHeight: 70, display: 'flex', alignItems: 'center', gap: 10, outline: 'none' }}>
+        {image
+          ? <img src={image} alt="" style={{ maxHeight: 140, maxWidth: '60%', objectFit: 'contain', border: `1px solid ${colors.border}` }} />
+          : <span style={{ fontSize: 12, color: colors.textMute, flex: 1 }}>{busy ? '縮小しています…' : 'ここをクリックして貼り付け（Ctrl+V）、または画像をドラッグ＆ドロップ'}</span>}
+        <div style={{ marginLeft: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <button type="button" onClick={() => fileRef.current && fileRef.current.click()} disabled={busy}
+            style={{ padding: '5px 10px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 11 }}>
+            {image ? '画像を差し替える' : '画像を選ぶ'}
+          </button>
+          {image && (
+            <button type="button" onClick={remove}
+              style={{ padding: '5px 10px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 11, color: '#c0392b' }}>
+              画像を外す
+            </button>
+          )}
+        </div>
+        <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }}
+          onChange={(e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; accept(f); }} />
+      </div>
     </div>
   );
 }

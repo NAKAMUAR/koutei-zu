@@ -229,7 +229,8 @@ export function blankDoc(type, docs, now, issuer) {
     base.validity = ESTIMATE_FIXED.validity;
     base.conditions = {}; // { [rowKey]: { selected: number|null, note: '' } }
     base.schedule = blankSchedule();
-    base.angles = { exteriorLabel: '', exterior: '', interior: '' };
+    // アングルページ：見出し補足・メモ・参考画像（縮小した JPEG の dataURL。空なら画像なし）
+    base.angles = { exteriorLabel: '', exterior: '', interior: '', exteriorImage: '', interiorImage: '' };
   }
   if (type === 'order') {
     // 発注書は「御中」=発注先（既定: リーベグ）、発行元=発注者（お客様, 署名捺印欄あり）

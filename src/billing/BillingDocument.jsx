@@ -438,18 +438,26 @@ function SCell({ label, val, last, full }) {
 }
 
 // ===== 見積 4枚目：アングル =====
+// 枠の中に参考画像（あれば）とメモを入れる。画像は枠に収まるよう縮小して中央に置く
 function AnglePage({ doc }) {
   const a = doc.angles || {};
-  const box = (label, val) => (
+  const box = (label, val, image) => (
     <div style={{ marginBottom: 22 }}>
       <div style={{ fontSize: 15, fontWeight: 600, borderBottom: '2px solid #1a1a1a', display: 'inline-block', paddingRight: 44, marginBottom: 8 }}>　・ {label}</div>
-      <div style={{ border: '1px solid #999', height: '110mm', padding: 8, fontSize: 12, whiteSpace: 'pre-wrap', boxSizing: 'border-box' }}>{val}</div>
+      <div style={{ border: '1px solid #999', height: '110mm', padding: 8, fontSize: 12, boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {image && (
+          <div style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <img src={image} alt="" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', display: 'block' }} />
+          </div>
+        )}
+        {(val || !image) && <div style={{ flex: image ? '0 0 auto' : '1 1 auto', whiteSpace: 'pre-wrap' }}>{val}</div>}
+      </div>
     </div>
   );
   return (
     <Page accentBar={docTypeOf('estimate').accent} font={docFontCss(doc)}>
-      {box(`アングル（${a.exteriorLabel || ''}）`, a.exterior)}
-      {box('アングル（内観-目線）', a.interior)}
+      {box(`アングル（${a.exteriorLabel || ''}）`, a.exterior, a.exteriorImage)}
+      {box('アングル（内観-目線）', a.interior, a.interiorImage)}
     </Page>
   );
 }
