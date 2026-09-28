@@ -1,9 +1,10 @@
 // 帳票ビュー：一覧・編集・お客様/案件からの自動入力・PDF出力（ブラウザ印刷）。
 // データは 1帳票 = 1 Firestore ドキュメント（billingStore、data/bill_{id}）。
 // 発行元（自社）情報・振込先は storage の 'billingIssuer' キーで編集できる。
+// 請求書は売上登録表の行と紐付けでき（salesRowIds）、送付済み・入金済みにすると紐付けた行の日付を埋める（salesLink.js）。
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Plus, Trash2, Edit2, Copy, Printer, X, FileText, Search, Building2 } from 'lucide-react';
-import { storage, billingStore } from '../firebase.js';
+import { Plus, Trash2, Edit2, Copy, Printer, X, FileText, Search, Building2, ChevronDown, ChevronUp, Link2 } from 'lucide-react';
+import { storage, billingStore, salesStore } from '../firebase.js';
 import { useApp } from '../appContext.js';
 import BillingDocument from './BillingDocument.jsx';
 import {
@@ -13,6 +14,8 @@ import {
   REBEG_ESTIMATE, REBEG_INVOICE, INVOICE_BANK_LINES,
   DOC_FONTS, defaultFontId,
 } from './billingUtils.js';
+import { salesLinkCandidates, applyInvoiceToSales, compareLinkedTotal } from './salesLink.js';
+import { computeRow, DEFAULT_SETTINGS as SALES_DEFAULT_SETTINGS, monthLabel } from '../sales/salesUtils.js';
 
 export default function BillingView({ customerMaster, tasks, now, colors, fontJP, fontDisplay }) {
   const { confirmDialog, notify } = useApp();
@@ -24,6 +27,14 @@ export default function BillingView({ customerMaster, tasks, now, colors, fontJP
   const [q, setQ] = useState('');                          // 検索（NO・件名・会社名）
   const [issuer, setIssuer] = useState(null);              // 発行元・振込先の設定
   const [showIssuer, setShowIssuer] = useState(false);
+  const [salesLedger, setSalesLedger] = useState({});      // 売上登録表（請求書との紐付け用）
+  const salesLedgerRef = useRef({});
+
+  // 売上登録表を購読（1か月=1ドキュメント）
+  useEffect(() => {
+    const unsub = salesStore.subscribe((map) => { salesLedgerRef.current = map || {}; setSalesLedger(map || {}); });
+    return () => unsub && unsub();
+  }, []);
 
   // 購読（1帳票=1ドキュメント。作成日の新しい順に並べる）
   useEffect(() => {
@@ -45,6 +56,19 @@ export default function BillingView({ customerMaster, tasks, now, colors, fontJP
     return () => unsub && unsub();
   }, []);
 
+  // 請求書 → 売上登録表：紐付けた売上行の 請求書送付日・入金確認日 を「空のときだけ」埋める（一方向）
+  const syncInvoiceToSales = (doc) => {
+    const res = applyInvoiceToSales(salesLedgerRef.current, doc);
+    const yms = Object.keys(res.months);
+    if (!yms.length) {
+      if (res.kept) notify(`紐付けた売上行には既に別の日付が入っているため、売上登録表はそのままにしました（${res.kept}か所）`);
+      return;
+    }
+    salesLedgerRef.current = { ...salesLedgerRef.current, ...res.months };
+    setSalesLedger(salesLedgerRef.current);
+    for (const ym of yms) salesStore.set(ym, res.months[ym]).catch(e => console.error('売上登録表 保存エラー:', e));
+    notify(`売上登録表の ${res.filled}か所に請求書の送付日・入金日を入れました` + (res.kept ? `（既に別の日付が入っていた ${res.kept}か所はそのまま）` : ''), { type: 'success' });
+  };
   const saveDoc = (doc) => {
     const stamped = { ...doc, updatedAt: Date.now() };
     setDocs(prev => {
@@ -52,6 +76,7 @@ export default function BillingView({ customerMaster, tasks, now, colors, fontJP
       return exists ? prev.map(d => d.id === stamped.id ? stamped : d) : [stamped, ...prev];
     });
     billingStore.set(stamped.id, stamped).catch(e => console.error('帳票保存エラー:', e));
+    if (stamped.type === 'invoice') syncInvoiceToSales(stamped);
     return stamped;
   };
   const deleteDoc = async (id) => {
@@ -66,7 +91,7 @@ export default function BillingView({ customerMaster, tasks, now, colors, fontJP
   };
   const duplicateDoc = (doc) => {
     const copy = { ...JSON.parse(JSON.stringify(doc)), id: `doc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, no: doc.no + '-copy', createdAt: Date.now(), updatedAt: Date.now() };
-    if (copy.type === 'invoice') { copy.status = 'draft'; copy.sentDate = ''; copy.paidDate = ''; }
+    if (copy.type === 'invoice') { copy.status = 'draft'; copy.sentDate = ''; copy.paidDate = ''; copy.salesRowIds = []; }
     saveDoc(copy);
   };
   // 一覧から請求書ステータスを直接変更（送付/入金にした時は日付も自動記録）
@@ -88,6 +113,7 @@ export default function BillingView({ customerMaster, tasks, now, colors, fontJP
         initial={editing}
         customerMaster={customerMaster}
         tasks={tasks}
+        salesLedger={salesLedger}
         onSave={(d) => { saveDoc(d); }}
         onSaveClose={(d) => { saveDoc(d); setEditing(null); }}
         onClose={() => setEditing(null)}
@@ -291,7 +317,7 @@ function IssuerSettings({ issuer, onClose, colors, fontJP }) {
 }
 
 // ============ 編集 ============
-function BillingEditor({ initial, customerMaster, tasks, onSave, onSaveClose, onClose, onDelete, existing, colors, fontJP, fontDisplay }) {
+function BillingEditor({ initial, customerMaster, tasks, salesLedger, onSave, onSaveClose, onClose, onDelete, existing, colors, fontJP, fontDisplay }) {
   const { confirmDialog } = useApp();
   const [doc, setDoc] = useState(initial);
   const [tab, setTab] = useState('basic');
@@ -485,6 +511,7 @@ function BillingEditor({ initial, customerMaster, tasks, onSave, onSaveClose, on
                     <Col><label style={label}>送付日</label><input type="date" value={doc.sentDate || ''} onChange={e => upd({ sentDate: e.target.value })} style={input()} /></Col>
                     <Col><label style={label}>入金日</label><input type="date" value={doc.paidDate || ''} onChange={e => upd({ paidDate: e.target.value })} style={input()} /></Col>
                   </Row>
+                  <SalesLinkSection doc={doc} upd={upd} ledger={salesLedger} colors={colors} fontJP={fontJP} />
                 </>
               )}
 
@@ -545,6 +572,77 @@ function BillingEditor({ initial, customerMaster, tasks, onSave, onSaveClose, on
 
       {/* 印刷専用エリア（画面では非表示、印刷時のみ表示） */}
       <div id="kz-print-area"><BillingDocument doc={doc} /></div>
+    </div>
+  );
+}
+
+// ---- 請求書：売上登録表の行との紐付け ----
+// 紐付けた行には、この請求書を「送付済み」「入金済み」にして保存したとき、送付日・入金日が入る（空の行だけ）。
+function SalesLinkSection({ doc, upd, ledger, colors, fontJP }) {
+  const ids = doc.salesRowIds || [];
+  const [open, setOpen] = useState(ids.length > 0); // 紐付け済みなら開いた状態で出す
+  const cands = useMemo(() => salesLinkCandidates(ledger, doc), [ledger, doc]);
+  const cmp = useMemo(() => compareLinkedTotal(ledger, doc), [ledger, doc]);
+  const toggle = (id) => upd({ salesRowIds: ids.includes(id) ? ids.filter(x => x !== id) : [...ids, id] });
+  const sameProject = cands.filter(c => c.sameProject && !c.linked);
+  const md = (d) => (/^\d{4}-\d{2}-\d{2}/.test(d || '') ? `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}` : '—');
+  const taxIncl = (c) => computeRow(c.row, { ...SALES_DEFAULT_SETTINGS, ...((ledger[c.ym] && ledger[c.ym].settings) || {}) }).taxIncl;
+  return (
+    <div style={{ border: `1px solid ${colors.border}`, borderRadius: 5, background: '#fbf9f4' }}>
+      <button type="button" onClick={() => setOpen(o => !o)}
+        style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 6, padding: '8px 10px', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: fontJP, fontSize: 12, fontWeight: 600, color: colors.text, textAlign: 'left' }}>
+        <Link2 size={14} />売上登録表と紐付け（{ids.length}行）
+        {cmp.mismatch && <span style={{ fontSize: 11, fontWeight: 600, color: '#c0392b' }}>● 金額が一致しません</span>}
+        <span style={{ marginLeft: 'auto', display: 'flex' }}>{open ? <ChevronUp size={15} /> : <ChevronDown size={15} />}</span>
+      </button>
+      {open && (
+        <div style={{ padding: '0 10px 10px' }}>
+          <div style={{ fontSize: 11, color: colors.textMute, marginBottom: 8, lineHeight: 1.6 }}>
+            チェックした売上行には、この請求書を「送付済み」「入金済み」にして保存したとき、請求書送付日・入金確認日が入ります（日付が空の行だけ。売上登録表の日付を書き換えることはありません）。
+            候補は、宛先の会社（発行月の前後1か月）と、件名と同じ案件名の行です。
+          </div>
+          {sameProject.length > 0 && (
+            <button type="button" onClick={() => upd({ salesRowIds: [...ids, ...sameProject.map(c => c.row.id)] })}
+              style={{ marginBottom: 8, padding: '5px 10px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 11 }}>
+              件名と同じ案件の行をまとめて選ぶ（{sameProject.length}行）
+            </button>
+          )}
+          {cands.length === 0 ? (
+            <div style={{ fontSize: 12, color: colors.textMute, padding: '6px 0' }}>候補の売上行がありません。宛先の会社名・発行日・件名を確認してください。</div>
+          ) : (
+            <div style={{ maxHeight: 260, overflowY: 'auto', border: `1px solid ${colors.border}`, borderRadius: 4, background: '#fff' }}>
+              {cands.map((c, i) => (
+                <label key={c.row.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 9px', borderTop: i ? `1px solid ${colors.border}` : 'none', cursor: 'pointer', fontSize: 12 }}>
+                  <input type="checkbox" checked={ids.includes(c.row.id)} onChange={() => toggle(c.row.id)} />
+                  <span style={{ flex: 'none', fontSize: 11, color: colors.textMute, width: 84 }}>{monthLabel(c.ym)}</span>
+                  <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {c.row.projectName || '（案件名なし）'}{c.row.prodName ? ` ／ ${c.row.prodName}` : ''}
+                    <span style={{ color: colors.textMute, fontSize: 11 }}>{c.row.company ? `　${c.row.company}` : ''}</span>
+                  </span>
+                  <span style={{ flex: 'none', fontSize: 11, color: colors.textMute }}>送付 {md(c.row.invoiceSentDate)}・入金 {md(c.row.paymentConfirmedDate)}</span>
+                  <span style={{ flex: 'none', fontWeight: 600, width: 88, textAlign: 'right' }}>{formatYen(taxIncl(c))}</span>
+                </label>
+              ))}
+            </div>
+          )}
+          {cmp.count > 0 && (
+            <div style={{ marginTop: 8, fontSize: 12, display: 'flex', gap: 12, flexWrap: 'wrap', color: cmp.mismatch ? '#c0392b' : colors.textMute }}>
+              <span>紐付けた売上行の税込合計 {formatYen(cmp.salesTotal)}</span>
+              <span>請求書の合計 {formatYen(cmp.invoiceTotal)}</span>
+              {cmp.mismatch && <span style={{ fontWeight: 600 }}>一致しません（保存はできます）</span>}
+            </div>
+          )}
+          {cmp.missing > 0 && (
+            <div style={{ marginTop: 6, fontSize: 11, color: '#c0392b' }}>
+              紐付け先の売上行が {cmp.missing}行 見つかりません（売上登録表から削除された可能性があります）。
+              <button type="button" onClick={() => { const alive = new Set(cands.map(c => c.row.id)); upd({ salesRowIds: ids.filter(id => alive.has(id)) }); }}
+                style={{ marginLeft: 6, padding: '2px 8px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 11 }}>
+                紐付けから外す
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

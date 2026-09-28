@@ -243,6 +243,7 @@ export function blankDoc(type, docs, now, issuer) {
     base.status = 'draft';   // 下書き → 送付済み → 入金済み
     base.sentDate = '';
     base.paidDate = '';
+    base.salesRowIds = [];   // 紐付けた売上登録表の行 id（送付済み・入金済みにすると日付を埋める）
   }
   return base;
 }
