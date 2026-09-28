@@ -52,7 +52,17 @@ src/
   views/             # 画面単位（案件=InputView・カレンダー・担当者別・サマリー・完了・マスタ・メモ）
     input/           # 案件タブの下位部品（一覧・視点カード・ステップ行・各セクション）
   billing/ sales/ project/ viewpoint/  # 帳票・売上・案件整理・視点ロジック（従来どおり）
+line-bot/            # LINE Bot（Google Apps Script で動く。設定手順は line-bot/README.md）
+  bot.js             # Bot 本体（言葉の判定・Firestore 読み込み・返信文）
+  build.mjs          # src/lib/utils.js・schedule.js・viewpoint/viewpointUtils.js と bot.js を dist/Code.gs に連結
+  dist/Code.gs       # GAS に貼り付ける自動生成ファイル（直接編集しない・コミットする）
 ```
+
+### LINE Bot（line-bot/）の注意
+
+- `npm run build` の prebuild で `dist/Code.gs` が自動再生成される。**src/lib・src/viewpoint/viewpointUtils.js を変えると Code.gs も変わる**ので一緒にコミットする。
+- 上記3ファイルは GAS でも動かすため、**ブラウザ専用の API（window・document 等）や他ファイルへの import を足さない**こと（足す場合は build.mjs の LIB_FILES も更新）。
+- Code.gs の変更を Bot に反映するには、ユーザーが GAS エディタへ貼り直して「デプロイを管理」から新バージョンを出す必要がある（README 参照）。変更したらユーザーにその旨を伝える。
 
 ## 技術スタック
 
@@ -75,7 +85,8 @@ src/
 
 ```bash
 npm run dev      # 開発サーバ
-npm run check    # ESLint（UI設計原則の機械チェック）
+npm run check    # ESLint（UI設計原則の機械チェック。line-bot/ も対象）
+npm run build:line # LINE Bot の line-bot/dist/Code.gs を生成（build 時に自動実行）
 npm run build    # 本番ビルド（check を自動実行。デプロイ前に必ず）
 npm run deploy   # ビルド→gh-pages公開
 # 仕上げに必ず:

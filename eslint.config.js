@@ -6,7 +6,31 @@ import reactHooks from 'eslint-plugin-react-hooks';
 import globals from 'globals';
 
 export default [
-  { ignores: ['dist/**', 'node_modules/**', 'sync/**'] },
+  { ignores: ['dist/**', 'node_modules/**', 'sync/**', 'line-bot/dist/**'] },
+  // LINE Bot（Google Apps Script で動く。KouteiLib は build.mjs が src/lib から生成して連結する）
+  {
+    files: ['line-bot/bot.js'],
+    languageOptions: {
+      ecmaVersion: 2023,
+      sourceType: 'script',
+      globals: {
+        KouteiLib: 'readonly', UrlFetchApp: 'readonly', PropertiesService: 'readonly', ContentService: 'readonly',
+        ScriptApp: 'readonly', LockService: 'readonly', CacheService: 'readonly', console: 'readonly',
+      },
+    },
+    rules: {
+      'no-undef': 'error',
+      'no-unreachable': 'error',
+      'no-dupe-keys': 'error',
+      // doPost・testCommands などは GAS から呼ばれるトップレベル関数のため、未使用判定は関数内だけにする
+      'no-unused-vars': ['warn', { vars: 'local', args: 'none', caughtErrors: 'none' }],
+    },
+  },
+  {
+    files: ['line-bot/build.mjs'],
+    languageOptions: { ecmaVersion: 2023, sourceType: 'module', globals: { ...globals.node } },
+    rules: { 'no-undef': 'error' },
+  },
   {
     files: ['src/**/*.{js,jsx}', '*.js'],
     plugins: { react, 'react-hooks': reactHooks },

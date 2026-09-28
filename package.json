@@ -6,8 +6,9 @@
   "description": "工程図 - 建築CG制作スケジュール可視化アプリ",
   "scripts": {
     "dev": "vite",
-    "check": "eslint src",
-    "prebuild": "npm run check",
+    "check": "eslint src line-bot",
+    "build:line": "node line-bot/build.mjs",
+    "prebuild": "npm run check && npm run build:line",
     "build": "vite build",
     "preview": "vite preview",
     "deploy": "npm run build && gh-pages -d dist"
