@@ -8,7 +8,7 @@ import { DEFAULT_STEP_TYPES, deliveryBaseName, findStepType, normalizeHistory, n
 import { billingStore, memberList, salesStore, signIn, signOutUser, storage, subscribeAuth, tasksStore } from './firebase.js';
 import { computeDeadlineReorder, computeProjectOrder, deadlineInsertPriority, deadlineKey, isOnLeaveAt, latestActualEnd, migrateTask, normalizePriorities, projectEndTs, scheduleTasks, simulateFormSchedule, workingHoursBetweenTs } from './lib/schedule.js';
 import { collectSalesSyncRows, reconcileLedger } from './viewpoint/salesSync.js';
-import { blankDoc, blankItem } from './billing/billingUtils.js';
+import { blankDoc, blankItem, issuerFromDocs } from './billing/billingUtils.js';
 import { CheckCircle2, ClipboardList, FileText, Folder, MessageSquare, Plus, RotateCcw, Settings as SettingsIcon, StickyNote, Table, TrendingUp } from 'lucide-react';
 import { CompleteDialog, ConfirmModal, DeadlineConfirmModal, NavButton, NavGroup, PromptModal, TimeSelect, ToastStack } from './components/common.jsx';
 import { MemberSettings } from './components/MemberSettings.jsx';
@@ -1548,8 +1548,9 @@ export default function App() {
         const raw = await storage.get('billingIssuer');
         if (raw && raw.value) issuer = JSON.parse(raw.value);
       } catch (e) {}
+      if (!issuer) issuer = issuerFromDocs(docs); // 未設定なら作成済みの帳票から引き継ぐ
       const doc = blankDoc(docType, docs, new Date(), issuer);
-      // 宛先（御中）：見積はお客様、発注は発注先（既定リーベグのまま）。お客様情報を反映。
+      // 宛先（御中）：見積はお客様、発注は発注先（自社のまま）。お客様情報を反映。
       const cm = (customerMaster || []).find(c => (c.company || '').trim() === (group.companyName || '').trim());
       if (docType === 'estimate') {
         doc.to = { ...doc.to, company: group.companyName || '', zip: cm?.zip || '', address: cm?.address || '', tel: cm?.tel || '', rep: group.customerContact || '' };

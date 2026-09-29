@@ -11,7 +11,7 @@ import {
   DOC_TYPES, docTypeOf, blankDoc, blankItem, formatYen, formatJDate, computeTotals,
   CONDITION_SECTIONS, SCHEDULE_TIME_ROWS, SCHEDULE_PROCESS_COLUMNS,
   INVOICE_STATUSES, invoiceStatusOf, migrateBillingDoc, todayStr,
-  REBEG_ESTIMATE, REBEG_INVOICE, INVOICE_BANK_LINES,
+  BLANK_ISSUER_SIDE, issuerFromDocs, issuerIncomplete,
   DOC_FONTS, defaultFontId,
 } from './billingUtils.js';
 import { salesLinkCandidates, applyInvoiceToSales, compareLinkedTotal } from './salesLink.js';
@@ -27,6 +27,8 @@ export default function BillingView({ customerMaster, tasks, now, colors, fontJP
   const [filterStatus, setFilterStatus] = useState('all'); // 請求書のステータス絞り込み
   const [q, setQ] = useState('');                          // 検索（NO・件名・会社名）
   const [issuer, setIssuer] = useState(null);              // 発行元・振込先の設定
+  const [issuerLoaded, setIssuerLoaded] = useState(false);
+  const issuerMigrated = useRef(false);
   const [showIssuer, setShowIssuer] = useState(false);
   const [salesLedger, setSalesLedger] = useState({});      // 売上登録表（請求書との紐付け用）
   const salesLedgerRef = useRef({});
@@ -51,11 +53,28 @@ export default function BillingView({ customerMaster, tasks, now, colors, fontJP
   // 発行元（自社）・振込先の設定を購読
   useEffect(() => {
     const unsub = storage.subscribe('billingIssuer', (val) => {
+      setIssuerLoaded(true);
       if (!val) { setIssuer(null); return; }
       try { setIssuer(JSON.parse(val)); } catch (e) { setIssuer(null); }
     });
     return () => unsub && unsub();
   }, []);
+
+  // 発行元・振込先がまだ保存されていなければ、作成済みの帳票から引き継いで保存する（1回だけ）。
+  // 住所・振込先はコードに持たないため、以前の既定値で作った帳票の内容をここで設定へ移す。
+  useEffect(() => {
+    if (!loaded || !issuerLoaded || issuer || issuerMigrated.current) return;
+    const found = issuerFromDocs(docs);
+    if (!found) return;
+    issuerMigrated.current = true;
+    const next = {
+      estimate: { ...BLANK_ISSUER_SIDE, ...(found.estimate || found.invoice || {}) },
+      invoice: { ...BLANK_ISSUER_SIDE, ...(found.invoice || found.estimate || {}) },
+      bankLines: found.bankLines || [],
+    };
+    storage.set('billingIssuer', JSON.stringify(next)).catch(e => console.error('自社情報の引き継ぎエラー:', e));
+  }, [loaded, issuerLoaded, issuer, docs]);
+  const issuerMissing = loaded && issuerLoaded && issuerIncomplete(issuer);
 
   // 請求書 → 売上登録表：紐付けた売上行の 請求書送付日・入金確認日 を「空のときだけ」埋める（一方向）
   const syncInvoiceToSales = (doc) => {
@@ -156,12 +175,13 @@ export default function BillingView({ customerMaster, tasks, now, colors, fontJP
             title="帳票に印字される自社情報・振込先を編集"
             style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '8px 12px', background: showIssuer ? '#1a1a1a' : 'transparent', color: showIssuer ? '#fff' : '#1a1a1a', border: `1px solid ${showIssuer ? '#1a1a1a' : colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13 }}>
             <Building2 size={14} />自社情報・振込先
+            {issuerMissing && <span style={{ color: showIssuer ? '#ffb3a7' : '#c0392b', fontSize: 11, fontWeight: 700 }}>未設定あり</span>}
           </button>
         </div>
       </div>
 
       {showIssuer && (
-        <IssuerSettings issuer={issuer} onClose={() => setShowIssuer(false)} colors={colors} fontJP={fontJP} />
+        <IssuerSettings issuer={issuer || issuerFromDocs(docs)} onClose={() => setShowIssuer(false)} colors={colors} fontJP={fontJP} />
       )}
 
       {/* 入金待ちサマリー */}
@@ -258,9 +278,9 @@ function iconBtn(colors) {
 function IssuerSettings({ issuer, onClose, colors, fontJP }) {
   const { notify } = useApp();
   const [draft, setDraft] = useState(() => ({
-    estimate: { ...REBEG_ESTIMATE, ...(issuer?.estimate || {}) },
-    invoice: { ...REBEG_INVOICE, ...(issuer?.invoice || {}) },
-    bankLines: (issuer?.bankLines && issuer.bankLines.length) ? [...issuer.bankLines] : [...INVOICE_BANK_LINES],
+    estimate: { ...BLANK_ISSUER_SIDE, ...(issuer?.estimate || {}) },
+    invoice: { ...BLANK_ISSUER_SIDE, ...(issuer?.invoice || {}) },
+    bankLines: Array.isArray(issuer?.bankLines) ? [...issuer.bankLines] : [],
   }));
   const [saving, setSaving] = useState(false);
   const input = (props) => ({ padding: '6px 8px', border: `1px solid ${colors.border}`, borderRadius: 4, fontFamily: fontJP, fontSize: 12, width: '100%', boxSizing: 'border-box', background: '#fff', ...props });
@@ -298,7 +318,7 @@ function IssuerSettings({ issuer, onClose, colors, fontJP }) {
   return (
     <div style={{ border: `1px solid ${colors.border}`, borderRadius: 6, background: '#fbf9f4', padding: 14, marginBottom: 16 }}>
       <div style={{ fontSize: 11, color: colors.textMute, marginBottom: 10 }}>
-        帳票に印字される発行元（自社）情報と請求書の振込先。保存すると「これから新規作成する帳票」に反映されます（作成済みの帳票は各帳票の編集画面で直せます）。
+        帳票に印字される発行元（自社）情報と請求書の振込先。保存すると「これから新規作成する帳票」に反映されます（作成済みの帳票は各帳票の編集画面で直せます）。住所・振込先はここにだけ保存され、プログラム（公開しているソースコード）には含まれません。
       </div>
       <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
         {sideForm('estimate', '見積書・発注書用')}
@@ -306,6 +326,7 @@ function IssuerSettings({ issuer, onClose, colors, fontJP }) {
         <div style={{ flex: '1 1 240px', minWidth: 220 }}>
           <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>振込先（請求書・1行ずつ）</div>
           <textarea value={draft.bankLines.join('\n')} onChange={e => setDraft(d => ({ ...d, bankLines: e.target.value.split('\n') }))}
+            placeholder={'例）\n・○○銀行\n・○○支店（123）\n・口座番号（1234567）\n・口座名義（株式会社○○）'}
             style={input({ minHeight: 110, resize: 'vertical' })} />
         </div>
       </div>

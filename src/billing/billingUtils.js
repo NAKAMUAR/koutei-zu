@@ -26,25 +26,43 @@ export function docFontCss(doc) {
   return f.css;
 }
 
-// ---- 発行元（自社）の既定値。帳票種別ごとにテンプレ値が異なるため分けて保持 ----
-export const REBEG_ESTIMATE = {
-  company: '株式会社リーベグ', zip: '657-0831',
-  address: '兵庫県神戸市灘区水道筋5丁目3-24 神栄ビル102',
-  tel: '0798-62-1666 (代)', person: '中村', regNo: '',
-};
-export const REBEG_INVOICE = {
-  company: '株式会社リーベグ', zip: '663-8126',
-  address: '兵庫県西宮市小松北町2丁目7-4',
-  tel: '0798-62-1666 (代)', person: '中村', regNo: 'T4140001034351',
-};
+// ---- 発行元（自社）情報・振込先 ----
+// 住所・電話・担当者・登録番号・振込先はコードに持たず、帳票画面の「自社情報・振込先」
+// （storage キー 'billingIssuer' = { estimate, invoice, bankLines }）にだけ保存する。
+// まだ保存されていないときは、作成済みの帳票から引き継ぐ（issuerFromDocs）。
+export const ISSUER_COMPANY = '株式会社リーベグ';
+export const BLANK_ISSUER_SIDE = { company: ISSUER_COMPANY, zip: '', address: '', tel: '', person: '', regNo: '' };
+const ISSUER_FIELDS = Object.keys(BLANK_ISSUER_SIDE);
+const newest = (a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0);
+const hasText = (v) => String(v || '').trim() !== '';
 
-// 請求書の振込先（備考欄の定型）
-export const INVOICE_BANK_LINES = [
-  '・楽天銀行',
-  '・第三営業支店（253）',
-  '・口座番号（7244383）',
-  '・口座名義（株式会社 リーベグ CG事業部）',
-];
+// 作成済みの帳票から発行元・振込先を拾う。見積書・請求書それぞれの一番新しい帳票の「発行元」と、
+// 一番新しい請求書の振込先を使う（発注書の発行元はお客様なので使わない）。拾えなければ null
+export function issuerFromDocs(docs) {
+  const list = (docs || []).filter(Boolean).slice().sort(newest);
+  const sideOf = (type) => {
+    const d = list.find(x => x.type === type && x.from && ['zip', 'address', 'tel'].some(k => hasText(x.from[k])));
+    if (!d) return null;
+    const side = {};
+    for (const k of ISSUER_FIELDS) side[k] = String(d.from[k] || '');
+    if (!hasText(side.company)) side.company = ISSUER_COMPANY;
+    return side;
+  };
+  const bankDoc = list.find(x => x.type === 'invoice' && Array.isArray(x.bankLines) && x.bankLines.some(hasText));
+  const out = {};
+  const est = sideOf('estimate'), inv = sideOf('invoice');
+  if (est) out.estimate = est;
+  if (inv) out.invoice = inv;
+  if (bankDoc) out.bankLines = bankDoc.bankLines.map(String);
+  return Object.keys(out).length ? out : null;
+}
+
+// 発行元・振込先の設定（保存値）が無いか、住所・振込先が空か
+export function issuerIncomplete(issuer) {
+  if (!issuer) return true;
+  const sideOk = (s) => !!s && hasText(s.address);
+  return !sideOk(issuer.estimate) || !sideOk(issuer.invoice) || !(Array.isArray(issuer.bankLines) && issuer.bankLines.some(hasText));
+}
 
 // ---- 請求書ステータス ----
 export const INVOICE_STATUSES = [
@@ -215,8 +233,8 @@ export function blankDoc(type, docs, now, issuer) {
     to: { company: '', honorific: '御中', zip: '', address: '', tel: '', rep: '' },
     // 発行元（自社）側
     from: type === 'invoice'
-      ? { ...REBEG_INVOICE, ...((issuer && issuer.invoice) || {}) }
-      : { ...REBEG_ESTIMATE, ...((issuer && issuer.estimate) || {}) },
+      ? { ...BLANK_ISSUER_SIDE, ...((issuer && issuer.invoice) || {}) }
+      : { ...BLANK_ISSUER_SIDE, ...((issuer && issuer.estimate) || {}) },
     items: [blankItem(type), blankItem(type), blankItem(type)],
     font: defaultFontId(type), // 帳票フォント（DOC_FONTS の id。編集画面で変更可）
     note: NOTE_DEFAULTS[type] || '',
@@ -233,14 +251,14 @@ export function blankDoc(type, docs, now, issuer) {
     base.angles = { exteriorLabel: '', exterior: '', interior: '', exteriorImage: '', interiorImage: '' };
   }
   if (type === 'order') {
-    // 発注書は「御中」=発注先（既定: リーベグ）、発行元=発注者（お客様, 署名捺印欄あり）
-    base.to = { company: '株式会社リーベグ', honorific: '御中', zip: '', address: '', tel: '', rep: '' };
+    // 発注書は「御中」=発注先（自社）、発行元=発注者（お客様, 署名捺印欄あり）
+    base.to = { company: (issuer && issuer.estimate && issuer.estimate.company) || ISSUER_COMPANY, honorific: '御中', zip: '', address: '', tel: '', rep: '' };
     base.from = { company: '', zip: '', address: '', tel: '', person: '', regNo: '', rep: '' };
     base.paymentTerms = ESTIMATE_FIXED.paymentTerms; // 見積書と同じフォームの「支払条件」欄
   }
   if (type === 'invoice') {
     base.paymentDeadline = '';
-    base.bankLines = [...((issuer && Array.isArray(issuer.bankLines) && issuer.bankLines.length) ? issuer.bankLines : INVOICE_BANK_LINES)];
+    base.bankLines = [...((issuer && Array.isArray(issuer.bankLines)) ? issuer.bankLines : [])];
     base.status = 'draft';   // 下書き → 送付済み → 入金済み
     base.sentDate = '';
     base.paidDate = '';

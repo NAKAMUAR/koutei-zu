@@ -3,7 +3,7 @@
 // デザインは元のExcel/PDF帳票に準拠（上下の色帯・字間広めの大見出し・白地＋色アンダーラインの明細・細罫線の集計）。
 import {
   DOC_TYPES, docTypeOf, docFontCss, formatYen, formatJDate, lineAmount, computeTotals,
-  CONDITION_SECTIONS, SCHEDULE_TIME_ROWS,
+  CONDITION_SECTIONS, SCHEDULE_TIME_ROWS, ISSUER_COMPANY,
 } from './billingUtils.js';
 import rebegLogo from './rebeg-logo.png';
 
@@ -65,7 +65,7 @@ function FromBlock({ from, showReg }) {
   return (
     <div style={{ fontSize: 12, lineHeight: 1.7 }}>
       <img src={rebegLogo} alt="re-beg" style={{ width: '38mm', display: 'block', marginBottom: 6 }} />
-      <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 3, color: TITLE_COLOR }}>{from.company || '株式会社リーベグ'}</div>
+      <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 3, color: TITLE_COLOR }}>{from.company || ISSUER_COMPANY}</div>
       {from.zip ? <div>〒{from.zip}</div> : null}
       {from.address ? <div>{from.address}</div> : null}
       {from.tel ? <div style={{ marginTop: 4 }}>電話：{from.tel}</div> : null}
@@ -242,7 +242,7 @@ function EstimatePage1({ doc }) {
   );
 }
 
-// 発注書：見積書と同じフォーム。宛先（御中）＝発注先（リーベグ）、右側＝発注者（お客様・署名捺印側）
+// 発注書：見積書と同じフォーム。宛先（御中）＝発注先（自社）、右側＝発注者（お客様・署名捺印側）
 function OrderPage1({ doc }) {
   const t = computeTotals(doc);
   const f = doc.from || {};
@@ -254,7 +254,7 @@ function OrderPage1({ doc }) {
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 18, gap: 24, minHeight: `${INFO_BLOCK_MIN_MM}mm`, alignItems: 'flex-start' }}>
         <div style={{ flex: 1, maxWidth: 340 }}>
-          <ToLine company={doc.to.company || '株式会社リーベグ'} centered />
+          <ToLine company={doc.to.company || ISSUER_COMPANY} centered />
           <div style={{ fontSize: 12.5, margin: '10px 0 4px', color: '#333' }}>下記のとおり、御発注申し上げます。</div>
           <Field label="件名">{doc.subject}</Field>
           <Field label="支払条件">{doc.paymentTerms}</Field>
