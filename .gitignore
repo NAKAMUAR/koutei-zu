@@ -6,3 +6,6 @@ dist
 *.log
 service-account.json
 *-firebase-adminsdk-*.json
+# clasp（Apps Script へのコマンド反映）：スクリプトID・ログイン情報はリポジトリに入れない
+.clasp.json
+.clasprc.json

@@ -66,12 +66,14 @@ src/
   - 工程図への書き込みは Firestore REST API。認証は実行アカウント（Firebase オーナー）の OAuth トークン、または サービスアカウント鍵（スクリプトプロパティに保存。**鍵ファイルはリポジトリに入れない**、`.gitignore` 済み）。Firestore ルールはこの経路に適用されないので、ルール変更は不要。
   - 同期で作るタスクは `externalId`（`案件コード::視点名(パターン込み)::n回目::ステップ種類`）を持ち、`stepRoundType`（新規→initial・追加→add・修正/変更→fix）と `viewpointNameExternal`（外観視点①_パターンA）を自動で入れる。アプリ側で削除すると `data/deletedExternalIds` に記録され、再送信しても復活しない（App.jsx の既存挙動）。
   - テスト: `node sync/test/logic.test.mjs`（判定・レコード生成の純ロジック）と `node sync/test/setup.test.mjs`（偽のシート環境で「かんたん初期設定」と転記を通す。Apps Script は手元で動かせないため、シートの大きさの上限も再現している）
+  - Apps Script への反映は貼り付けのほか、`npm run gas:push`（clasp。`.claspignore` で Code.gs と appsscript.json だけ送る）でもできる。初回は `.clasp.json.example` を `.clasp.json` にしてスクリプトIDを入れ、`npm run gas:login`（手順は docs/08 の 2-9）。**`.clasp.json`・`.clasprc.json` はリポジトリに入れない**（`.gitignore` 済み）。
 
 ## 確認のしかた
 
 - `npm run check`（ESLint）→ `npm run build` の順で必ず通す（build が check を自動実行する）。
 - UIに触れた場合は `npm run preview` でログイン画面が描画されることを最低限確認する（モジュールレベルのクラッシュ検出）。
 - スケジューラ等の純粋ロジックは `src/lib/` に分離済みなので、node スクリプトから直接 import して検証できる。
+- `npm test` で sync のテストとアプリの純ロジックのテスト（`test/salesLink.test.mjs`：請求書⇄売上の紐付け、`test/assigneeHours.test.mjs`：担当者ごとの稼働時間とスケジュール配置）をまとめて実行する。関係する箇所を触ったら必ず通す。
 - 大きな改修は機能ごとに `npm run build` を挟みながら進める。
 
 ## 主要コマンド
@@ -81,6 +83,7 @@ npm run dev      # 開発サーバ
 npm run check    # ESLint（UI設計原則の機械チェック）
 npm run build    # 本番ビルド（check を自動実行。デプロイ前に必ず）
 npm run deploy   # ビルド→gh-pages公開
+npm test         # sync とアプリの純ロジックのテスト
 # 仕上げに必ず:
 git add -A && git commit -m "..." && git push origin main
 ```

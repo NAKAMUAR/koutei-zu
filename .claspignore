@@ -1,0 +1,4 @@
+# clasp push で Apps Script に送るのは Code.gs と appsscript.json だけ（テスト等は送らない）
+**/**
+!**/Code.gs
+!**/appsscript.json
