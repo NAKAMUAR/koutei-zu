@@ -37,6 +37,8 @@
 const SHEET = { LINK: '連携', COMPANY: '会社マスタ', VIEW: '視点マスタ', PROJECT: '案件マスタ', SETTINGS: '設定', HOWTO: '使い方' };
 const STAFF_TAB_DEFAULT = '入力シート';
 const STAFF_RULES_TAB = '記入ルール/説明';
+// xlsx のひな形（sync/template）ではタブ名に「/」を使えないのでこの名前になっている。初期設定で『記入ルール/説明』に改名する
+const STAFF_RULES_TAB_ALIASES = ['記入ルール・説明'];
 
 // 『連携』タブの見出し（列は見出し名で探す）
 const H = {
@@ -52,6 +54,9 @@ const H_ALIASES = { cut: ['カット名'], white: ['White時間'], color: ['Colo
 const LINK_HEADER_ORDER = ['key', 'status', 'send', 'inputDate', 'code', 'name', 'cut', 'pattern', 'extName', 'round', 'request', 'deadline',
   'white', 'color', 'other', 'item', 'note', 'company', 'contact', 'category', 'kind', 'stepKind', 'assignee', 'memo', 'exclude',
   'transferredAt', 'sentAt', 'result', 'srcRow', 'link'];
+// 『連携』で人が直す列（見出しを黄色にする）。それ以外は転記で自動的に入る列（灰色）。ひな形（sync/template）も同じ色分け
+const LINK_HUMAN_FIELDS = ['send', 'name', 'extName', 'deadline', 'item', 'company', 'contact', 'category', 'kind', 'stepKind', 'assignee', 'memo', 'exclude'];
+const LINK_HEADER_COLORS = { auto: '#e6e6e6', human: '#fff2cc' };
 
 const STATUS = { NEW: '未送信', CHECK: '要確認', UPDATED: '更新あり', SENT: '登録済み', ERROR: 'エラー', GONE: '元シートから消えた' };
 const KIND = { PERS: 'パース', PHOTO: '写真合成', MODEL: 'モデル', VR: 'VR', VIDEO: '動画' };
@@ -1352,7 +1357,11 @@ const STAFF_RULES_EXAMPLES = [
 /** 『記入ルール/説明』タブを日本語・ベトナム語の併記で書き直す（本文はB列。A列は余白） */
 function writeStaffRulesTab_(staff, views) {
   let sh = staff.getSheetByName(STAFF_RULES_TAB);
-  if (!sh) sh = staff.insertSheet(STAFF_RULES_TAB, Math.min(1, staff.getSheets().length));
+  if (!sh) {
+    const alias = STAFF_RULES_TAB_ALIASES.map(n => staff.getSheetByName(n)).filter(Boolean)[0];
+    if (alias) { alias.setName(STAFF_RULES_TAB); sh = alias; }
+    else sh = staff.insertSheet(STAFF_RULES_TAB, Math.min(1, staff.getSheets().length));
+  }
   sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).breakApart(); // 手で結合したセルがあっても書けるように
   sh.clear();
   const width = STAFF_INPUT_COLUMNS.length;
@@ -1459,6 +1468,8 @@ function setupSheet_(ss) {
   const col = headerMap_(link);
   link.setFrozenRows(1);
   link.getRange(1, 1, 1, link.getLastColumn()).setFontWeight('bold');
+  // 見出しの色：人が直す列＝黄色、自動で入る列＝灰色（列の順番を入れ替えていても見出し名で付ける）
+  Object.keys(col).forEach(k => link.getRange(1, col[k]).setBackground(LINK_HUMAN_FIELDS.indexOf(k) >= 0 ? LINK_HEADER_COLORS.human : LINK_HEADER_COLORS.auto));
 
   const company = ss.getSheetByName(SHEET.COMPANY) || ss.insertSheet(SHEET.COMPANY);
   if (company.getLastRow() === 0) {
@@ -1745,6 +1756,7 @@ const HOWTO_LINES = [
   '■ 列の見方（『連携』タブ）',
   '・自動で入る列：取込キー・状態・入力日（最初に転記した日。あとで変わりません）・社内案件名・視点名・パターン・回・新規or修正・各時間・元シート備考（メモ）・転記日時（最後に内容が変わった日時）・送信日時・結果・元シート行・サーバリンク',
   '・人が直す列：工程図へ・社外案件名・社外視点名・納期・会社名・お客様担当者・区分・種類・ステップ種類・担当者・メモ・対象外（自動判定の結果が入り、次の転記で上書きされません）',
+  '・見出しの色：灰色＝自動で入る列（手で直しても次の転記で戻ります）、黄色＝人が直す列。',
   '・状態：未送信（自動登録を待っている）/ 要確認 / 更新あり / 登録済み / エラー / 元シートから消えた（登録済みの行が消えた場合、工程図のタスクは残ります）',
   '・登録が済むと「工程図へ」のチェックは外れます（次にチェックすると「もう一度送ってよい」の意味になります）。',
   '',

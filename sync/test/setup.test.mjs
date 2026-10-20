@@ -33,7 +33,7 @@ class FakeRange {
   setFontWeight() { return this; }
   setFontSize() { return this; }
   setFontColor() { return this; }
-  setBackground() { return this; }
+  setBackground(c) { this.sheet.backgrounds[this.row + ',' + this.col] = c; return this; }
   setWrap() { return this; }
   breakApart() { return this; }
   setVerticalAlignment() { return this; }
@@ -43,7 +43,7 @@ class FakeRange {
 class FakeSheet {
   // size 省略時は新規タブと同じ 1000行×26列。CSV から作ったタブなどは中身ぴったりの大きさを渡す
   constructor(name, rows = [], size) {
-    this.name = name; this.rows = rows.map(r => r.slice()); this.notes = {}; this.validations = []; this.formats = []; this.frozen = 0;
+    this.name = name; this.rows = rows.map(r => r.slice()); this.notes = {}; this.backgrounds = {}; this.validations = []; this.formats = []; this.frozen = 0;
     this.maxRows = size ? size.rows : 1000; this.maxCols = size ? size.cols : 26;
   }
   getMaxRows() { return this.maxRows; }
@@ -385,6 +385,22 @@ test('『入力シート』タブが無いときは新しく作る（記入ル�
   assert.equal(env.g.findStaffHeaderRow_(tab), 2);
   assert.equal(tab.header(2)[1], '案件番号\nSố dự án');
   assert.ok(env.alerts[0].indexOf('作りました') >= 0, env.alerts[0]);
+});
+
+test('xlsx のひな形から作ったファイル（『記入ルール・説明』タブ）は、初期設定で『記入ルール/説明』に改名して書き直す', () => {
+  const admin = adminSheet();
+  const eng = engineerFile();
+  eng.getSheetByName('記入ルール/説明').setName('記入ルール・説明');
+  const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
+  env.g.quickSetup();
+  same(eng.getSheets().map(s => s.getName()), ['Untitled', '入力シート', '記入ルール/説明'], 'タブが増えず、改名される');
+  const text = eng.getSheetByName('記入ルール/説明').rows.map(r => r.join(' ')).join('\n');
+  assert.ok(text.indexOf('Quy tắc') >= 0, '2か国語で書き直されている');
+  // 『連携』の見出しは 自動列＝灰色／人が直す列＝黄色
+  const link = admin.getSheetByName('連携');
+  const bg = (name) => link.backgrounds['1,' + (link.header().indexOf(name) + 1)];
+  assert.equal(bg('社外案件名'), '#fff2cc');
+  assert.equal(bg('取込キー'), '#e6e6e6');
 });
 
 test('意図して旧ファイルを読む設定（タブ名を product schedule にしてある等）は切り替えない', () => {

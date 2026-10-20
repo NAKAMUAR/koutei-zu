@@ -70,6 +70,7 @@ src/
   - 工程図への書き込みは Firestore REST API。認証は実行アカウント（Firebase オーナー）の OAuth トークン、または サービスアカウント鍵（スクリプトプロパティに保存。**鍵ファイルはリポジトリに入れない**、`.gitignore` 済み）。Firestore ルールはこの経路に適用されないので、ルール変更は不要。
   - 同期で作るタスクは `externalId`（`案件コード::視点名(パターン込み)::n回目::ステップ種類`）を持ち、`stepRoundType`（新規→initial・追加→add・修正/変更→fix）と `viewpointNameExternal`（外観視点①_パターンA）を自動で入れる。アプリ側で削除すると `data/deletedExternalIds` に記録され、再送信しても復活しない（App.jsx の既存挙動）。
   - テスト: `node sync/test/logic.test.mjs`（判定・レコード生成の純ロジック）と `node sync/test/setup.test.mjs`（偽のシート環境で「かんたん初期設定」と転記を通す。Apps Script は手元で動かせないため、シートの大きさの上限も再現している）
+  - 2ファイルのひな形（xlsx）: `npm run sheets:build`（`sync/template/build-sheets.mjs` が Code.gs の定数を読み、`build_sheets.py`（openpyxl）が `sync/template/工程図連携_管理者用.xlsx`・`工程図_エンジニア入力シート.xlsx` を書き出す）。見出し・ベトナム語・プルダウン・初期マスタは Code.gs が唯一の元。Code.gs の定数を直したら作り直してコミットする。Excel はタブ名に「/」を使えないので、ひな形では『記入ルール・説明』（初期設定で『記入ルール/説明』に改名）。
   - Apps Script への反映は貼り付けのほか、`npm run gas:push`（clasp。`.claspignore` で Code.gs と appsscript.json だけ送る）でもできる。初回は `.clasp.json.example` を `.clasp.json` にしてスクリプトIDを入れ、`npm run gas:login`（手順は docs/08 の 2-9）。**`.clasp.json`・`.clasprc.json` はリポジトリに入れない**（`.gitignore` 済み）。
 
 ## 確認のしかた
