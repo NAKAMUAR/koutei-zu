@@ -512,7 +512,23 @@ const dateToDtLocal = (d) => {
 const VIEWPOINT_PRESETS = [
   { id: 'pers', name: 'パース', steps: ['white', 'color'] },
   { id: 'photo', name: '写真合成', steps: [{ name: '写真合成' }] },
+  // スプレッドシート連携（視点マスタの種類）と同じ名前のステップ
+  { id: 'model', name: 'モデル', steps: [{ name: 'モデル作成' }] },
+  { id: 'vr', name: 'VR', steps: [{ name: 'VR制作' }] },
+  { id: 'video', name: '動画', steps: [{ name: '動画制作' }] },
 ];
+
+// 視点の「区分」（制作種類）の候補：外観・内観 ＋ 登録済みのタスクで使われている区分
+// （スプレッドシート連携の視点マスタで「外観目線」「外観鳥瞰」などを使うと、それも候補に出る）。外観… → 内観… → その他 の順
+function viewpointCategoryOptions(tasks) {
+  const set = new Set(['外観', '内観']);
+  for (const t of (tasks || [])) {
+    const c = ((t && t.viewpointCategory) || '').trim();
+    if (c) set.add(c);
+  }
+  const rank = (c) => c.startsWith('外観') ? 0 : c.startsWith('内観') ? 1 : 2;
+  return [...set].sort((a, b) => (rank(a) - rank(b)) || (a === '外観' || a === '内観' ? -1 : b === '外観' || b === '内観' ? 1 : a.localeCompare(b, 'ja')));
+}
 // ステップ1件分の空テンプレート（種類・外注などの請求情報を含む）。
 // stepTypeId: ステップ種類マスタの選択ID（プルダウン）。name は表示・検証用の素の名称。
 function makeEmptyStep(name = '', stepTypeId = '') {
@@ -645,15 +661,39 @@ const DEFAULT_SETTINGS = {
   companyOrder: ['CG工房', 'リノべる株式会社', 'オフィスコム', '田中建設', 'SUMUS', '玉善', 'オフショア（その他）'],
 };
 
-function getDailySlots(settings) {
+// ---- 担当者ごとの稼働時間 ----
+// 従業員マスタの workHours（{ morningStart, morningEnd, afternoonStart, afternoonEnd }。時刻はチーム共通の時間＝カレンダーと同じ時計）を
+// withAssigneeHours() で settings.assigneeHours（{ 担当者名: workHours }）にまとめ、スケジューラ・カレンダーが参照する。
+// 未設定・不正な担当者は全体設定（settings の午前・午後）を使う。
+const HM_RE = /^\d{1,2}:\d{2}$/;
+function isValidWorkHours(h) {
+  if (!h || ![h.morningStart, h.morningEnd, h.afternoonStart, h.afternoonEnd].every(v => HM_RE.test(String(v || '')))) return false;
+  const ms = timeToMin(h.morningStart), me = timeToMin(h.morningEnd), as = timeToMin(h.afternoonStart), ae = timeToMin(h.afternoonEnd);
+  return ms < me && me <= as && as < ae;
+}
+function withAssigneeHours(settings, employeeMaster) {
+  const map = {};
+  for (const e of (employeeMaster || [])) {
+    const name = ((e && e.name) || '').trim();
+    if (name && isValidWorkHours(e.workHours)) map[name] = e.workHours;
+  }
+  return Object.keys(map).length ? { ...settings, assigneeHours: map } : settings;
+}
+function workHoursOf(settings, assignee) {
+  const h = assignee && settings && settings.assigneeHours && settings.assigneeHours[assignee];
+  return isValidWorkHours(h) ? h : settings;
+}
+// 1日の営業スロット（午前・午後）。assignee を渡すとその担当者の稼働時間（設定があれば）
+function getDailySlots(settings, assignee) {
+  const src = workHoursOf(settings, assignee);
   return [
-    { start: timeToMin(settings.morningStart), end: timeToMin(settings.morningEnd) },
-    { start: timeToMin(settings.afternoonStart), end: timeToMin(settings.afternoonEnd) },
+    { start: timeToMin(src.morningStart), end: timeToMin(src.morningEnd) },
+    { start: timeToMin(src.afternoonStart), end: timeToMin(src.afternoonEnd) },
   ];
 }
 // その日の営業スロット（土曜は午前のみ）
-function getDaySlots(d, settings) {
-  const all = getDailySlots(settings);
+function getDaySlots(d, settings, assignee) {
+  const all = getDailySlots(settings, assignee);
   if (d.getDay() === 6) return [all[0]];
   return all;
 }
@@ -905,9 +945,9 @@ function dayOvertimeIntervals(assignee, date, overtimes) {
   return out;
 }
 
-// その担当者・その日の稼働枠（通常の営業スロット＋残業枠を重複なくマージ）
+// その担当者・その日の稼働枠（通常の営業スロット（担当者ごとの稼働時間があればそれ）＋残業枠を重複なくマージ）
 function dayWorkSlots(assignee, date, settings) {
-  const base = getDaySlots(date, settings).map(s => [s.start, s.end]);
+  const base = getDaySlots(date, settings, assignee).map(s => [s.start, s.end]);
   const ot = dayOvertimeIntervals(assignee, date, settings.overtimes || []);
   const all = [...base, ...ot].sort((a, b) => a[0] - b[0]);
   const merged = [];

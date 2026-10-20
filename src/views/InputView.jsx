@@ -1,7 +1,7 @@
 // 入力ビュー（新規案件登録フォーム＋進行中一覧タブ）。App.jsx から分割。
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useApp } from '../appContext.js';
-import { VIEWPOINT_PRESETS, dayName, fmtHM, fmtMD, fmtYMD, getProjectColor, kanaNormalize, makeEmptyStep, makeViewpointFromPreset, minToTime, parseHM, sheetsLabel } from '../lib/utils.js';
+import { VIEWPOINT_PRESETS, viewpointCategoryOptions, dayName, fmtHM, fmtMD, fmtYMD, getProjectColor, kanaNormalize, makeEmptyStep, makeViewpointFromPreset, minToTime, parseHM, sheetsLabel } from '../lib/utils.js';
 import { computeRevisionStats, deliveryBaseName, findStepType, num as vpNum, resolveViewpointSteps, stepDeliveryName } from '../viewpoint/viewpointUtils.js';
 import { computeLateRisks, groupByViewpoint, simulateFormSchedule, sortAssigneesByMaster } from '../lib/schedule.js';
 import { QuoteModal } from '../components/modals.jsx';
@@ -21,6 +21,8 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
     stepTypeMaster, vpDeliveryCount,
     registerDraftAndEdit, handleEditProject, submitting, confirmDialog, notify,
   } = useApp();
+  // 視点の区分の候補（外観・内観 ＋ 使われている区分）
+  const categoryOptions = useMemo(() => viewpointCategoryOptions(tasks), [tasks]);
   // お客様担当者の候補：会社名を選んでいればその会社に所属する担当者を表示
   // （会社名はひらがな/カタカナ/全半角の違いを無視して照合）
   const contactOptions = useMemo(() => {
@@ -1011,15 +1013,14 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                         title="お客様向けの視点名。納品名のベースになります（空欄なら社内視点名）"
                         style={{ ...inputStyle, padding: '8px 10px', fontSize: 13 }} />
                     </div>
-                    <div style={{ flex: '0 1 120px' }}>
-                      <label style={{ ...labelStyle, fontSize: 10, marginBottom: 3 }}>内観/外観</label>
-                      <select value={vp.viewpointCategory || ''}
-                        onChange={(e) => updateViewpointField(vi, 'viewpointCategory', e.target.value)}
-                        style={{ ...inputStyle, padding: '8px 8px', fontSize: 13, cursor: 'pointer' }}>
-                        <option value="">未設定</option>
-                        <option value="外観">外観</option>
-                        <option value="内観">内観</option>
-                      </select>
+                    <div style={{ flex: '0 1 140px' }}>
+                      <label style={{ ...labelStyle, fontSize: 10, marginBottom: 3 }}>区分（内観/外観）</label>
+                      <Combobox value={vp.viewpointCategory || ''} onChange={(v) => updateViewpointField(vi, 'viewpointCategory', v)}
+                        options={categoryOptions}
+                        placeholder="未設定"
+                        title="外観・内観、または「外観目線」「外観鳥瞰」など（一覧から選ぶか入力）。売上の制作種類にも使われます"
+                        inputStyle={{ ...inputStyle, padding: '8px 10px', fontSize: 13 }}
+                        colors={colors} fontJP={fontJP} />
                     </div>
                     <div style={{ flex: '1 1 140px' }}>
                       <label style={{ ...labelStyle, fontSize: 10, marginBottom: 3 }}>担当者</label>

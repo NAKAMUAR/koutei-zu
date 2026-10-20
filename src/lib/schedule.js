@@ -210,9 +210,9 @@ function dayOvertimeIntervals(assignee, date, overtimes) {
   return out;
 }
 
-// その担当者・その日の稼働枠（通常の営業スロット＋残業枠を重複なくマージ）
+// その担当者・その日の稼働枠（通常の営業スロット（担当者ごとの稼働時間があればそれ）＋残業枠を重複なくマージ）
 function dayWorkSlots(assignee, date, settings) {
-  const base = getDaySlots(date, settings).map(s => [s.start, s.end]);
+  const base = getDaySlots(date, settings, assignee).map(s => [s.start, s.end]);
   const ot = dayOvertimeIntervals(assignee, date, settings.overtimes || []);
   const all = [...base, ...ot].sort((a, b) => a[0] - b[0]);
   const merged = [];

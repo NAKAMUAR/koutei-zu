@@ -1,18 +1,22 @@
 // 帳票ビュー：一覧・編集・お客様/案件からの自動入力・PDF出力（ブラウザ印刷）。
 // データは 1帳票 = 1 Firestore ドキュメント（billingStore、data/bill_{id}）。
 // 発行元（自社）情報・振込先は storage の 'billingIssuer' キーで編集できる。
+// 請求書は売上登録表の行と紐付けでき（salesRowIds）、送付済み・入金済みにすると紐付けた行の日付を埋める（salesLink.js）。
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Plus, Trash2, Edit2, Copy, Printer, X, FileText, Search, Building2 } from 'lucide-react';
-import { storage, billingStore } from '../firebase.js';
+import { Plus, Trash2, Edit2, Copy, Printer, X, FileText, Search, Building2, ChevronDown, ChevronUp, Link2 } from 'lucide-react';
+import { storage, billingStore, salesStore } from '../firebase.js';
 import { useApp } from '../appContext.js';
 import BillingDocument from './BillingDocument.jsx';
 import {
   DOC_TYPES, docTypeOf, blankDoc, blankItem, formatYen, formatJDate, computeTotals,
-  CONDITION_SECTIONS, SCHEDULE_TIME_ROWS,
+  CONDITION_SECTIONS, SCHEDULE_TIME_ROWS, SCHEDULE_PROCESS_COLUMNS,
   INVOICE_STATUSES, invoiceStatusOf, migrateBillingDoc, todayStr,
-  REBEG_ESTIMATE, REBEG_INVOICE, INVOICE_BANK_LINES,
+  BLANK_ISSUER_SIDE, issuerFromDocs, issuerIncomplete,
   DOC_FONTS, defaultFontId,
 } from './billingUtils.js';
+import { salesLinkCandidates, applyInvoiceToSales, compareLinkedTotal } from './salesLink.js';
+import { downscaleImage, jsonBytes, DOC_MAX_BYTES } from './imageUtils.js';
+import { computeRow, DEFAULT_SETTINGS as SALES_DEFAULT_SETTINGS, monthLabel } from '../sales/salesUtils.js';
 
 export default function BillingView({ customerMaster, tasks, now, colors, fontJP, fontDisplay }) {
   const { confirmDialog, notify } = useApp();
@@ -23,7 +27,17 @@ export default function BillingView({ customerMaster, tasks, now, colors, fontJP
   const [filterStatus, setFilterStatus] = useState('all'); // 請求書のステータス絞り込み
   const [q, setQ] = useState('');                          // 検索（NO・件名・会社名）
   const [issuer, setIssuer] = useState(null);              // 発行元・振込先の設定
+  const [issuerLoaded, setIssuerLoaded] = useState(false);
+  const issuerMigrated = useRef(false);
   const [showIssuer, setShowIssuer] = useState(false);
+  const [salesLedger, setSalesLedger] = useState({});      // 売上登録表（請求書との紐付け用）
+  const salesLedgerRef = useRef({});
+
+  // 売上登録表を購読（1か月=1ドキュメント）
+  useEffect(() => {
+    const unsub = salesStore.subscribe((map) => { salesLedgerRef.current = map || {}; setSalesLedger(map || {}); });
+    return () => unsub && unsub();
+  }, []);
 
   // 購読（1帳票=1ドキュメント。作成日の新しい順に並べる）
   useEffect(() => {
@@ -39,12 +53,42 @@ export default function BillingView({ customerMaster, tasks, now, colors, fontJP
   // 発行元（自社）・振込先の設定を購読
   useEffect(() => {
     const unsub = storage.subscribe('billingIssuer', (val) => {
+      setIssuerLoaded(true);
       if (!val) { setIssuer(null); return; }
       try { setIssuer(JSON.parse(val)); } catch (e) { setIssuer(null); }
     });
     return () => unsub && unsub();
   }, []);
 
+  // 発行元・振込先がまだ保存されていなければ、作成済みの帳票から引き継いで保存する（1回だけ）。
+  // 住所・振込先はコードに持たないため、以前の既定値で作った帳票の内容をここで設定へ移す。
+  useEffect(() => {
+    if (!loaded || !issuerLoaded || issuer || issuerMigrated.current) return;
+    const found = issuerFromDocs(docs);
+    if (!found) return;
+    issuerMigrated.current = true;
+    const next = {
+      estimate: { ...BLANK_ISSUER_SIDE, ...(found.estimate || found.invoice || {}) },
+      invoice: { ...BLANK_ISSUER_SIDE, ...(found.invoice || found.estimate || {}) },
+      bankLines: found.bankLines || [],
+    };
+    storage.set('billingIssuer', JSON.stringify(next)).catch(e => console.error('自社情報の引き継ぎエラー:', e));
+  }, [loaded, issuerLoaded, issuer, docs]);
+  const issuerMissing = loaded && issuerLoaded && issuerIncomplete(issuer);
+
+  // 請求書 → 売上登録表：紐付けた売上行の 請求書送付日・入金確認日 を「空のときだけ」埋める（一方向）
+  const syncInvoiceToSales = (doc) => {
+    const res = applyInvoiceToSales(salesLedgerRef.current, doc);
+    const yms = Object.keys(res.months);
+    if (!yms.length) {
+      if (res.kept) notify(`紐付けた売上行には既に別の日付が入っているため、売上登録表はそのままにしました（${res.kept}か所）`);
+      return;
+    }
+    salesLedgerRef.current = { ...salesLedgerRef.current, ...res.months };
+    setSalesLedger(salesLedgerRef.current);
+    for (const ym of yms) salesStore.set(ym, res.months[ym]).catch(e => console.error('売上登録表 保存エラー:', e));
+    notify(`売上登録表の ${res.filled}か所に請求書の送付日・入金日を入れました` + (res.kept ? `（既に別の日付が入っていた ${res.kept}か所はそのまま）` : ''), { type: 'success' });
+  };
   const saveDoc = (doc) => {
     const stamped = { ...doc, updatedAt: Date.now() };
     setDocs(prev => {
@@ -52,6 +96,7 @@ export default function BillingView({ customerMaster, tasks, now, colors, fontJP
       return exists ? prev.map(d => d.id === stamped.id ? stamped : d) : [stamped, ...prev];
     });
     billingStore.set(stamped.id, stamped).catch(e => console.error('帳票保存エラー:', e));
+    if (stamped.type === 'invoice') syncInvoiceToSales(stamped);
     return stamped;
   };
   const deleteDoc = async (id) => {
@@ -66,7 +111,7 @@ export default function BillingView({ customerMaster, tasks, now, colors, fontJP
   };
   const duplicateDoc = (doc) => {
     const copy = { ...JSON.parse(JSON.stringify(doc)), id: `doc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, no: doc.no + '-copy', createdAt: Date.now(), updatedAt: Date.now() };
-    if (copy.type === 'invoice') { copy.status = 'draft'; copy.sentDate = ''; copy.paidDate = ''; }
+    if (copy.type === 'invoice') { copy.status = 'draft'; copy.sentDate = ''; copy.paidDate = ''; copy.salesRowIds = []; }
     saveDoc(copy);
   };
   // 一覧から請求書ステータスを直接変更（送付/入金にした時は日付も自動記録）
@@ -88,6 +133,7 @@ export default function BillingView({ customerMaster, tasks, now, colors, fontJP
         initial={editing}
         customerMaster={customerMaster}
         tasks={tasks}
+        salesLedger={salesLedger}
         onSave={(d) => { saveDoc(d); }}
         onSaveClose={(d) => { saveDoc(d); setEditing(null); }}
         onClose={() => setEditing(null)}
@@ -129,12 +175,13 @@ export default function BillingView({ customerMaster, tasks, now, colors, fontJP
             title="帳票に印字される自社情報・振込先を編集"
             style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '8px 12px', background: showIssuer ? '#1a1a1a' : 'transparent', color: showIssuer ? '#fff' : '#1a1a1a', border: `1px solid ${showIssuer ? '#1a1a1a' : colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13 }}>
             <Building2 size={14} />自社情報・振込先
+            {issuerMissing && <span style={{ color: showIssuer ? '#ffb3a7' : '#c0392b', fontSize: 11, fontWeight: 700 }}>未設定あり</span>}
           </button>
         </div>
       </div>
 
       {showIssuer && (
-        <IssuerSettings issuer={issuer} onClose={() => setShowIssuer(false)} colors={colors} fontJP={fontJP} />
+        <IssuerSettings issuer={issuer || issuerFromDocs(docs)} onClose={() => setShowIssuer(false)} colors={colors} fontJP={fontJP} />
       )}
 
       {/* 入金待ちサマリー */}
@@ -231,9 +278,9 @@ function iconBtn(colors) {
 function IssuerSettings({ issuer, onClose, colors, fontJP }) {
   const { notify } = useApp();
   const [draft, setDraft] = useState(() => ({
-    estimate: { ...REBEG_ESTIMATE, ...(issuer?.estimate || {}) },
-    invoice: { ...REBEG_INVOICE, ...(issuer?.invoice || {}) },
-    bankLines: (issuer?.bankLines && issuer.bankLines.length) ? [...issuer.bankLines] : [...INVOICE_BANK_LINES],
+    estimate: { ...BLANK_ISSUER_SIDE, ...(issuer?.estimate || {}) },
+    invoice: { ...BLANK_ISSUER_SIDE, ...(issuer?.invoice || {}) },
+    bankLines: Array.isArray(issuer?.bankLines) ? [...issuer.bankLines] : [],
   }));
   const [saving, setSaving] = useState(false);
   const input = (props) => ({ padding: '6px 8px', border: `1px solid ${colors.border}`, borderRadius: 4, fontFamily: fontJP, fontSize: 12, width: '100%', boxSizing: 'border-box', background: '#fff', ...props });
@@ -271,7 +318,7 @@ function IssuerSettings({ issuer, onClose, colors, fontJP }) {
   return (
     <div style={{ border: `1px solid ${colors.border}`, borderRadius: 6, background: '#fbf9f4', padding: 14, marginBottom: 16 }}>
       <div style={{ fontSize: 11, color: colors.textMute, marginBottom: 10 }}>
-        帳票に印字される発行元（自社）情報と請求書の振込先。保存すると「これから新規作成する帳票」に反映されます（作成済みの帳票は各帳票の編集画面で直せます）。
+        帳票に印字される発行元（自社）情報と請求書の振込先。保存すると「これから新規作成する帳票」に反映されます（作成済みの帳票は各帳票の編集画面で直せます）。住所・振込先はここにだけ保存され、プログラム（公開しているソースコード）には含まれません。
       </div>
       <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
         {sideForm('estimate', '見積書・発注書用')}
@@ -279,6 +326,7 @@ function IssuerSettings({ issuer, onClose, colors, fontJP }) {
         <div style={{ flex: '1 1 240px', minWidth: 220 }}>
           <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>振込先（請求書・1行ずつ）</div>
           <textarea value={draft.bankLines.join('\n')} onChange={e => setDraft(d => ({ ...d, bankLines: e.target.value.split('\n') }))}
+            placeholder={'例）\n・○○銀行\n・○○支店（123）\n・口座番号（1234567）\n・口座名義（株式会社○○）'}
             style={input({ minHeight: 110, resize: 'vertical' })} />
         </div>
       </div>
@@ -291,7 +339,7 @@ function IssuerSettings({ issuer, onClose, colors, fontJP }) {
 }
 
 // ============ 編集 ============
-function BillingEditor({ initial, customerMaster, tasks, onSave, onSaveClose, onClose, onDelete, existing, colors, fontJP, fontDisplay }) {
+function BillingEditor({ initial, customerMaster, tasks, salesLedger, onSave, onSaveClose, onClose, onDelete, existing, colors, fontJP, fontDisplay }) {
   const { confirmDialog } = useApp();
   const [doc, setDoc] = useState(initial);
   const [tab, setTab] = useState('basic');
@@ -485,6 +533,7 @@ function BillingEditor({ initial, customerMaster, tasks, onSave, onSaveClose, on
                     <Col><label style={label}>送付日</label><input type="date" value={doc.sentDate || ''} onChange={e => upd({ sentDate: e.target.value })} style={input()} /></Col>
                     <Col><label style={label}>入金日</label><input type="date" value={doc.paidDate || ''} onChange={e => upd({ paidDate: e.target.value })} style={input()} /></Col>
                   </Row>
+                  <SalesLinkSection doc={doc} upd={upd} ledger={salesLedger} colors={colors} fontJP={fontJP} />
                 </>
               )}
 
@@ -529,9 +578,11 @@ function BillingEditor({ initial, customerMaster, tasks, onSave, onSaveClose, on
           {tab === 'angle' && isEstimate && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <div><label style={label}>アングル（外観）見出し補足</label><input value={doc.angles.exteriorLabel} onChange={e => upd({ angles: { ...doc.angles, exteriorLabel: e.target.value } })} style={input()} placeholder="例：外観-目線" /></div>
+              <AngleImageField label="アングル（外観）参考画像" field="exteriorImage" doc={doc} upd={upd} colors={colors} fontJP={fontJP} />
               <div><label style={label}>アングル（外観）内容メモ</label><textarea value={doc.angles.exterior} onChange={e => upd({ angles: { ...doc.angles, exterior: e.target.value } })} style={input({ minHeight: 90, resize: 'vertical' })} /></div>
+              <AngleImageField label="アングル（内観-目線）参考画像" field="interiorImage" doc={doc} upd={upd} colors={colors} fontJP={fontJP} />
               <div><label style={label}>アングル（内観-目線）内容メモ</label><textarea value={doc.angles.interior} onChange={e => upd({ angles: { ...doc.angles, interior: e.target.value } })} style={input({ minHeight: 90, resize: 'vertical' })} /></div>
-              <div style={{ fontSize: 11, color: colors.textMute }}>※ アングル参考画像の貼り付けは今後対応予定です。現状はテキストメモのみ。</div>
+              <div style={{ fontSize: 11, color: colors.textMute }}>参考画像は、枠をクリックして貼り付け（Ctrl+V）・ドラッグ＆ドロップ・「画像を選ぶ」のどれかで入れられます。保存のために自動で縮小します（外観・内観 各1枚）。</div>
             </div>
           )}
         </div>
@@ -545,6 +596,138 @@ function BillingEditor({ initial, customerMaster, tasks, onSave, onSaveClose, on
 
       {/* 印刷専用エリア（画面では非表示、印刷時のみ表示） */}
       <div id="kz-print-area"><BillingDocument doc={doc} /></div>
+    </div>
+  );
+}
+
+// ---- 見積書：アングルの参考画像（貼り付け・ドラッグ＆ドロップ・ファイル選択）----
+// 画像は縮小して帳票ドキュメントに保存するため、帳票全体が Firestore の上限（1MB）を超える場合は入れない
+function AngleImageField({ label, field, doc, upd, colors, fontJP }) {
+  const { notify } = useApp();
+  const fileRef = useRef(null);
+  const [busy, setBusy] = useState(false);
+  const [over, setOver] = useState(false);
+  const image = (doc.angles && doc.angles[field]) || '';
+  const setImage = (url) => upd({ angles: { ...doc.angles, [field]: url } });
+  const accept = async (file) => {
+    if (!file) return;
+    setBusy(true);
+    try {
+      const url = await downscaleImage(file);
+      const next = { ...doc, angles: { ...doc.angles, [field]: url } };
+      if (jsonBytes(next) > DOC_MAX_BYTES) { notify('画像を入れると帳票の保存容量の上限を超えます。もう一方の画像を外すか、小さい画像にしてください。', { type: 'error' }); return; }
+      setImage(url);
+    } catch (e) {
+      notify(e.message || '画像を取り込めませんでした', { type: 'error' });
+    } finally { setBusy(false); }
+  };
+  const fromItems = (items) => {
+    for (const it of (items || [])) if (it.kind === 'file' && /^image\//.test(it.type)) return it.getAsFile();
+    return null;
+  };
+  const remove = () => {
+    const prev = image;
+    setImage('');
+    notify('参考画像を外しました', { undo: () => upd({ angles: { ...doc.angles, [field]: prev } }) });
+  };
+  return (
+    <div>
+      <div style={{ fontSize: 11, color: colors.textMute, marginBottom: 3 }}>{label}</div>
+      <div tabIndex={0} role="button" aria-label={`${label}（クリックして貼り付け）`}
+        onPaste={(e) => { const f = fromItems(e.clipboardData && e.clipboardData.items); if (f) { e.preventDefault(); accept(f); } }}
+        onDragOver={(e) => { e.preventDefault(); setOver(true); }}
+        onDragLeave={() => setOver(false)}
+        onDrop={(e) => { e.preventDefault(); setOver(false); const f = (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) || null; accept(f); }}
+        style={{ border: `1px dashed ${over ? '#1a1a1a' : colors.border}`, borderRadius: 4, padding: 8, background: over ? '#f3f7f1' : '#fff', minHeight: 70, display: 'flex', alignItems: 'center', gap: 10, outline: 'none' }}>
+        {image
+          ? <img src={image} alt="" style={{ maxHeight: 140, maxWidth: '60%', objectFit: 'contain', border: `1px solid ${colors.border}` }} />
+          : <span style={{ fontSize: 12, color: colors.textMute, flex: 1 }}>{busy ? '縮小しています…' : 'ここをクリックして貼り付け（Ctrl+V）、または画像をドラッグ＆ドロップ'}</span>}
+        <div style={{ marginLeft: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <button type="button" onClick={() => fileRef.current && fileRef.current.click()} disabled={busy}
+            style={{ padding: '5px 10px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 11 }}>
+            {image ? '画像を差し替える' : '画像を選ぶ'}
+          </button>
+          {image && (
+            <button type="button" onClick={remove}
+              style={{ padding: '5px 10px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 11, color: '#c0392b' }}>
+              画像を外す
+            </button>
+          )}
+        </div>
+        <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }}
+          onChange={(e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; accept(f); }} />
+      </div>
+    </div>
+  );
+}
+
+// ---- 請求書：売上登録表の行との紐付け ----
+// 紐付けた行には、この請求書を「送付済み」「入金済み」にして保存したとき、送付日・入金日が入る（空の行だけ）。
+function SalesLinkSection({ doc, upd, ledger, colors, fontJP }) {
+  const ids = doc.salesRowIds || [];
+  const [open, setOpen] = useState(ids.length > 0); // 紐付け済みなら開いた状態で出す
+  const cands = useMemo(() => salesLinkCandidates(ledger, doc), [ledger, doc]);
+  const cmp = useMemo(() => compareLinkedTotal(ledger, doc), [ledger, doc]);
+  const toggle = (id) => upd({ salesRowIds: ids.includes(id) ? ids.filter(x => x !== id) : [...ids, id] });
+  const sameProject = cands.filter(c => c.sameProject && !c.linked);
+  const md = (d) => (/^\d{4}-\d{2}-\d{2}/.test(d || '') ? `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}` : '—');
+  const taxIncl = (c) => computeRow(c.row, { ...SALES_DEFAULT_SETTINGS, ...((ledger[c.ym] && ledger[c.ym].settings) || {}) }).taxIncl;
+  return (
+    <div style={{ border: `1px solid ${colors.border}`, borderRadius: 5, background: '#fbf9f4' }}>
+      <button type="button" onClick={() => setOpen(o => !o)}
+        style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 6, padding: '8px 10px', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: fontJP, fontSize: 12, fontWeight: 600, color: colors.text, textAlign: 'left' }}>
+        <Link2 size={14} />売上登録表と紐付け（{ids.length}行）
+        {cmp.mismatch && <span style={{ fontSize: 11, fontWeight: 600, color: '#c0392b' }}>● 金額が一致しません</span>}
+        <span style={{ marginLeft: 'auto', display: 'flex' }}>{open ? <ChevronUp size={15} /> : <ChevronDown size={15} />}</span>
+      </button>
+      {open && (
+        <div style={{ padding: '0 10px 10px' }}>
+          <div style={{ fontSize: 11, color: colors.textMute, marginBottom: 8, lineHeight: 1.6 }}>
+            チェックした売上行には、この請求書を「送付済み」「入金済み」にして保存したとき、請求書送付日・入金確認日が入ります（日付が空の行だけ。売上登録表の日付を書き換えることはありません）。
+            候補は、宛先の会社（発行月の前後1か月）と、件名と同じ案件名の行です。
+          </div>
+          {sameProject.length > 0 && (
+            <button type="button" onClick={() => upd({ salesRowIds: [...ids, ...sameProject.map(c => c.row.id)] })}
+              style={{ marginBottom: 8, padding: '5px 10px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 11 }}>
+              件名と同じ案件の行をまとめて選ぶ（{sameProject.length}行）
+            </button>
+          )}
+          {cands.length === 0 ? (
+            <div style={{ fontSize: 12, color: colors.textMute, padding: '6px 0' }}>候補の売上行がありません。宛先の会社名・発行日・件名を確認してください。</div>
+          ) : (
+            <div style={{ maxHeight: 260, overflowY: 'auto', border: `1px solid ${colors.border}`, borderRadius: 4, background: '#fff' }}>
+              {cands.map((c, i) => (
+                <label key={c.row.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 9px', borderTop: i ? `1px solid ${colors.border}` : 'none', cursor: 'pointer', fontSize: 12 }}>
+                  <input type="checkbox" checked={ids.includes(c.row.id)} onChange={() => toggle(c.row.id)} />
+                  <span style={{ flex: 'none', fontSize: 11, color: colors.textMute, width: 84 }}>{monthLabel(c.ym)}</span>
+                  <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {c.row.projectName || '（案件名なし）'}{c.row.prodName ? ` ／ ${c.row.prodName}` : ''}
+                    <span style={{ color: colors.textMute, fontSize: 11 }}>{c.row.company ? `　${c.row.company}` : ''}</span>
+                  </span>
+                  <span style={{ flex: 'none', fontSize: 11, color: colors.textMute }}>送付 {md(c.row.invoiceSentDate)}・入金 {md(c.row.paymentConfirmedDate)}</span>
+                  <span style={{ flex: 'none', fontWeight: 600, width: 88, textAlign: 'right' }}>{formatYen(taxIncl(c))}</span>
+                </label>
+              ))}
+            </div>
+          )}
+          {cmp.count > 0 && (
+            <div style={{ marginTop: 8, fontSize: 12, display: 'flex', gap: 12, flexWrap: 'wrap', color: cmp.mismatch ? '#c0392b' : colors.textMute }}>
+              <span>紐付けた売上行の税込合計 {formatYen(cmp.salesTotal)}</span>
+              <span>請求書の合計 {formatYen(cmp.invoiceTotal)}</span>
+              {cmp.mismatch && <span style={{ fontWeight: 600 }}>一致しません（保存はできます）</span>}
+            </div>
+          )}
+          {cmp.missing > 0 && (
+            <div style={{ marginTop: 6, fontSize: 11, color: '#c0392b' }}>
+              紐付け先の売上行が {cmp.missing}行 見つかりません（売上登録表から削除された可能性があります）。
+              <button type="button" onClick={() => { const alive = new Set(cands.map(c => c.row.id)); upd({ salesRowIds: ids.filter(id => alive.has(id)) }); }}
+                style={{ marginLeft: 6, padding: '2px 8px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 11 }}>
+                紐付けから外す
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -658,10 +841,28 @@ function ConditionsEditor({ doc, upd, input, colors }) {
 }
 
 // ---- 工程予定表 編集 ----
+// 列（工程）ごとに 作業項目名・お客様/当社・日付・完了予定時間 を編集。列の追加・削除・並べ替え、既定の7工程に戻すこともできる。
+const SCHEDULE_MAX_COLS = 10;
 function ScheduleEditor({ doc, upd, input, label, colors }) {
+  const { confirmDialog } = useApp();
   const s = doc.schedule || {};
+  const cols = s.columns || [];
   const setS = (patch) => upd({ schedule: { ...s, ...patch } });
-  const setCol = (i, patch) => setS({ columns: s.columns.map((c, ci) => ci === i ? { ...c, ...patch } : c) });
+  const setCol = (i, patch) => setS({ columns: cols.map((c, ci) => ci === i ? { ...c, ...patch } : c) });
+  const addCol = () => { if (cols.length < SCHEDULE_MAX_COLS) setS({ columns: [...cols, { label: '新しい工程', party: 'us', date: '', times: {} }] }); };
+  const removeCol = (i) => { if (cols.length > 1) setS({ columns: cols.filter((_, ci) => ci !== i) }); };
+  const moveCol = (i, d) => {
+    const j = i + d;
+    if (j < 0 || j >= cols.length) return;
+    const next = cols.slice();
+    [next[i], next[j]] = [next[j], next[i]];
+    setS({ columns: next });
+  };
+  const resetCols = async () => {
+    if (!(await confirmDialog({ title: '既定の7工程に戻す', message: '工程の列を既定の7工程に戻します。入力した日付・完了予定時間もクリアされます。よろしいですか？', confirmLabel: '戻す' }))) return;
+    setS({ columns: SCHEDULE_PROCESS_COLUMNS.map(c => ({ label: c.label, party: c.party, date: '', times: {} })) });
+  };
+  const miniBtn = { padding: '1px 5px', fontSize: 10, lineHeight: '14px', background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 3, cursor: 'pointer', color: colors.textMute };
   const toggleTime = (i, tr) => {
     const c = s.columns[i];
     const times = { ...(c.times || {}) };
@@ -680,16 +881,29 @@ function ScheduleEditor({ doc, upd, input, label, colors }) {
       </Row>
       <div><label style={label}>特記事項</label><input value={s.special} onChange={e => setS({ special: e.target.value })} style={input()} /></div>
 
-      <div style={{ fontSize: 12, fontWeight: 700, marginTop: 6 }}>工程（各列の日付・完了予定時間）</div>
+      <div style={{ fontSize: 12, fontWeight: 700, marginTop: 6 }}>工程（各列の作業項目・日付・完了予定時間）</div>
+      <div style={{ fontSize: 11, color: colors.textMute, marginTop: -6 }}>作業項目名は書き換えられます（例：ホワイトパース提出）。「お客様／当社」で印字の色が変わります。</div>
       <div style={{ overflowX: 'auto' }}>
         <table style={{ borderCollapse: 'collapse', fontSize: 10 }}>
           <thead>
             <tr>
-              <th style={{ border: `1px solid ${colors.border}`, padding: 4, position: 'sticky', left: 0, background: '#f7f6f2' }}>時間＼工程</th>
-              {(s.columns || []).map((c, i) => (
-                <th key={i} style={{ border: `1px solid ${colors.border}`, padding: 4, minWidth: 90 }}>
-                  <div style={{ fontSize: 9, marginBottom: 3 }}>{c.label}</div>
+              <th style={{ border: `1px solid ${colors.border}`, padding: 4, position: 'sticky', left: 0, zIndex: 1, background: '#f7f6f2', whiteSpace: 'nowrap' }}>時間＼工程</th>
+              {cols.map((c, i) => (
+                <th key={i} style={{ border: `1px solid ${colors.border}`, padding: 4, minWidth: 110, verticalAlign: 'top', background: c.party === 'client' ? '#eef4fb' : '#f3f7f1' }}>
+                  <select value={c.party === 'client' ? 'client' : 'us'} onChange={e => setCol(i, { party: e.target.value })}
+                    title="この工程を行う側（印字の色が変わります）"
+                    style={{ width: '100%', fontSize: 10, border: `1px solid ${colors.border}`, borderRadius: 3, padding: 1, marginBottom: 3, background: '#fff' }}>
+                    <option value="client">お客様</option>
+                    <option value="us">当社</option>
+                  </select>
+                  <textarea value={c.label || ''} onChange={e => setCol(i, { label: e.target.value })} rows={2} aria-label={`工程${i + 1}の作業項目名`}
+                    style={{ width: '100%', boxSizing: 'border-box', fontSize: 10, fontWeight: 600, border: `1px solid ${colors.border}`, borderRadius: 3, padding: 2, resize: 'vertical', fontFamily: 'inherit', marginBottom: 3 }} />
                   <input type="date" value={c.date || ''} onChange={e => setCol(i, { date: e.target.value })} style={{ width: '100%', fontSize: 9, border: `1px solid ${colors.border}`, borderRadius: 3, padding: 2 }} />
+                  <div style={{ display: 'flex', gap: 3, marginTop: 3, justifyContent: 'center' }}>
+                    <button type="button" onClick={() => moveCol(i, -1)} disabled={i === 0} title="左へ" style={{ ...miniBtn, opacity: i === 0 ? 0.4 : 1 }}>◀</button>
+                    <button type="button" onClick={() => moveCol(i, 1)} disabled={i === cols.length - 1} title="右へ" style={{ ...miniBtn, opacity: i === cols.length - 1 ? 0.4 : 1 }}>▶</button>
+                    <button type="button" onClick={() => removeCol(i)} disabled={cols.length <= 1} title="この工程を削除" style={{ ...miniBtn, color: '#c0392b', opacity: cols.length <= 1 ? 0.4 : 1 }}>×</button>
+                  </div>
                 </th>
               ))}
             </tr>
@@ -698,7 +912,7 @@ function ScheduleEditor({ doc, upd, input, label, colors }) {
             {SCHEDULE_TIME_ROWS.map(tr => (
               <tr key={tr}>
                 <td style={{ border: `1px solid ${colors.border}`, padding: '2px 6px', textAlign: 'right', position: 'sticky', left: 0, background: '#faf9f5' }}>{tr}</td>
-                {(s.columns || []).map((c, i) => (
+                {cols.map((c, i) => (
                   <td key={i} style={{ border: `1px solid ${colors.border}`, textAlign: 'center', padding: 2 }}>
                     <input type="checkbox" checked={!!(c.times || {})[tr]} onChange={() => toggleTime(i, tr)} />
                   </td>
@@ -707,6 +921,16 @@ function ScheduleEditor({ doc, upd, input, label, colors }) {
             ))}
           </tbody>
         </table>
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <button type="button" onClick={addCol} disabled={cols.length >= SCHEDULE_MAX_COLS}
+          style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 12px', background: 'transparent', border: `1px dashed ${colors.border}`, borderRadius: 4, cursor: cols.length >= SCHEDULE_MAX_COLS ? 'default' : 'pointer', fontSize: 12, opacity: cols.length >= SCHEDULE_MAX_COLS ? 0.5 : 1 }}>
+          <Plus size={13} />工程の列を追加{cols.length >= SCHEDULE_MAX_COLS ? `（最大${SCHEDULE_MAX_COLS}列）` : ''}
+        </button>
+        <button type="button" onClick={resetCols}
+          style={{ padding: '6px 12px', background: 'transparent', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontSize: 12, color: colors.textMute }}>
+          既定の7工程に戻す
+        </button>
       </div>
       <div><label style={label}>備考</label><textarea value={s.note} onChange={e => setS({ note: e.target.value })} style={input({ minHeight: 40, resize: 'vertical' })} /></div>
       <div><label style={label}>特殊規定</label><textarea value={s.specialRule} onChange={e => setS({ specialRule: e.target.value })} style={input({ minHeight: 40, resize: 'vertical' })} /></div>

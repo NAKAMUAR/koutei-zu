@@ -11,7 +11,10 @@
     "prebuild": "npm run check && npm run build:line",
     "build": "vite build",
     "preview": "vite preview",
-    "deploy": "npm run build && gh-pages -d dist"
+    "deploy": "npm run build && gh-pages -d dist",
+    "test": "node sync/test/logic.test.mjs && node sync/test/setup.test.mjs && node test/salesLink.test.mjs && node test/assigneeHours.test.mjs && node test/issuer.test.mjs",
+    "gas:login": "npx --yes @google/clasp login",
+    "gas:push": "npx --yes @google/clasp push --force"
   },
   "dependencies": {
     "firebase": "^10.13.0",

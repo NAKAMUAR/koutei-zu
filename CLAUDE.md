@@ -16,6 +16,10 @@
 
 > デプロイ（gh-pages）と main への push は**必ずセット**。デプロイだけしてソース（main）への push を忘れると、GitHub のソースが古いまま乖離する（過去に発生済み）。
 
+## 公開リポジトリの注意
+
+- このリポジトリは公開（GitHub Pages を無料で使うため）。**住所・振込先・口座番号などはコードに書かない**。帳票の発行元・振込先はアプリの「自社情報・振込先」（`data/billingIssuer`）にだけ保存する。
+
 ## UI・コード品質ルール（重要）
 
 **UI・画面・操作・コード構造に関わる変更をする前に、必ず `docs/07_UI設計原則.md` を読むこと。**
@@ -72,13 +76,18 @@ line-bot/            # LINE Bot（Google Apps Script で動く。設定手順は
   - 帳票・売上の旧1ドキュメント集中保存（`billingDocuments` / `salesLedger`）は起動時に自動移行され、旧データは `*_backup` キーへ退避される
 - ホスティング: GitHub Pages（`gh-pages` で `dist/` を公開）
 - Firestore ルール（`firestore.rules`）: オーナー（ルール内に直書き）＋ `data/allowedEmails` の emails 配列に載っているメンバーのみ読み書き可。メンバーはアプリの設定パネル（メンバー管理）で編集（リストの書き換えはオーナーのみ）。**ルールを変更したら Firebase コンソールへ手動デプロイが必要。**
-- `sync/Code.gs` の `AIza...` は公開前提の Firebase Web API キー（秘密情報ではない）。本物の秘密（service-account 等）は `.gitignore` 済み。
+- スプレッドシート連携（`sync/`）: エンジニアが書く「工程図 エンジニア入力シート」の『入力シート』タブ（会社コード・案件番号・社外案件名・サーバーリンク・新規or修正・視点・パターン・White/Color/pts・メモ。見出し・プルダウン・『記入ルール/説明』は日本語／ベトナム語の併記）→ 管理者だけが見る別ファイル「工程図連携」シート（転記した日を「入力日」に記録。案件マスタ・会社マスタ・視点マスタで自動判定、人が補正）→ 工程図、という2段階。30分ごとのトリガー（`autoRun`）で転記し、自動判定がすべてできた「未送信」の行は25分待ってから自動登録（「要確認」「更新あり」は人が「工程図へ」にチェックしたら登録）。会社マスタにあって工程図の顧客マスタ（`data/customerMaster`）に無い会社は自動で追加する。`sync/Code.gs`（Apps Script）と `sync/appsscript.json` を「工程図連携」シートに貼り付けて使う。手順・仕様は `docs/08_スプレッドシート連携.md`。
+  - 工程図への書き込みは Firestore REST API。認証は実行アカウント（Firebase オーナー）の OAuth トークン、または サービスアカウント鍵（スクリプトプロパティに保存。**鍵ファイルはリポジトリに入れない**、`.gitignore` 済み）。Firestore ルールはこの経路に適用されないので、ルール変更は不要。
+  - 同期で作るタスクは `externalId`（`案件コード::視点名(パターン込み)::n回目::ステップ種類`）を持ち、`stepRoundType`（新規→initial・追加→add・修正/変更→fix）と `viewpointNameExternal`（外観視点①_パターンA）を自動で入れる。アプリ側で削除すると `data/deletedExternalIds` に記録され、再送信しても復活しない（App.jsx の既存挙動）。
+  - テスト: `node sync/test/logic.test.mjs`（判定・レコード生成の純ロジック）と `node sync/test/setup.test.mjs`（偽のシート環境で「かんたん初期設定」と転記を通す。Apps Script は手元で動かせないため、シートの大きさの上限も再現している）
+  - Apps Script への反映は貼り付けのほか、`npm run gas:push`（clasp。`.claspignore` で Code.gs と appsscript.json だけ送る）でもできる。初回は `.clasp.json.example` を `.clasp.json` にしてスクリプトIDを入れ、`npm run gas:login`（手順は docs/08 の 2-9）。**`.clasp.json`・`.clasprc.json` はリポジトリに入れない**（`.gitignore` 済み）。
 
 ## 確認のしかた
 
 - `npm run check`（ESLint）→ `npm run build` の順で必ず通す（build が check を自動実行する）。
 - UIに触れた場合は `npm run preview` でログイン画面が描画されることを最低限確認する（モジュールレベルのクラッシュ検出）。
 - スケジューラ等の純粋ロジックは `src/lib/` に分離済みなので、node スクリプトから直接 import して検証できる。
+- `npm test` で sync のテストとアプリの純ロジックのテスト（`test/salesLink.test.mjs`：請求書⇄売上の紐付け、`test/assigneeHours.test.mjs`：担当者ごとの稼働時間とスケジュール配置、`test/issuer.test.mjs`：帳票の発行元・振込先の引き継ぎ）をまとめて実行する。関係する箇所を触ったら必ず通す。
 - 大きな改修は機能ごとに `npm run build` を挟みながら進める。
 
 ## 主要コマンド
@@ -89,6 +98,7 @@ npm run check    # ESLint（UI設計原則の機械チェック。line-bot/ も�
 npm run build:line # LINE Bot の line-bot/dist/Code.gs を生成（build 時に自動実行）
 npm run build    # 本番ビルド（check を自動実行。デプロイ前に必ず）
 npm run deploy   # ビルド→gh-pages公開
+npm test         # sync とアプリの純ロジックのテスト
 # 仕上げに必ず:
 git add -A && git commit -m "..." && git push origin main
 ```

@@ -6,5 +6,8 @@ dist
 *.log
 service-account.json
 *-firebase-adminsdk-*.json
+# clasp（Apps Script へのコマンド反映）：スクリプトID・ログイン情報はリポジトリに入れない
+.clasp.json
+.clasprc.json
 # LINE Bot の GAS 貼り付け用ファイルはコミットする
 !line-bot/dist/
