@@ -66,7 +66,9 @@ line-bot/            # LINE Bot（Google Apps Script で動く。設定手順は
 
 - `npm run build` の prebuild で `dist/Code.gs` が自動再生成される。**src/lib・src/viewpoint/viewpointUtils.js を変えると Code.gs も変わる**ので一緒にコミットする。
 - 上記3ファイルは GAS でも動かすため、**ブラウザ専用の API（window・document 等）や他ファイルへの import を足さない**こと（足す場合は build.mjs の LIB_FILES も更新）。
-- Code.gs の変更を Bot に反映するには、ユーザーが GAS エディタへ貼り直して「デプロイを管理」から新バージョンを出す必要がある（README 参照）。変更したらユーザーにその旨を伝える。
+- Code.gs の変更を Bot に反映するには、ユーザーが GAS エディタへ貼り直して「デプロイを管理」から新バージョンを出す必要がある（README 参照）。変更したらユーザーにその旨を伝える。`appsscript.json` の権限（oauthScopes）を増やしたときは、GAS エディタで関数を1回実行して再承認してもらう必要もある。
+- 定時報告（`sendScheduledReport`・時刻トリガー）は LINE のプッシュ送信＝**無料枠（月200通・送り先の人数ぶん数える）を消費する**。返信（Reply API）は無料。送信前に残り通数を確かめる処理を外さないこと。
+- テスト: `node line-bot/test/bot.test.mjs`（LINE・Firestore・GAS の偽物の上で Code.gs を動かす。`npm test` に含まれる）
 
 ## 技術スタック
 

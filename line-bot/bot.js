@@ -5,6 +5,9 @@
 //   LINE_CHANNEL_ACCESS_TOKEN … LINE Developers で発行したチャネルアクセストークン（長期）
 //   REGISTER_CODE             … トーク/グループを登録するための合言葉
 //   ALLOWED_IDS               … 登録済みのトーク/グループID（Bot が自動で書き込む）
+//   REPORT_TARGETS            … 定時報告を送るトーク/グループID（「定時報告オン」で Bot が書き込む）
+//   REPORT_HOURS              … 定時報告の時刻（例 "8" や "8,17"。「定時報告時刻 8」で Bot が書き込む）
+//   REPORT_ON_HOLIDAYS        … "true" なら休業日（日曜・祝日・休みの土曜）も報告する（既定は送らない）
 
 var BOT_CONFIG = {
   PROJECT_ID: 'koutei-zu',
@@ -13,6 +16,8 @@ var BOT_CONFIG = {
   MAX_MESSAGES: 5,     // LINE の1回の返信で送れる吹き出しの上限
   MAX_CHARS: 4800,     // 吹き出し1つの文字数上限（LINE の上限 5000 に余裕を持たせる）
   MAX_REGISTER_FAILS: 5, // 合言葉の失敗がこの回数を超えたら1時間受け付けない
+  DEFAULT_REPORT_HOURS: '8',
+  REPORT_LIST_MAX: 15,   // 定時報告の各項目に並べる最大件数（超えた分は「他N件」）
 };
 
 // ============ 受信口（LINE の Webhook） ============
@@ -42,7 +47,9 @@ function handleEvent_(ev) {
   var compact = text.replace(/\s+/g, '');
   if (compact === '登録解除') {
     if (isAllowed_(sourceId)) removeAllowedId_(sourceId);
-    reply_(token, ['このトークの登録を解除しました。']);
+    setReportTarget_(sourceId, false);
+    if (getReportTargets_().length === 0) removeReportTriggers_();
+    reply_(token, ['このトークの登録を解除しました（定時報告も止めました）。']);
     return;
   }
   var reg = text.match(/^登録[\s:：]*(.+)$/);
@@ -55,10 +62,20 @@ function handleEvent_(ev) {
     return;
   }
   if (cmd.type === 'help') { reply_(token, [helpText_()]); return; }
+  if (cmd.type === 'reportOn' || cmd.type === 'reportOff' || cmd.type === 'reportStatus' || cmd.type === 'reportHours') {
+    var msg;
+    try { msg = handleReportSetting_(cmd, sourceId); } catch (err) {
+      console.error('定時報告の設定エラー:', err && err.stack ? err.stack : err);
+      msg = '定時報告の設定に失敗しました。\n（管理者向け: ' + String(err && err.message || err).slice(0, 200) + '）';
+    }
+    reply_(token, [msg]);
+    return;
+  }
 
   var out;
   try {
-    out = buildReply_(cmd, loadData_(), new Date());
+    var now = new Date();
+    out = buildReply_(cmd, loadData_(cmd.type === 'report' ? { doneSince: doneFetchSince_(now) } : {}), now);
   } catch (err) {
     console.error('データ取得エラー:', err && err.stack ? err.stack : err);
     out = 'データの取得に失敗しました。時間をおいてもう一度お試しください。\n（管理者向け: ' + String(err && err.message || err).slice(0, 200) + '）';
@@ -82,6 +99,12 @@ function parseCommand_(raw) {
   if (/^来週の?納期$/.test(c)) return { type: 'deadline', range: 'nextWeek' };
   if (/^(全体の?納期|納期一覧)$/.test(c)) return { type: 'deadline', range: 'all' };
   if (/^(案件一覧|進行中案件|案件リスト)$/.test(c)) return { type: 'projects' };
+  if (/^(進捗報告|進捗|日報)$/.test(c)) return { type: 'report' };
+  if (/^定時報告(オン|on|開始|する)$/i.test(c)) return { type: 'reportOn' };
+  if (/^定時報告(オフ|off|停止|しない)$/i.test(c)) return { type: 'reportOff' };
+  if (/^定時報告(の状態|状態|確認)?$/.test(c)) return { type: 'reportStatus' };
+  var h = c.match(/^定時報告(?:の)?時刻(.*)$/);
+  if (h) return { type: 'reportHours', hours: h[1] };
   var m = t.match(/^(本日|今日|きょう|明日|あした)?の?\s*スケジュール(.*)$/);
   if (m) {
     return {
@@ -107,7 +130,14 @@ function helpText_() {
     '・スケジュール … 今日の担当者別の予定',
     '・明日のスケジュール',
     '・スケジュール 山田 … 担当者で絞り込み',
+    '・進捗報告 … 定時報告と同じ内容を今すぐ表示',
     '・ヘルプ … この案内',
+    '',
+    '【定時報告（毎日決まった時刻に自動で送信）】',
+    '・定時報告オン … このトークに送る',
+    '・定時報告オフ … 止める',
+    '・定時報告時刻 8 … 送る時刻（8,17 のように複数可）',
+    '・定時報告 … 設定と今月の残り送信数を確認',
     '',
     '※「完了見込み」はアプリと同じ計算による予定です。',
   ].join('\n');
@@ -160,7 +190,9 @@ function handleRegister_(token, sourceId, code) {
 }
 
 // ============ Firestore からの読み込み ============
-function loadData_() {
+// opts.doneSince（ms）を渡すと、その時刻以降に完了したタスクも読む（定時報告の「完了」欄用）
+function loadData_(opts) {
+  opts = opts || {};
   var L = KouteiLib;
   var docsRoot = 'projects/' + BOT_CONFIG.PROJECT_ID + '/databases/' + BOT_CONFIG.DATABASE_ID + '/documents';
   var wsPath = docsRoot + '/workspaces/' + BOT_CONFIG.WORKSPACE_ID;
@@ -174,7 +206,7 @@ function loadData_() {
     muteHttpExceptions: true,
   };
   // 完了（done）のタスクはスケジュール計算に影響しないため、未完了だけを読む（読み取り件数の節約）
-  var res = UrlFetchApp.fetchAll([
+  var requests = [
     Object.assign({ url: api + wsPath + ':runQuery' }, base, {
       payload: JSON.stringify({
         structuredQuery: {
@@ -186,7 +218,19 @@ function loadData_() {
     Object.assign({ url: api + docsRoot + ':batchGet' }, base, {
       payload: JSON.stringify({ documents: keys.map(function (k) { return wsPath + '/data/' + k; }) }),
     }),
-  ]);
+  ];
+  if (opts.doneSince) {
+    // completedAt だけの範囲条件にする（status との組み合わせは複合インデックスが要るため、状態はここで絞る）
+    requests.push(Object.assign({ url: api + wsPath + ':runQuery' }, base, {
+      payload: JSON.stringify({
+        structuredQuery: {
+          from: [{ collectionId: 'tasks' }],
+          where: { fieldFilter: { field: { fieldPath: 'completedAt' }, op: 'GREATER_THAN_OR_EQUAL', value: { integerValue: String(opts.doneSince) } } },
+        },
+      }),
+    }));
+  }
+  var res = UrlFetchApp.fetchAll(requests);
   res.forEach(function (r) {
     if (r.getResponseCode() !== 200) {
       throw new Error('Firestore ' + r.getResponseCode() + ': ' + r.getContentText().slice(0, 300));
@@ -214,11 +258,18 @@ function loadData_() {
   var projectOrder = parseArr('projectOrder');
   var now = new Date();
   var scheduled = L.scheduleTasks(tasks, settings, projectOrder, now);
+  // 最近の完了：中止（cancelled）と請求専用の作業時間0のステップは「作業の完了」に数えない
+  var recentDone = !opts.doneSince ? [] : JSON.parse(res[2].getContentText())
+    .filter(function (r) { return r.document; })
+    .map(function (r) { return fromFields_(r.document.fields || {}); })
+    .filter(function (t) { return t.status === 'done' && !t.cancelled && (Number(t.hours) || 0) > 0; });
   return {
     settings: settings,
     scheduled: scheduled,
     projectOrder: projectOrder,
     assigneeOrder: parseArr('employeeMaster').map(function (e) { return e && e.name; }).filter(Boolean),
+    recentDone: recentDone,
+    doneSince: opts.doneSince || null,
   };
 }
 
@@ -250,6 +301,7 @@ function buildReply_(cmd, data, now) {
   if (cmd.type === 'deadline') return buildDeadlineReply_(cmd.range, data, now);
   if (cmd.type === 'projects') return buildProjectsReply_(data);
   if (cmd.type === 'schedule') return buildScheduleReply_(cmd, data, now);
+  if (cmd.type === 'report') return buildProgressReport_(data, now);
   return helpText_();
 }
 
@@ -503,10 +555,302 @@ function splitMessages_(text) {
   return chunks.length ? chunks : ['（表示する内容がありません）'];
 }
 
+// ============ 進捗報告（定時報告・「進捗報告」コマンド共通の本文） ============
+// 前営業日の0時（ms）。休業日（日曜・祝日・休みの土曜）はさかのぼって飛ばす
+function previousWorkdayStart_(now) {
+  var L = KouteiLib;
+  var d = L.addDays(L.startOfDay(now), -1);
+  for (var i = 0; i < 30 && L.isNonWorkingDay(d); i++) d = L.addDays(d, -1);
+  return d.getTime();
+}
+// 完了タスクの読み込み範囲。祝日の判定はデータ読み込み後にしかできないため、
+// テト休み＋週末も覆えるよう広めに読み、本文を作るときに前営業日以降へ絞る
+function doneFetchSince_(now) {
+  return KouteiLib.addDays(KouteiLib.startOfDay(now), -14).getTime();
+}
+
+function shortVp_(v) {
+  var s = (v.projectName || v.projectNameInternal || '（案件名なし）') + ' ' + (v.viewpointName || '');
+  return v.assignees && v.assignees.length ? s + '（' + v.assignees.join('・') + '）' : s;
+}
+
+function reportSection_(lines, title, list, fmt) {
+  var max = BOT_CONFIG.REPORT_LIST_MAX;
+  lines.push('');
+  lines.push(title + '（' + list.length + '件）');
+  if (list.length === 0) { lines.push(' なし'); return; }
+  list.slice(0, max).forEach(function (x) { lines.push(' ・' + fmt(x)); });
+  if (list.length > max) lines.push(' 他' + (list.length - max) + '件');
+}
+
+function buildProgressReport_(data, now) {
+  var L = KouteiLib;
+  var today = L.startOfDay(now);
+  var todayYmd = L.fmtYMD(today);
+  var tomorrowYmd = L.fmtYMD(L.addDays(today, 1));
+  var projIdx = projectIndexer_(data);
+  var vps = viewpointsOf_(data.scheduled.active).sort(function (a, b) {
+    return (a.deadline || '9999').localeCompare(b.deadline || '9999')
+      || (projIdx(a.projectName) - projIdx(b.projectName))
+      || a.viewpointName.localeCompare(b.viewpointName, 'ja', { numeric: true });
+  });
+  var endYmd = function (v) { return v.endTs == null ? '' : L.fmtYMD(new Date(v.endTs)); };
+  var isLate = function (v) { return !!(v.deadline && endYmd(v) && endYmd(v) > v.deadline); };
+  var projectCount = new Set(vps.map(function (v) { return v.projectName; })).size;
+
+  var lines = [
+    '【工程図 進捗報告】' + mdw_(todayYmd) + ' ' + L.minToTime(now.getHours() * 60 + now.getMinutes()) + '時点',
+    '進行中 ' + projectCount + '案件・視点' + vps.length,
+  ];
+  reportSection_(lines, '■ 本日納期', vps.filter(function (v) { return v.deadline === todayYmd; }), function (v) {
+    return shortVp_(v) + ' 見込み ' + (v.endTs == null ? '未定' : tsLabel_(v.endTs)) + (isLate(v) ? ' ※遅れ見込み' : '');
+  });
+  reportSection_(lines, '■ 納期超過（未完了）', vps.filter(function (v) { return v.deadline && v.deadline < todayYmd; }), function (v) {
+    return shortVp_(v) + ' 納期' + mdw_(v.deadline);
+  });
+  reportSection_(lines, '■ 納期に遅れる見込み', vps.filter(function (v) { return v.deadline > todayYmd && isLate(v); }), function (v) {
+    return shortVp_(v) + ' 納期' + mdw_(v.deadline) + '→見込み' + mdw_(endYmd(v));
+  });
+  reportSection_(lines, '■ 明日納期', vps.filter(function (v) { return v.deadline === tomorrowYmd; }), function (v) {
+    return shortVp_(v) + (isLate(v) ? ' ※遅れ見込み' : '');
+  });
+
+  // 前営業日以降の完了（ステップを案件×視点にまとめる）
+  var since = previousWorkdayStart_(now);
+  var activeKeys = new Set(vps.map(function (v) { return v.projectName + '::' + v.viewpointName; }));
+  var doneMap = new Map();
+  (data.recentDone || []).filter(function (t) { return Number(t.completedAt) >= since; })
+    .sort(function (a, b) { return (a.completedAt - b.completedAt) || ((a.stepOrder || 0) - (b.stepOrder || 0)); })
+    .forEach(function (t) {
+      var key = (t.projectName || '') + '::' + (t.viewpointName || '');
+      var g = doneMap.get(key);
+      if (!g) {
+        g = { projectName: t.projectName, projectNameInternal: t.projectNameInternal, viewpointName: t.viewpointName, assignees: [], steps: [] };
+        doneMap.set(key, g);
+      }
+      if (t.assignee && g.assignees.indexOf(t.assignee) < 0) g.assignees.push(t.assignee);
+      if (t.stepName && g.steps.indexOf(t.stepName) < 0) g.steps.push(t.stepName);
+      g.finished = !activeKeys.has(key);
+    });
+  reportSection_(lines, '■ ' + mdw_(L.fmtYMD(new Date(since))) + '以降の完了', Array.from(doneMap.values()), function (g) {
+    return shortVp_(g) + (g.steps.length ? ' ' + g.steps.join('・') : '') + (g.finished ? ' →視点完了' : '');
+  });
+
+  // 本日の担当者別の予定（概要）
+  var plan = new Map();
+  data.scheduled.active.forEach(function (t) {
+    (t.slots || []).forEach(function (s) {
+      if (L.fmtYMD(s.date) !== todayYmd) return;
+      var a = t.assignee || '未割当';
+      if (!plan.has(a)) plan.set(a, { min: 0, first: Infinity, items: [] });
+      var p = plan.get(a);
+      p.min += s.endMin - s.startMin;
+      var label = (t.projectName || t.projectNameInternal || '') + ' ' + (t.viewpointName || '');
+      var item = p.items.find(function (x) { return x.label === label; });
+      if (!item) p.items.push({ label: label, start: s.startMin });
+      else if (s.startMin < item.start) item.start = s.startMin;
+    });
+  });
+  var names = L.sortAssigneesByMaster(Array.from(plan.keys()), data.assigneeOrder);
+  lines.push('');
+  lines.push('■ 本日の予定（担当者別）');
+  if (names.length === 0) lines.push(L.isNonWorkingDay(today) ? ' 本日は休業日です' : ' 予定なし');
+  names.forEach(function (n) {
+    var p = plan.get(n);
+    var items = p.items.sort(function (a, b) { return a.start - b.start; }).map(function (x) { return x.label; });
+    var shown = items.slice(0, 4).join(' → ') + (items.length > 4 ? ' 他' + (items.length - 4) + '件' : '');
+    lines.push(' ・' + n + ' ' + (p.min / 60).toFixed(1) + 'h：' + shown);
+  });
+
+  lines.push('');
+  lines.push('詳しくは「本日納期」「スケジュール」などと送ると確認できます。');
+  return lines.join('\n');
+}
+
+// ============ 定時報告の設定（送り先・時刻・トリガー） ============
+var REPORT_HANDLER = 'sendScheduledReport';
+
+function getReportTargets_() {
+  try { return JSON.parse(props_().getProperty('REPORT_TARGETS') || '[]'); } catch (e) { return []; }
+}
+function setReportTarget_(id, on) {
+  if (!id) return;
+  withLock_(function () {
+    var ids = getReportTargets_().filter(function (x) { return x !== id; });
+    if (on) ids.push(id);
+    props_().setProperty('REPORT_TARGETS', JSON.stringify(ids));
+  });
+}
+// "8" / "8,17" / "8時、17時" → [8, 17]。不正なら null（量が増えすぎないよう1日3回まで）
+function parseHours_(s) {
+  var parts = String(s || '').normalize('NFKC').replace(/時/g, '').split(/[,、・\s]+/).filter(Boolean);
+  if (parts.length === 0 || parts.length > 3) return null;
+  var hours = [];
+  for (var i = 0; i < parts.length; i++) {
+    if (!/^\d{1,2}$/.test(parts[i])) return null;
+    var h = Number(parts[i]);
+    if (h > 23) return null;
+    if (hours.indexOf(h) < 0) hours.push(h);
+  }
+  return hours.sort(function (a, b) { return a - b; });
+}
+function getReportHours_() {
+  return parseHours_(props_().getProperty('REPORT_HOURS') || BOT_CONFIG.DEFAULT_REPORT_HOURS) || [Number(BOT_CONFIG.DEFAULT_REPORT_HOURS)];
+}
+function reportTriggers_() {
+  return ScriptApp.getProjectTriggers().filter(function (t) { return t.getHandlerFunction() === REPORT_HANDLER; });
+}
+function removeReportTriggers_() {
+  reportTriggers_().forEach(function (t) { ScriptApp.deleteTrigger(t); });
+}
+// GAS の時刻トリガーは「指定した時刻の前後15分ほど」に動く
+function installReportTriggers_() {
+  withLock_(function () {
+    removeReportTriggers_();
+    getReportHours_().forEach(function (h) {
+      ScriptApp.newTrigger(REPORT_HANDLER).timeBased().atHour(h).nearMinute(0).everyDays(1).create();
+    });
+  });
+}
+function ensureReportTriggers_() {
+  if (reportTriggers_().length !== getReportHours_().length) installReportTriggers_();
+}
+
+function handleReportSetting_(cmd, sourceId) {
+  if (cmd.type === 'reportOn') {
+    setReportTarget_(sourceId, true);
+    ensureReportTriggers_();
+    return 'このトークに定時報告を送ります。\n\n' + reportStatusText_(sourceId);
+  }
+  if (cmd.type === 'reportOff') {
+    setReportTarget_(sourceId, false);
+    if (getReportTargets_().length === 0) removeReportTriggers_();
+    return 'このトークへの定時報告を止めました。';
+  }
+  if (cmd.type === 'reportHours') {
+    var hours = parseHours_(cmd.hours);
+    if (!hours) return '時刻は 0〜23 の数字で、1日3回まで指定できます。\n例：定時報告時刻 8\n例：定時報告時刻 8,17';
+    props_().setProperty('REPORT_HOURS', hours.join(','));
+    if (getReportTargets_().length) installReportTriggers_();
+    return '定時報告の時刻を変更しました（全トーク共通）。\n\n' + reportStatusText_(sourceId);
+  }
+  return reportStatusText_(sourceId);
+}
+
+function reportStatusText_(sourceId) {
+  var on = getReportTargets_().indexOf(sourceId) >= 0;
+  var hours = getReportHours_();
+  var holidays = props_().getProperty('REPORT_ON_HOLIDAYS') === 'true';
+  var lines = [
+    '【定時報告の設定】',
+    'このトーク：' + (on ? 'オン' : 'オフ'),
+    '送信時刻：毎日 ' + hours.map(function (h) { return h + '時ごろ'; }).join('・') + (holidays ? '' : '（休業日は送りません）'),
+  ];
+  var need = recipientCount_(sourceId);
+  lines.push('1回の報告で使う通数：' + need + '通（このトークの人数）');
+  var q = getQuota_();
+  if (!q) {
+    lines.push('今月の送信数：取得できませんでした');
+  } else if (q.limit == null) {
+    lines.push('今月の送信数：' + q.used + '通（上限なしのプラン）');
+  } else {
+    var remaining = Math.max(0, q.limit - q.used);
+    lines.push('今月の送信数：' + q.used + ' / ' + q.limit + '通（残り' + remaining + '通 → このトークへの報告 あと約' + Math.floor(remaining / need) + '回）');
+  }
+  lines.push('');
+  lines.push('※「進捗報告」と送ると、同じ内容を通数を使わずに今すぐ見られます。');
+  return lines.join('\n');
+}
+
+// ============ LINE の送信数（無料枠）・送信 ============
+function lineToken_() {
+  var t = props_().getProperty('LINE_CHANNEL_ACCESS_TOKEN');
+  if (!t) console.error('LINE_CHANNEL_ACCESS_TOKEN が設定されていません');
+  return t;
+}
+function lineGet_(path) {
+  var token = lineToken_();
+  if (!token) return null;
+  var res = UrlFetchApp.fetch('https://api.line.me' + path, { headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true });
+  if (res.getResponseCode() !== 200) {
+    console.warn('LINE 取得エラー ' + path + ':', res.getResponseCode(), res.getContentText());
+    return null;
+  }
+  return JSON.parse(res.getContentText());
+}
+// { limit: 月の上限（無制限なら null）, used: 今月の使用数 }。取得できなければ null
+function getQuota_() {
+  var q = lineGet_('/v2/bot/message/quota');
+  var u = lineGet_('/v2/bot/message/quota/consumption');
+  if (!q || !u) return null;
+  return { limit: q.type === 'limited' ? Number(q.value) : null, used: Number(u.totalUsage) || 0 };
+}
+// Bot から送るメッセージは「送り先の人数」で数えられる（グループなら参加人数ぶん）
+function recipientCount_(id) {
+  var path = /^C/.test(id) ? '/v2/bot/group/' + id + '/members/count'
+    : /^R/.test(id) ? '/v2/bot/room/' + id + '/members/count' : null;
+  if (!path) return 1;
+  var r = lineGet_(path);
+  return r && Number(r.count) > 0 ? Number(r.count) : 1;
+}
+function push_(to, texts) {
+  var token = lineToken_();
+  if (!token) return false;
+  var res = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/push', {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { Authorization: 'Bearer ' + token },
+    payload: JSON.stringify({
+      to: to,
+      messages: texts.slice(0, BOT_CONFIG.MAX_MESSAGES).map(function (t) { return { type: 'text', text: t }; }),
+    }),
+    muteHttpExceptions: true,
+  });
+  if (res.getResponseCode() !== 200) {
+    console.error('LINE 送信エラー:', res.getResponseCode(), res.getContentText());
+    return false;
+  }
+  return true;
+}
+
+// 時刻トリガーから呼ばれる。データの読み込みに失敗したら例外のまま終わらせ、
+// Google からオーナーへ失敗のお知らせメールが届くようにする
+function sendScheduledReport() {
+  var L = KouteiLib;
+  var targets = getReportTargets_().filter(isAllowed_);
+  if (targets.length === 0) { console.log('定時報告の送り先がありません'); return; }
+  var now = new Date();
+  var slotKey = L.fmtYMD(now) + '-' + now.getHours();
+  if (props_().getProperty('LAST_REPORT_SLOT') === slotKey) { console.log('この時間帯の報告は送信済みです'); return; }
+
+  var data = loadData_({ doneSince: doneFetchSince_(now) });
+  if (L.isNonWorkingDay(L.startOfDay(now)) && props_().getProperty('REPORT_ON_HOLIDAYS') !== 'true') {
+    console.log('休業日のため定時報告を送りません');
+    return;
+  }
+  props_().setProperty('LAST_REPORT_SLOT', slotKey);
+  var text = buildProgressReport_(data, now);
+  var q = getQuota_();
+  var remaining = q && q.limit != null ? q.limit - q.used : Infinity;
+  targets.forEach(function (id) {
+    var need = recipientCount_(id);
+    if (need > remaining) {
+      console.warn('今月の送信可能数が足りないため送りません: ' + id + '（必要' + need + '通・残り' + remaining + '通）');
+      return;
+    }
+    var after = remaining - need;
+    var body = text;
+    if (after !== Infinity && after < need * 5) {
+      body += '\n\n※今月のLINE送信可能数の残りが少なくなっています（残り' + after + '通・このトークへの報告はあと約' + Math.floor(after / need) + '回）。';
+    }
+    if (push_(id, splitMessages_(body))) remaining = after;
+  });
+}
+
 // ============ LINE への返信 ============
 function reply_(replyToken, texts) {
-  var accessToken = props_().getProperty('LINE_CHANNEL_ACCESS_TOKEN');
-  if (!accessToken) { console.error('LINE_CHANNEL_ACCESS_TOKEN が設定されていません'); return; }
+  var accessToken = lineToken_();
+  if (!accessToken) return;
   if (!replyToken) return;
   var res = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/reply', {
     method: 'post',
@@ -526,11 +870,29 @@ function reply_(replyToken, texts) {
 // ============ 管理用（GAS エディタから手動実行） ============
 // 初回はこれを実行して権限を承認し、実行ログで返信内容を確認する（LINE には送らない）
 function testCommands() {
-  var data = loadData_();
   var now = new Date();
-  ['本日納期', '今週納期', '全体納期', '案件一覧', 'スケジュール'].forEach(function (word) {
+  var data = loadData_({ doneSince: doneFetchSince_(now) });
+  ['本日納期', '今週納期', '全体納期', '案件一覧', 'スケジュール', '進捗報告'].forEach(function (word) {
     console.log('===== ' + word + ' =====\n' + buildReply_(parseCommand_(word), data, now));
   });
+  // 定時報告で使う「時刻トリガー」の権限もここで承認してもらう
+  console.log('定時報告のトリガー数: ' + reportTriggers_().length);
+}
+
+// 定時報告をすぐに1回送る（動作確認用。LINE の送信数を使う）
+function sendReportNow() {
+  props_().deleteProperty('LAST_REPORT_SLOT');
+  sendScheduledReport();
+}
+
+// 定時報告の時刻トリガーを作り直す／止める（ふだんは LINE の「定時報告オン/オフ」で自動）
+function setupReportTrigger() {
+  installReportTriggers_();
+  console.log('定時報告のトリガーを設定しました: ' + getReportHours_().map(function (h) { return h + '時'; }).join('・'));
+}
+function stopReportTrigger() {
+  removeReportTriggers_();
+  console.log('定時報告のトリガーを止めました');
 }
 
 // 登録済みのトーク/グループをすべて解除する
