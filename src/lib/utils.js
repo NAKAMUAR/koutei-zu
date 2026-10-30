@@ -56,9 +56,28 @@ const isWeekend = (d) => d.getDay() === 0 || d.getDay() === 6;
 // isNonWorkingDay は settings を受け取らない箇所が多いため、モジュール変数で保持する
 // （案件色の assignProjectColors と同じパターン）。
 let HOLIDAY_SET = new Set();
+const HM_RE = /^\d{1,2}:\d{2}$/;
 function syncHolidays(settings) {
   const list = (settings && settings.holidays) || [];
   HOLIDAY_SET = new Set(list.map(h => h && h.date).filter(Boolean));
+}
+// 土日などの臨時出勤日。settings.workdays（[{ id, date:'YYYY-MM-DD', startTime, endTime, assignee, label }]）から同期する。
+// assignee が空なら全員の出勤日。祝日と同じ理由でモジュール変数に日付だけ保持する。
+let WORKDAY_SET = new Set();
+function syncWorkdays(settings) {
+  const list = (settings && settings.workdays) || [];
+  WORKDAY_SET = new Set(list.filter(isValidWorkday).map(w => w.date));
+}
+function isValidWorkday(w) {
+  return !!(w && w.date && HM_RE.test(String(w.startTime || '')) && HM_RE.test(String(w.endTime || '')) && timeToMin(w.startTime) < timeToMin(w.endTime));
+}
+// その日・その担当者に登録された出勤時間帯 [[s,e],...]（分）。登録が無ければ null
+function workdayIntervals(d, settings, assignee) {
+  const ymd = fmtYMD(d);
+  const list = ((settings && settings.workdays) || [])
+    .filter(w => isValidWorkday(w) && w.date === ymd && (!w.assignee || w.assignee === assignee));
+  if (list.length === 0) return null;
+  return list.map(w => [timeToMin(w.startTime), timeToMin(w.endTime)]);
 }
 // 第2・第4土曜は午前のみ営業
 function isWorkingSaturday(d) {
@@ -66,11 +85,21 @@ function isWorkingSaturday(d) {
   const week = Math.ceil(d.getDate() / 7);
   return week === 2 || week === 4;
 }
-function isNonWorkingDay(d) {
+// 本来の休み（祝日・日曜・第2/第4以外の土曜）か。出勤日の登録は考慮しない
+function isRegularNonWorkingDay(d) {
   if (HOLIDAY_SET.has(fmtYMD(d))) return true; // 祝日（全体共通の休み）
   if (d.getDay() === 0) return true;
   if (d.getDay() === 6) return !isWorkingSaturday(d);
   return false;
+}
+// 誰も働かない日か。出勤日が登録されていれば（一人だけでも）稼働日として扱い、カレンダーにも列を出す
+function isNonWorkingDay(d) {
+  if (WORKDAY_SET.has(fmtYMD(d))) return false;
+  return isRegularNonWorkingDay(d);
+}
+// 出勤日の登録がある日か（カレンダーの「土曜は午前のみ」表示を外す判定用）
+function hasWorkday(d) {
+  return WORKDAY_SET.has(fmtYMD(d));
 }
 const addDays = (d, n) => { const r = new Date(d); r.setDate(r.getDate() + n); return r; };
 const startOfDay = (d) => { const r = new Date(d); r.setHours(0, 0, 0, 0); return r; };
@@ -277,6 +306,8 @@ const DEFAULT_SETTINGS = {
   absences: [],
   // 全体共通の祝日（ベトナム等）。[{ id, date:'YYYY-MM-DD', label }]。土日と同じく非稼働日として扱う
   holidays: [],
+  // 土日などの臨時出勤日。[{ id, date:'YYYY-MM-DD', startTime, endTime, assignee（空=全員）, label }]
+  workdays: [],
   // 残業（担当者・期間・時間帯の稼働枠追加）。[{ id, assignee, startDate, endDate, startTime, endTime, label }]
   overtimes: [],
   // 会社グループの表示順（暫定の固定順）。表示順設定ページで編集可
@@ -287,7 +318,6 @@ const DEFAULT_SETTINGS = {
 // 従業員マスタの workHours（{ morningStart, morningEnd, afternoonStart, afternoonEnd }。時刻はチーム共通の時間＝カレンダーと同じ時計）を
 // withAssigneeHours() で settings.assigneeHours（{ 担当者名: workHours }）にまとめ、スケジューラ・カレンダーが参照する。
 // 未設定・不正な担当者は全体設定（settings の午前・午後）を使う。
-const HM_RE = /^\d{1,2}:\d{2}$/;
 function isValidWorkHours(h) {
   if (!h || ![h.morningStart, h.morningEnd, h.afternoonStart, h.afternoonEnd].every(v => HM_RE.test(String(v || '')))) return false;
   const ms = timeToMin(h.morningStart), me = timeToMin(h.morningEnd), as = timeToMin(h.afternoonStart), ae = timeToMin(h.afternoonEnd);
@@ -355,6 +385,7 @@ function sheetsLabel(viewpointNames) {
 export {
   PRIORITY_COLORS, priorityColor, PROJECT_PALETTE, assignProjectColors, getProjectColor, pastelize,
   fmtMD, fmtYMD, fmtYMDJP, dayName, isWeekend, syncHolidays, isWorkingSaturday, isNonWorkingDay,
+  syncWorkdays, isValidWorkday, workdayIntervals, isRegularNonWorkingDay, hasWorkday,
   addDays, startOfDay, isSameDay, timeToMin, minToTime, fmtHM, kanaNormalize, parseHM,
   dtLocalToDate, dateToDtLocal, VIEWPOINT_PRESETS, viewpointCategoryOptions, makeEmptyStep, makeStepFromPreset, makeViewpointFromPreset,
   COMPANY_PRESETS, genId, normalizeCustomerMaster, VN_LUNAR_HOLIDAYS, vietnamHolidayCandidates, expandHolidayDates,

@@ -4,6 +4,7 @@ import { useApp } from '../appContext.js';
 import { ChevronDown, ChevronUp, GripVertical, Plus, Search, Trash2, X } from 'lucide-react';
 import { VN_LUNAR_HOLIDAYS, dayName, expandHolidayDates, fmtMD, fmtYMD, getProjectColor, isValidWorkHours, minToTime, timeToMin, vietnamHolidayCandidates } from '../lib/utils.js';
 import { TimeSelect } from '../components/common.jsx';
+import { WorkdayManager } from './WorkdayManager.jsx';
 
 function MasterView() {
   const {
@@ -151,7 +152,7 @@ function MasterView() {
     <div style={{ maxWidth: 880 }}>
       {/* 表示切替：お客様設定 / 従業員設定 / 会社の表示順 */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 20 }}>
-        {[{ id: 'customer', label: 'お客様設定' }, { id: 'employee', label: '従業員設定' }, { id: 'stepType', label: 'ステップ設定' }, { id: 'companyOrder', label: '会社の表示順' }, { id: 'holiday', label: 'ベトナムの祝日' }].map(t => (
+        {[{ id: 'customer', label: 'お客様設定' }, { id: 'employee', label: '従業員設定' }, { id: 'stepType', label: 'ステップ設定' }, { id: 'companyOrder', label: '会社の表示順' }, { id: 'holiday', label: 'ベトナムの祝日' }, { id: 'workday', label: '土日の出勤日' }].map(t => (
           <button key={t.id} type="button" onClick={() => setMasterTab(t.id)}
             style={{
               padding: '8px 16px', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13, fontWeight: 600,
@@ -546,6 +547,12 @@ function MasterView() {
           colors={colors} fontJP={fontJP} />
       </section>
       </>)}
+
+      {masterTab === 'workday' && (
+      <section style={cardStyle}>
+        <WorkdayManager />
+      </section>
+      )}
     </div>
   );
 }

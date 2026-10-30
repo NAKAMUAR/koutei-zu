@@ -1,7 +1,7 @@
 // カレンダービュー（担当者×日付のスケジュール表）。App.jsx から分割。
 import { useState, useRef, useLayoutEffect } from 'react';
 import { useApp } from '../appContext.js';
-import { addDays, dayName, fmtMD, fmtYMD, fmtYMDJP, getDailySlots, getHoursPerDay, getProjectColor, isNonWorkingDay, isSameDay, minToTime, pastelize, priorityColor, startOfDay } from '../lib/utils.js';
+import { addDays, dayName, fmtMD, fmtYMD, fmtYMDJP, getDailySlots, getHoursPerDay, getProjectColor, isNonWorkingDay, isRegularNonWorkingDay, isSameDay, minToTime, pastelize, priorityColor, startOfDay, workdayIntervals } from '../lib/utils.js';
 import { buildDoneSlots, computeFreeHours, dayAbsence, dayWorkSlots, maxOvertimeEndMin, sortAssigneesByMaster, subtractBusy } from '../lib/schedule.js';
 import { Calendar as CalIcon, GripVertical } from 'lucide-react';
 import { tabStyle } from '../components/common.jsx';
@@ -361,8 +361,10 @@ function CalendarView() {
         const ymd = fmtYMD(dayDate);
         // 担当者ごとの稼働時間がある場合は、全員の稼働時間が入るように時間軸を広げる
         const perSlots = assignees.map(a => getDailySlots(settings, a));
-        const dayStart = Math.min(morningSlot.start, ...perSlots.map(s => s[0].start));
-        const dayEnd = Math.max(afternoonSlot.end, maxOvertimeEndMin(settings), ...perSlots.map(s => s[1].end));
+        // 出勤日（土日の出勤時間帯）が通常より早い・遅い場合も入るようにする
+        const dayWs = assignees.flatMap(a => dayWorkSlots(a, dayDate, settings));
+        const dayStart = Math.min(morningSlot.start, ...perSlots.map(s => s[0].start), ...dayWs.map(w => w[0]));
+        const dayEnd = Math.max(afternoonSlot.end, maxOvertimeEndMin(settings), ...perSlots.map(s => s[1].end), ...dayWs.map(w => w[1]));
         const totalMin = dayEnd - dayStart;
         const halfHours = [];
         for (let m = dayStart; m < dayEnd; m += 30) halfHours.push(m);
@@ -548,20 +550,27 @@ function CalendarView() {
                 const slots = (matrix[assignee] && matrix[assignee][key]) || [];
                 // 午前・午後の枠はこの担当者の稼働時間（従業員マスタで設定があればそれ、無ければ全体設定）
                 const [amSlot, pmSlot] = getDailySlots(settings, assignee);
-                const amHours = (amSlot.end - amSlot.start) / 60;
+                // 出勤日（マスタ「土日の出勤日」）は時間帯が通常と違うことがあるため、枠の高さを実際の稼働枠に合わせる
+                const workSlotsOfDay = dayWorkSlots(assignee, d, settings);
+                const amCapMin = workSlotsOfDay.reduce((s, [a, b]) => s + Math.max(0, Math.min(b, amSlot.end) - a), 0);
+                const amHours = Math.max((amSlot.end - amSlot.start) / 60, amCapMin / 60);
                 const morningRaw = slots.filter(({ slot }) => slot.startMin < amSlot.end);
-                const afternoonRaw = slots.filter(({ slot }) => slot.startMin >= pmSlot.start);
+                // 午前枠に入らないものは全部午後側へ（昼休みの時間帯に入った出勤・残業も消えないように）
+                const afternoonRaw = slots.filter(({ slot }) => slot.startMin >= amSlot.end);
                 // 簡易表示は同一視点のステップを1ブロックに統合
                 const morningItems = simpleMode ? mergeByViewpoint(morningRaw) : morningRaw;
                 const afternoonItems = simpleMode ? mergeByViewpoint(afternoonRaw) : afternoonRaw;
                 // 午後の枠時間（残業を含む）。残業ぶんブロックが溢れないよう高さの分母にする
-                const pmCapMin = dayWorkSlots(assignee, d, settings).reduce((s, [a, b]) => s + Math.max(0, b - Math.max(a, pmSlot.start)), 0);
+                const pmCapMin = workSlotsOfDay.reduce((s, [a, b]) => s + Math.max(0, b - Math.max(a, amSlot.end)), 0);
                 const pmHours = Math.max((pmSlot.end - pmSlot.start) / 60, pmCapMin / 60);
                 const isToday = isSameDay(d, new Date());
-                const isWorkSat = d.getDay() === 6;
+                // 土曜は午前のみ（午後を斜線）。出勤日が登録されている土曜は午後も使えるので斜線を外す
+                const isWorkSat = d.getDay() === 6 && !workdayIntervals(d, settings, assignee);
                 // 休日・不在
-                const abs = isNonWorkingDay(d) ? { allDay: false, intervals: [] } : dayAbsence(assignee, d, settings.absences || []);
-                const absLabel = (settings.absences || []).find(x => x && x.assignee === assignee && x.startDate <= fmtYMD(d) && x.endDate >= fmtYMD(d) && x.label)?.label || '';
+                // 他の人だけ出勤日を登録した土日・祝日は、この担当者にとっては休み
+                const offDay = isRegularNonWorkingDay(d) && workSlotsOfDay.length === 0;
+                const abs = offDay ? { allDay: true, intervals: [] } : isNonWorkingDay(d) ? { allDay: false, intervals: [] } : dayAbsence(assignee, d, settings.absences || []);
+                const absLabel = offDay ? '休日' : (settings.absences || []).find(x => x && x.assignee === assignee && x.startDate <= fmtYMD(d) && x.endDate >= fmtYMD(d) && x.label)?.label || '';
                 const overlayRects = [];
                 if (!abs.allDay) {
                   for (const [s, e] of abs.intervals) {

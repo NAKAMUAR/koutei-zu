@@ -77,7 +77,7 @@ src/
 - `npm run check`（ESLint）→ `npm run build` の順で必ず通す（build が check を自動実行する）。
 - UIに触れた場合は `npm run preview` でログイン画面が描画されることを最低限確認する（モジュールレベルのクラッシュ検出）。
 - スケジューラ等の純粋ロジックは `src/lib/` に分離済みなので、node スクリプトから直接 import して検証できる。
-- `npm test` で sync のテストとアプリの純ロジックのテスト（`test/salesLink.test.mjs`：請求書⇄売上の紐付け、`test/assigneeHours.test.mjs`：担当者ごとの稼働時間とスケジュール配置、`test/issuer.test.mjs`：帳票の発行元・振込先の引き継ぎ）をまとめて実行する。関係する箇所を触ったら必ず通す。
+- `npm test` で sync のテストとアプリの純ロジックのテスト（`test/salesLink.test.mjs`：請求書⇄売上の紐付け、`test/workdays.test.mjs`：土日の出勤日の稼働枠、`test/assigneeHours.test.mjs`：担当者ごとの稼働時間とスケジュール配置、`test/issuer.test.mjs`：帳票の発行元・振込先の引き継ぎ）をまとめて実行する。関係する箇所を触ったら必ず通す。
 - 大きな改修は機能ごとに `npm run build` を挟みながら進める。
 
 ## 主要コマンド

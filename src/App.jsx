@@ -3,7 +3,7 @@
 // ============ メイン ============
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { AppCtx } from './appContext.js';
-import { COMPANY_PRESETS, DEFAULT_SETTINGS, VIEWPOINT_PRESETS, withAssigneeHours, assignProjectColors, dateToDtLocal, expandHolidayDates, fmtHM, fmtYMD, genId, getHoursPerDay, kanaNormalize, makeEmptyStep, makeViewpointFromPreset, normalizeCustomerMaster, parseHM, startOfDay, syncHolidays } from './lib/utils.js';
+import { COMPANY_PRESETS, DEFAULT_SETTINGS, VIEWPOINT_PRESETS, withAssigneeHours, assignProjectColors, dateToDtLocal, expandHolidayDates, fmtHM, fmtYMD, genId, getHoursPerDay, kanaNormalize, makeEmptyStep, makeViewpointFromPreset, normalizeCustomerMaster, parseHM, startOfDay, syncHolidays, syncWorkdays } from './lib/utils.js';
 import { DEFAULT_STEP_TYPES, deliveryBaseName, findStepType, normalizeHistory, normalizeStepTypes, num as vpNum, resolveViewpointSteps, roundTypeOf, stepDeliveryName } from './viewpoint/viewpointUtils.js';
 import { billingStore, memberList, salesStore, signIn, signOutUser, storage, subscribeAuth, tasksStore } from './firebase.js';
 import { computeDeadlineReorder, computeProjectOrder, deadlineInsertPriority, deadlineKey, isOnLeaveAt, latestActualEnd, migrateTask, normalizePriorities, projectEndTs, scheduleTasks, simulateFormSchedule, workingHoursBetweenTs } from './lib/schedule.js';
@@ -83,6 +83,7 @@ export default function App() {
   // タスクメモの通知：開始時刻（終日は朝の始業時刻）が来たらOS通知＋アプリ内バナーを出す。
   // アプリを開いている間のみ。プッシュ基盤が無いため、タブを閉じている間は通知できない。
   const [memoToasts, setMemoToasts] = useState([]); // [{ id, title, body }]
+  const workdaysRef = useRef([]);                   // 土日の出勤日の最新一覧（「元に戻す」が古い値で書き戻さないため）
   const notifiedMemoRef = useRef(new Set());        // 通知済みキー（重複防止）
   const lastNotifyTickRef = useRef(null);           // 前回チェック時刻（初回は過去分を鳴らさない）
   useEffect(() => {
@@ -231,7 +232,7 @@ export default function App() {
         try {
           const parsed = JSON.parse(val);
           // holidays/absences は専用キー（別購読）が真実の値。settings 側の旧データでは上書きしない。
-          setSettings(prev => ({ ...DEFAULT_SETTINGS, ...parsed, holidays: prev.holidays || [], absences: prev.absences || [] }));
+          setSettings(prev => ({ ...DEFAULT_SETTINGS, ...parsed, holidays: prev.holidays || [], absences: prev.absences || [], workdays: prev.workdays || [] }));
         } catch (e) { }
       }
       setSettingsLoaded(true);
@@ -243,6 +244,14 @@ export default function App() {
       if (val) { try { const p = JSON.parse(val); if (Array.isArray(p)) arr = p; } catch (e) {} }
       syncHolidays({ holidays: arr });
       setSettings(prev => ({ ...prev, holidays: arr }));
+    });
+    // 土日などの出勤日（専用キー）
+    const unsubWorkdays = storage.subscribe('workdays', (val) => {
+      let arr = [];
+      if (val) { try { const p = JSON.parse(val); if (Array.isArray(p)) arr = p; } catch (e) {} }
+      workdaysRef.current = arr;
+      syncWorkdays({ workdays: arr });
+      setSettings(prev => ({ ...prev, workdays: arr }));
     });
     const unsubAbsences = storage.subscribe('absences', (val) => {
       let arr = [];
@@ -342,6 +351,7 @@ export default function App() {
       if (unsubTasks) unsubTasks();
       unsubSettings();
       unsubHolidays();
+      unsubWorkdays();
       unsubAbsences();
       unsubOrder();
       unsubCustomer();
@@ -483,11 +493,11 @@ export default function App() {
     if (refreshing) return;
     setRefreshing(true);
     try {
-      const [rawTasks, sVal, hVal, aVal, oVal, cVal, eVal, mVal] = await Promise.all([
+      const [rawTasks, sVal, hVal, aVal, oVal, cVal, eVal, mVal, wVal] = await Promise.all([
         tasksStore.listAll(),
         storage.get('settings'), storage.get('holidays'), storage.get('absences'),
         storage.get('projectOrder'), storage.get('customerMaster'),
-        storage.get('employeeMaster'), storage.get('memos'),
+        storage.get('employeeMaster'), storage.get('memos'), storage.get('workdays'),
       ]);
       const parseArr = (v) => {
         if (!v || !v.value) return [];
@@ -501,13 +511,16 @@ export default function App() {
       // 休日・休み（専用キー）
       const holidays = parseArr(hVal);
       const absences = parseArr(aVal);
+      const workdays = parseArr(wVal);
       syncHolidays({ holidays });
-      // 設定（holidays/absences は専用キーの値で上書き）
+      workdaysRef.current = workdays;
+      syncWorkdays({ workdays });
+      // 設定（holidays/absences/workdays は専用キーの値で上書き）
       if (sVal && sVal.value) {
-        try { setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(sVal.value), holidays, absences }); }
-        catch (e) { setSettings(prev => ({ ...prev, holidays, absences })); }
+        try { setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(sVal.value), holidays, absences, workdays }); }
+        catch (e) { setSettings(prev => ({ ...prev, holidays, absences, workdays })); }
       } else {
-        setSettings(prev => ({ ...prev, holidays, absences }));
+        setSettings(prev => ({ ...prev, holidays, absences, workdays }));
       }
       setSettingsLoaded(true);
       // 並び順・マスタ・メモ
@@ -584,6 +597,13 @@ export default function App() {
     try { await storage.set('holidays', JSON.stringify(arr)); }
     catch (e) { console.error('祝日保存エラー:', e); }
   };
+  const saveWorkdays = async (arr) => {
+    workdaysRef.current = arr;
+    syncWorkdays({ workdays: arr });
+    setSettings(prev => ({ ...prev, workdays: arr }));
+    try { await storage.set('workdays', JSON.stringify(arr)); }
+    catch (e) { console.error('出勤日保存エラー:', e); }
+  };
   const saveAbsences = async (arr) => {
     setSettings(prev => ({ ...prev, absences: arr }));
     try { await storage.set('absences', JSON.stringify(arr)); }
@@ -626,6 +646,24 @@ export default function App() {
   };
   const removeHoliday = (id) => {
     saveHolidays((settings.holidays || []).filter(h => h.id !== id));
+  };
+
+  // 土日などの出勤日（出勤時間帯つき）の追加／削除。複数日をまとめて追加できる
+  const addWorkdays = (items) => {
+    const keyOf = (w) => `${w.date}|${w.assignee || ''}|${w.startTime}|${w.endTime}`;
+    const have = new Set(workdaysRef.current.map(keyOf));
+    const adds = (items || []).filter(it => !have.has(keyOf(it))).map(it => ({ ...it, id: genId('wd') }));
+    if (adds.length === 0) return;
+    saveWorkdays([...workdaysRef.current, ...adds]);
+  };
+  const removeWorkday = (id) => {
+    const cur = workdaysRef.current;
+    const removed = cur.find(w => w.id === id);
+    saveWorkdays(cur.filter(w => w.id !== id));
+    return removed;
+  };
+  const restoreWorkday = (item) => {
+    if (item) saveWorkdays([...(workdaysRef.current).filter(w => w.id !== item.id), item]);
   };
 
   // 残業（稼働枠の追加）の追加／削除
@@ -2009,6 +2047,7 @@ export default function App() {
   const scheduled = useMemo(() => {
     assignProjectColors(tasks); // 案件の色割り当てを更新（登録順・重複なし）
     syncHolidays(settings);     // 全体共通の祝日（非稼働日）をモジュールに反映
+    syncWorkdays(settings);     // 土日などの出勤日をモジュールに反映
     return scheduleTasks(tasks, schedSettings, projectOrder, now);
   }, [tasks, settings, schedSettings, projectOrder, now]);
 
@@ -2182,6 +2221,7 @@ export default function App() {
     // マスタ管理
     saveCustomerMaster, saveEmployeeMaster, saveStepTypeMaster,
     addOvertime, removeOvertime, addAbsence, removeAbsence, addHolidays, removeHoliday,
+    addWorkdays, removeWorkday, restoreWorkday,
     saveCompanyOrder,
     // タスクメモ
     upsertMemo, deleteMemo,
