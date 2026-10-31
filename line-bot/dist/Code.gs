@@ -1,7 +1,7 @@
 // ============================================================
-// 工程図 LINE Bot（Google Apps Script）
+// 工程図Bot（LINE・Discord 共通。Google Apps Script）
 // このファイルは line-bot/build.mjs が自動生成したものです。直接編集しないでください。
-// 使い方は line-bot/README.md を参照。
+// 使い方は line-bot/README.md（LINE）・discord-bot/README.md（Discord）を参照。
 // ============================================================
 
 var KouteiLib = (function () {
@@ -1659,12 +1659,14 @@ function groupByViewpoint(tasks, vpDeliveryCount) {
 
 
 
-return { migrateTask, normalizePriorities, scheduleTasks, computeProjectOrder, compareCompanyDisplay, sortAssigneesByMaster, syncHolidays, isNonWorkingDay, DEFAULT_SETTINGS, fmtYMD, parseYMD, addDays, startOfDay, minToTime, dayName };
+return { migrateTask, normalizePriorities, scheduleTasks, computeProjectOrder, compareCompanyDisplay, sortAssigneesByMaster, computeFreeHours, syncHolidays, syncWorkdays, withAssigneeHours, isNonWorkingDay, DEFAULT_SETTINGS, fmtYMD, parseYMD, addDays, startOfDay, minToTime, dayName };
 })();
 
-// ---- line-bot/bot.js（LINE Bot 本体。Google Apps Script 上で動く）----
+// ---- line-bot/bot.js（工程図Bot 本体：LINE と共通部分。Google Apps Script 上で動く）----
 // LINE で決まった言葉（本日納期・今週納期・全体納期・案件一覧・スケジュール など）を受け取ると、
 // Firestore の工程図データを読み、アプリと同じスケジュール計算（KouteiLib）で返信を組み立てる。
+// Discord からの問い合わせ（Cloudflare Worker 経由）は discord.js が受け持つ。
+/* global handleDiscordRelay_ */
 // 設定値（スクリプトプロパティ）:
 //   LINE_CHANNEL_ACCESS_TOKEN … LINE Developers で発行したチャネルアクセストークン（長期）
 //   REGISTER_CODE             … トーク/グループを登録するための合言葉
@@ -1682,12 +1684,20 @@ var BOT_CONFIG = {
   MAX_REGISTER_FAILS: 5, // 合言葉の失敗がこの回数を超えたら1時間受け付けない
   DEFAULT_REPORT_HOURS: '8',
   REPORT_LIST_MAX: 15,   // 定時報告の各項目に並べる最大件数（超えた分は「他N件」）
+  PROJECT_DONE_DAYS: 60, // 案件詳細で、完了した案件も探す日数
+  PROJECT_DETAIL_MAX: 3, // 案件詳細を一度に出す最大件数（超えたら候補一覧を返す）
+  GEMINI_DEFAULT_MODEL: 'gemini-flash-latest', // GEMINI_MODEL（スクリプトプロパティ）で変更可
+  GEMINI_MAX_ROUNDS: 4,  // Gemini がデータを取りに行く往復の上限
 };
 
 // ============ 受信口（LINE の Webhook） ============
 function doPost(e) {
   try {
     var body = JSON.parse((e && e.postData && e.postData.contents) || '{}');
+    if (body.relay === 'discord') {
+      return ContentService.createTextOutput(JSON.stringify(handleDiscordRelay_(body)))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
     (body.events || []).forEach(function (ev) {
       try { handleEvent_(ev); } catch (err) { console.error('イベント処理エラー:', err && err.stack ? err.stack : err); }
     });
@@ -1739,12 +1749,19 @@ function handleEvent_(ev) {
   var out;
   try {
     var now = new Date();
-    out = buildReply_(cmd, loadData_(cmd.type === 'report' ? { doneSince: doneFetchSince_(now) } : {}), now);
+    out = buildReply_(cmd, loadData_(loadOptionsFor_(cmd.type, now)), now);
   } catch (err) {
     console.error('データ取得エラー:', err && err.stack ? err.stack : err);
     out = 'データの取得に失敗しました。時間をおいてもう一度お試しください。\n（管理者向け: ' + String(err && err.message || err).slice(0, 200) + '）';
   }
   reply_(token, splitMessages_(out));
+}
+
+// コマンドごとに、完了済みタスクをどこまで読むか
+function loadOptionsFor_(type, now) {
+  if (type === 'report') return { doneSince: doneFetchSince_(now) };
+  if (type === 'project') return { doneSince: projectDoneSince_(now) };
+  return {};
 }
 
 function sourceIdOf_(source) {
@@ -1763,6 +1780,8 @@ function parseCommand_(raw) {
   if (/^来週の?納期$/.test(c)) return { type: 'deadline', range: 'nextWeek' };
   if (/^(全体の?納期|納期一覧)$/.test(c)) return { type: 'deadline', range: 'all' };
   if (/^(案件一覧|進行中案件|案件リスト)$/.test(c)) return { type: 'projects' };
+  var pj = t.match(/^案件(?:詳細)?[\s:：]+(.+)$/);
+  if (pj) return { type: 'project', keyword: pj[1].trim() };
   if (/^(進捗報告|進捗|日報)$/.test(c)) return { type: 'report' };
   if (/^定時報告(オン|on|開始|する)$/i.test(c)) return { type: 'reportOn' };
   if (/^定時報告(オフ|off|停止|しない)$/i.test(c)) return { type: 'reportOff' };
@@ -1791,6 +1810,7 @@ function helpText_() {
     '・来週納期',
     '・全体納期 … 納期が決まっている全案件',
     '・案件一覧 … 進行中の案件（会社別）',
+    '・案件 渋谷 … 案件の詳細（視点・工程・担当・納期）',
     '・スケジュール … 今日の担当者別の予定',
     '・明日のスケジュール',
     '・スケジュール 山田 … 担当者で絞り込み',
@@ -1854,56 +1874,61 @@ function handleRegister_(token, sourceId, code) {
 }
 
 // ============ Firestore からの読み込み ============
-// opts.doneSince（ms）を渡すと、その時刻以降に完了したタスクも読む（定時報告の「完了」欄用）
-function loadData_(opts) {
-  opts = opts || {};
-  var L = KouteiLib;
+function fsPaths_() {
   var docsRoot = 'projects/' + BOT_CONFIG.PROJECT_ID + '/databases/' + BOT_CONFIG.DATABASE_ID + '/documents';
-  var wsPath = docsRoot + '/workspaces/' + BOT_CONFIG.WORKSPACE_ID;
-  var api = 'https://firestore.googleapis.com/v1/';
-  var keys = ['settings', 'holidays', 'absences', 'projectOrder', 'employeeMaster'];
-  var base = {
+  return { api: 'https://firestore.googleapis.com/v1/', docsRoot: docsRoot, wsPath: docsRoot + '/workspaces/' + BOT_CONFIG.WORKSPACE_ID };
+}
+function fsRequest_(url, body) {
+  return {
+    url: url,
     method: 'post',
     contentType: 'application/json',
     // X-Goog-User-Project: GAS 既定のプロジェクトではなく koutei-zu の Firestore API 枠を使う
     headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken(), 'X-Goog-User-Project': BOT_CONFIG.PROJECT_ID },
+    payload: JSON.stringify(body),
     muteHttpExceptions: true,
   };
+}
+// tasks コレクションを1つの条件で検索するリクエスト（単一フィールドの条件なので複合インデックス不要）
+function tasksQueryRequest_(fieldFilter) {
+  var p = fsPaths_();
+  return fsRequest_(p.api + p.wsPath + ':runQuery', { structuredQuery: { from: [{ collectionId: 'tasks' }], where: { fieldFilter: fieldFilter } } });
+}
+function checkFsResponse_(r) {
+  if (r.getResponseCode() !== 200) {
+    throw new Error('Firestore ' + r.getResponseCode() + ': ' + r.getContentText().slice(0, 300));
+  }
+  return r;
+}
+function tasksFromQuery_(r) {
+  return JSON.parse(checkFsResponse_(r).getContentText())
+    .filter(function (x) { return x.document; })
+    .map(function (x) { return fromFields_(x.document.fields || {}); });
+}
+// 作業の完了として数えるか（中止・請求専用の作業時間0のステップは除く）
+function isWorkDone_(t) {
+  return t.status === 'done' && !t.cancelled && (Number(t.hours) || 0) > 0;
+}
+
+// opts.doneSince（ms）を渡すと、その時刻以降に完了したタスクも読む（定時報告の「完了」欄用）
+function loadData_(opts) {
+  opts = opts || {};
+  var L = KouteiLib;
+  var p = fsPaths_();
+  var keys = ['settings', 'holidays', 'absences', 'workdays', 'projectOrder', 'employeeMaster'];
   // 完了（done）のタスクはスケジュール計算に影響しないため、未完了だけを読む（読み取り件数の節約）
   var requests = [
-    Object.assign({ url: api + wsPath + ':runQuery' }, base, {
-      payload: JSON.stringify({
-        structuredQuery: {
-          from: [{ collectionId: 'tasks' }],
-          where: { fieldFilter: { field: { fieldPath: 'status' }, op: 'EQUAL', value: { stringValue: 'pending' } } },
-        },
-      }),
-    }),
-    Object.assign({ url: api + docsRoot + ':batchGet' }, base, {
-      payload: JSON.stringify({ documents: keys.map(function (k) { return wsPath + '/data/' + k; }) }),
-    }),
+    tasksQueryRequest_({ field: { fieldPath: 'status' }, op: 'EQUAL', value: { stringValue: 'pending' } }),
+    fsRequest_(p.api + p.docsRoot + ':batchGet', { documents: keys.map(function (k) { return p.wsPath + '/data/' + k; }) }),
   ];
   if (opts.doneSince) {
     // completedAt だけの範囲条件にする（status との組み合わせは複合インデックスが要るため、状態はここで絞る）
-    requests.push(Object.assign({ url: api + wsPath + ':runQuery' }, base, {
-      payload: JSON.stringify({
-        structuredQuery: {
-          from: [{ collectionId: 'tasks' }],
-          where: { fieldFilter: { field: { fieldPath: 'completedAt' }, op: 'GREATER_THAN_OR_EQUAL', value: { integerValue: String(opts.doneSince) } } },
-        },
-      }),
-    }));
+    requests.push(tasksQueryRequest_({ field: { fieldPath: 'completedAt' }, op: 'GREATER_THAN_OR_EQUAL', value: { integerValue: String(opts.doneSince) } }));
   }
   var res = UrlFetchApp.fetchAll(requests);
-  res.forEach(function (r) {
-    if (r.getResponseCode() !== 200) {
-      throw new Error('Firestore ' + r.getResponseCode() + ': ' + r.getContentText().slice(0, 300));
-    }
-  });
+  res.forEach(checkFsResponse_);
 
-  var rawTasks = JSON.parse(res[0].getContentText())
-    .filter(function (r) { return r.document; })
-    .map(function (r) { return fromFields_(r.document.fields || {}); });
+  var rawTasks = tasksFromQuery_(res[0]);
   var kv = {};
   JSON.parse(res[1].getContentText()).forEach(function (r) {
     if (!r.found) return;
@@ -1912,29 +1937,40 @@ function loadData_(opts) {
   });
   var parseArr = function (key) { var v = parseJson_(kv[key]); return Array.isArray(v) ? v : []; };
   var savedSettings = parseJson_(kv.settings) || {};
+  var employeeMaster = parseArr('employeeMaster');
 
+  // アプリ（App.jsx）と同じ組み立て：専用キーの休日・不在・出勤日で上書きし、担当者ごとの稼働時間を足す
   var settings = Object.assign({}, L.DEFAULT_SETTINGS, savedSettings, {
     holidays: parseArr('holidays'),
     absences: parseArr('absences'),
+    workdays: parseArr('workdays'),
   });
   L.syncHolidays(settings);
+  L.syncWorkdays(settings);
+  var schedSettings = L.withAssigneeHours(settings, employeeMaster);
   var tasks = L.normalizePriorities(rawTasks.map(L.migrateTask));
   var projectOrder = parseArr('projectOrder');
   var now = new Date();
-  var scheduled = L.scheduleTasks(tasks, settings, projectOrder, now);
-  // 最近の完了：中止（cancelled）と請求専用の作業時間0のステップは「作業の完了」に数えない
-  var recentDone = !opts.doneSince ? [] : JSON.parse(res[2].getContentText())
-    .filter(function (r) { return r.document; })
-    .map(function (r) { return fromFields_(r.document.fields || {}); })
-    .filter(function (t) { return t.status === 'done' && !t.cancelled && (Number(t.hours) || 0) > 0; });
+  var scheduled = L.scheduleTasks(tasks, schedSettings, projectOrder, now);
+  var recentDone = opts.doneSince ? tasksFromQuery_(res[2]).filter(isWorkDone_) : [];
   return {
-    settings: settings,
+    settings: schedSettings,
     scheduled: scheduled,
     projectOrder: projectOrder,
-    assigneeOrder: parseArr('employeeMaster').map(function (e) { return e && e.name; }).filter(Boolean),
+    assigneeOrder: employeeMaster.map(function (e) { return e && e.name; }).filter(Boolean),
     recentDone: recentDone,
     doneSince: opts.doneSince || null,
   };
+}
+
+// 案件名の一覧に一致するタスクを完了済みも含めて読む（案件詳細用。IN は最大30件まで）
+function loadProjectTasks_(projectNames) {
+  if (!projectNames.length) return [];
+  var req = tasksQueryRequest_({
+    field: { fieldPath: 'projectName' }, op: 'IN',
+    value: { arrayValue: { values: projectNames.slice(0, 30).map(function (n) { return { stringValue: n }; }) } },
+  });
+  return tasksFromQuery_(UrlFetchApp.fetchAll([req])[0]).map(KouteiLib.migrateTask);
 }
 
 function parseJson_(s) {
@@ -1966,6 +2002,7 @@ function buildReply_(cmd, data, now) {
   if (cmd.type === 'projects') return buildProjectsReply_(data);
   if (cmd.type === 'schedule') return buildScheduleReply_(cmd, data, now);
   if (cmd.type === 'report') return buildProgressReport_(data, now);
+  if (cmd.type === 'project') return buildProjectDetail_(cmd.keyword, data, now);
   return helpText_();
 }
 
@@ -1997,9 +2034,12 @@ function viewpointsOf_(active) {
         projectName: t.projectName || '', projectNameInternal: t.projectNameInternal || '',
         companyName: t.companyName || '', viewpointName: t.viewpointName || '',
         assignees: [], deadline: '', projectDeadline: '', endTs: null,
+        remainingHours: 0, pendingSteps: [],
       };
       map.set(key, v);
     }
+    v.remainingHours += Number(t.remainingHours) || 0;
+    if (t.stepName && v.pendingSteps.indexOf(t.stepName) < 0) v.pendingSteps.push(t.stepName);
     var dl = ymdOf_(t.deadline || t.projectDeadline);
     if (dl && (!v.deadline || dl < v.deadline)) v.deadline = dl;
     var pdl = ymdOf_(t.projectDeadline);
@@ -2175,7 +2215,7 @@ function buildScheduleReply_(cmd, data, now) {
   var filter = normalizeName_(cmd.assignee);
   if (filter) names = names.filter(function (n) { return normalizeName_(n).indexOf(filter) >= 0; });
 
-  var title = (cmd.dayOffset ? '明日' : '本日') + 'のスケジュール';
+  var title = (['本日', '明日', 'あさって'][cmd.dayOffset || 0] || mdw_(ymd)) + 'のスケジュール';
   var lines = ['【' + title + '】' + mdw_(ymd) + (cmd.assignee ? '（' + cmd.assignee + '）' : '')];
   if (names.length === 0) {
     lines.push(L.isNonWorkingDay(target) ? '休業日です。予定はありません。' : '予定はありません。');
@@ -2198,9 +2238,143 @@ function normalizeName_(s) {
     .replace(/[ァ-ヶ]/g, function (ch) { return String.fromCharCode(ch.charCodeAt(0) - 0x60); });
 }
 
-// 長い返信を吹き出し（最大5つ）に分ける
-function splitMessages_(text) {
-  var max = BOT_CONFIG.MAX_CHARS;
+// 案件詳細で「完了した案件」も探す範囲（日数）。loadData_({ doneSince }) に渡す
+function projectDoneSince_(now) {
+  return KouteiLib.addDays(KouteiLib.startOfDay(now), -BOT_CONFIG.PROJECT_DONE_DAYS).getTime();
+}
+function mdOfMs_(ms) {
+  var d = new Date(Number(ms));
+  return isNaN(d.getTime()) ? '' : (d.getMonth() + 1) + '/' + d.getDate();
+}
+
+// 案件名（の一部）から案件を探し、視点ごとの工程・担当・納期・完了見込みを返す（照合用）
+function buildProjectDetail_(keyword, data, now) {
+  var L = KouteiLib;
+  var key = normalizeName_(keyword);
+  if (!key) return '案件名（の一部）を指定してください。例：案件 渋谷';
+  var cands = new Map();
+  var addCand = function (t) {
+    if (!t.projectName) return;
+    var c = cands.get(t.projectName);
+    if (!c) { c = { name: t.projectName, internal: t.projectNameInternal || '', company: t.companyName || '' }; cands.set(t.projectName, c); }
+    if (!c.internal && t.projectNameInternal) c.internal = t.projectNameInternal;
+    if (!c.company && t.companyName) c.company = t.companyName;
+  };
+  [].concat(data.scheduled.active, data.scheduled.suspended || [], data.recentDone || []).forEach(addCand);
+  var all = Array.from(cands.values());
+  var hits = all.filter(function (c) { return normalizeName_(c.name) === key || normalizeName_(c.internal) === key; });
+  if (!hits.length) hits = all.filter(function (c) { return normalizeName_(c.name).indexOf(key) >= 0 || normalizeName_(c.internal).indexOf(key) >= 0; });
+  if (!hits.length) {
+    return '「' + keyword + '」に一致する案件は見つかりませんでした。\n（進行中と、直近' + BOT_CONFIG.PROJECT_DONE_DAYS + '日に完了した案件から探しています。「案件一覧」で名前を確認できます）';
+  }
+  if (hits.length > BOT_CONFIG.PROJECT_DETAIL_MAX) {
+    return '「' + keyword + '」に一致する案件が' + hits.length + '件あります。もう少し詳しく指定してください。\n'
+      + hits.slice(0, 15).map(function (c) { return ' ・' + c.name + (c.internal ? '（' + c.internal + '）' : ''); }).join('\n')
+      + (hits.length > 15 ? '\n 他' + (hits.length - 15) + '件' : '');
+  }
+
+  var tasks = loadProjectTasks_(hits.map(function (c) { return c.name; }));
+  var sched = new Map(data.scheduled.active.map(function (t) { return [t.id, t]; }));
+  var todayYmd = L.fmtYMD(L.startOfDay(now));
+  var lines = [];
+  hits.forEach(function (c, ci) {
+    var pts = tasks.filter(function (t) { return t.projectName === c.name; });
+    var byVp = new Map();
+    pts.forEach(function (t) {
+      var k = t.viewpointName || '';
+      if (!byVp.has(k)) byVp.set(k, []);
+      byVp.get(k).push(t);
+    });
+    var pdl = pts.map(function (t) { return ymdOf_(t.projectDeadline); }).filter(Boolean).sort()[0];
+    var vpNames = Array.from(byVp.keys()).sort(function (a, b) { return a.localeCompare(b, 'ja', { numeric: true }); });
+    var openCount = vpNames.filter(function (n) { return byVp.get(n).some(function (t) { return t.status !== 'done'; }); }).length;
+    if (ci > 0) lines.push('');
+    lines.push('【案件】' + c.name + (c.company ? '（' + c.company + '）' : ''));
+    var head = [];
+    if (c.internal && c.internal !== c.name) head.push('社内案件名 ' + c.internal);
+    head.push('全体納期 ' + (pdl ? mdw_(pdl) : '未設定'));
+    head.push('視点 進行中' + openCount + '／全' + vpNames.length);
+    lines.push(head.join('｜'));
+    vpNames.forEach(function (vn) {
+      var steps = byVp.get(vn).filter(function (t) { return (Number(t.hours) || 0) > 0 || t.status !== 'done'; })
+        .sort(function (a, b) { return ((a.stepOrder || 0) - (b.stepOrder || 0)) || ((a.createdAt || 0) - (b.createdAt || 0)); });
+      if (!steps.length) return;
+      var dl = steps.map(function (t) { return ymdOf_(t.deadline || t.projectDeadline); }).filter(Boolean).sort()[0] || '';
+      var assignees = [];
+      steps.forEach(function (t) { if (t.assignee && assignees.indexOf(t.assignee) < 0) assignees.push(t.assignee); });
+      var open = steps.filter(function (t) { return t.status !== 'done'; });
+      var state;
+      if (open.length === 0) {
+        var lastDone = Math.max.apply(null, steps.map(function (t) { return Number(t.completedAt) || 0; }));
+        var waiting = steps.some(function (t) { return t.reviewState === 'waiting'; });
+        state = (waiting ? '確認待ち' : '完了') + (lastDone ? '（' + mdOfMs_(lastDone) + '）' : '');
+      } else if (open.some(function (t) { return t.suspended; })) {
+        state = '制作中断中';
+      } else {
+        var ends = open.map(function (t) { var s = sched.get(t.id); return s && s.scheduledEnd ? s.scheduledEnd.getTime() + (s.scheduledEndMin || 0) * 60000 : null; })
+          .filter(function (x) { return x != null; });
+        var endTs = ends.length ? Math.max.apply(null, ends) : null;
+        state = '完了見込み ' + (endTs == null ? '未定' : tsLabel_(endTs));
+        if (endTs != null && dl && L.fmtYMD(new Date(endTs)) > dl) state += ' ※納期に遅れる見込み';
+        else if (dl && dl < todayYmd) state += ' ※納期超過';
+      }
+      var parts = [' ・' + (vn || '（視点名なし）')];
+      if (assignees.length) parts.push('担当:' + assignees.join('・'));
+      parts.push('納期' + (dl ? mdw_(dl) : '未設定'));
+      parts.push(state);
+      lines.push(parts.join('  '));
+      lines.push('    ' + steps.map(function (t) {
+        var name = t.stepName || '工程';
+        if (t.status === 'done') return name + (t.cancelled ? '（中止）' : '✓' + mdOfMs_(t.completedAt));
+        var s = sched.get(t.id);
+        var rest = s ? Number(s.remainingHours) || 0 : Math.max(0, (Number(t.hours) || 0) - (Number(t.completedHours) || 0));
+        return name + '（残り' + rest.toFixed(1) + 'h）';
+      }).join(' → '));
+    });
+  });
+  return lines.join('\n');
+}
+
+// 担当者ごとの今後の予定時間と空き時間（営業日 numDays 日ぶん。休日・不在・出勤日・残業を考慮）
+function buildWorkload_(data, now, numDays) {
+  var L = KouteiLib;
+  var days = Math.max(1, Math.min(14, Math.round(Number(numDays) || 5)));
+  var names = [];
+  data.assigneeOrder.concat(data.scheduled.active.map(function (t) { return t.assignee; })).forEach(function (n) {
+    if (n && names.indexOf(n) < 0) names.push(n);
+  });
+  names = L.sortAssigneesByMaster(names, data.assigneeOrder);
+  var fh = L.computeFreeHours(data.scheduled.active, data.settings, names, now, days);
+  var ymds = fh.days.map(function (d) { return L.fmtYMD(d); });
+  var booked = {};
+  data.scheduled.active.forEach(function (t) {
+    (t.slots || []).forEach(function (s) {
+      var i = ymds.indexOf(L.fmtYMD(s.date));
+      if (i < 0) return;
+      var a = t.assignee || '';
+      if (!booked[a]) booked[a] = ymds.map(function () { return 0; });
+      booked[a][i] += (s.endMin - s.startMin) / 60;
+    });
+  });
+  if (!ymds.length) return '【担当者の予定と空き時間】対象の営業日がありません。';
+  var lines = ['【担当者の予定と空き時間】' + mdw_(ymds[0]) + '〜' + mdw_(ymds[ymds.length - 1]) + '（営業日' + ymds.length + '日）'];
+  names.forEach(function (n) {
+    var b = booked[n] || ymds.map(function () { return 0; });
+    var f = fh.byAssignee[n] || [];
+    var sum = function (arr) { return arr.reduce(function (s, x) { return s + (x || 0); }, 0); };
+    lines.push('');
+    lines.push('＜' + n + '＞ 予定' + sum(b).toFixed(1) + 'h／空き' + sum(f).toFixed(1) + 'h');
+    lines.push(' ' + ymds.map(function (y, i) { return mdw_(y) + ' 予定' + b[i].toFixed(1) + 'h・空き' + (f[i] || 0).toFixed(1) + 'h'; }).join('\n '));
+  });
+  lines.push('');
+  lines.push('※空き時間は本日の経過分も含みます。');
+  return lines.join('\n');
+}
+
+// 長い返信を吹き出し（既定は LINE の上限：最大5つ・1つ4800字）に分ける
+function splitMessages_(text, maxChars, maxCount) {
+  var max = maxChars || BOT_CONFIG.MAX_CHARS;
+  var maxMessages = maxCount || BOT_CONFIG.MAX_MESSAGES;
   var chunks = [];
   var cur = '';
   String(text).split('\n').forEach(function (line) {
@@ -2210,8 +2384,8 @@ function splitMessages_(text) {
   });
   if (cur) chunks.push(cur);
   chunks = chunks.filter(function (c) { return c.trim(); });
-  if (chunks.length > BOT_CONFIG.MAX_MESSAGES) {
-    chunks = chunks.slice(0, BOT_CONFIG.MAX_MESSAGES);
+  if (chunks.length > maxMessages) {
+    chunks = chunks.slice(0, maxMessages);
     var note = '\n…（長いため以降を省略しました。続きはアプリでご確認ください）';
     var last = chunks[chunks.length - 1];
     chunks[chunks.length - 1] = last.slice(0, max - note.length) + note;
@@ -2563,4 +2737,499 @@ function stopReportTrigger() {
 function clearRegisteredIds() {
   props_().setProperty('ALLOWED_IDS', '[]');
   console.log('登録をすべて解除しました');
+}
+
+// ---- line-bot/gemini.js（Gemini による自由な質問・照合）----
+// Gemini には工程図のデータを丸ごと渡さず、「どのデータを見るか」をツール（関数呼び出し）で選ばせる。
+// ツールの中身は LINE・Discord と同じ集計（bot.js の build*_）なので、数字や日付は工程図の計算どおりになる。
+// Gemini は見るだけで、工程図のデータを書き換える手段は持たない。
+// 設定値（スクリプトプロパティ）:
+//   GEMINI_API_KEY … Google AI Studio で発行した API キー
+//   GEMINI_MODEL   … 使うモデル（省略時は BOT_CONFIG.GEMINI_DEFAULT_MODEL）
+/* global BOT_CONFIG, KouteiLib, props_, loadData_, projectDoneSince_, buildDeadlineReply_, buildProjectsReply_,
+   buildProjectDetail_, buildScheduleReply_, buildProgressReport_, buildWorkload_, mdw_ */
+
+var GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta/models/';
+
+var GEMINI_TOOLS = [{
+  functionDeclarations: [
+    {
+      name: 'get_deadlines',
+      description: '未完了の視点（制作物）を納期で絞り込んで返す。納期を過ぎた未完了も含む（tomorrow・next_week 以外）。各視点の担当者・完了見込み（自動計算）・遅れ見込みつき。',
+      parameters: {
+        type: 'OBJECT',
+        properties: { range: { type: 'STRING', enum: ['today', 'tomorrow', 'this_week', 'next_week', 'all'], description: 'today=本日, tomorrow=明日, this_week=今日〜今週日曜, next_week=来週月〜日, all=納期のある全件' } },
+        required: ['range'],
+      },
+    },
+    {
+      name: 'get_project_list',
+      description: '進行中の案件の一覧（会社別。全体納期・視点名・担当者・完了見込み）。制作中断中の案件名も含む。',
+    },
+    {
+      name: 'get_project_detail',
+      description: '案件名（の一部、社内案件名でも可）で案件を探し、視点ごとの工程（完了日・残り時間）・担当・納期・完了見込みを返す。直近60日に完了した案件も探せる。特定の案件の確認や、ユーザーが貼り付けた情報との照合に使う。',
+      parameters: {
+        type: 'OBJECT',
+        properties: { keyword: { type: 'STRING', description: '案件名の一部。例: 渋谷' } },
+        required: ['keyword'],
+      },
+    },
+    {
+      name: 'get_schedule',
+      description: '指定した日の担当者別の作業予定（開始・終了時刻、案件・視点・工程）。今日から30日先まで。',
+      parameters: {
+        type: 'OBJECT',
+        properties: {
+          date: { type: 'STRING', description: '日付 YYYY-MM-DD' },
+          assignee: { type: 'STRING', description: '担当者名で絞り込む（名前の一部でよい。省略で全員）' },
+        },
+        required: ['date'],
+      },
+    },
+    {
+      name: 'get_progress_report',
+      description: '進捗のまとめ：本日納期・納期超過・納期に遅れる見込み・明日納期・前営業日以降に完了した作業・本日の担当者別の予定。',
+    },
+    {
+      name: 'get_workload',
+      description: '担当者ごとの今後の予定時間と空き時間（営業日ベース）。誰が空いているか・忙しいかの確認に使う。',
+      parameters: {
+        type: 'OBJECT',
+        properties: { days: { type: 'INTEGER', description: '今日から数える営業日数（1〜14。既定5）' } },
+      },
+    },
+  ],
+}];
+
+function geminiSystemPrompt_(now) {
+  var L = KouteiLib;
+  var ymd = L.fmtYMD(now);
+  return [
+    'あなたは建築CG制作チームの工程管理アプリ「工程図」の確認係です。',
+    '今日は ' + ymd + '（' + mdw_(ymd) + '）、現在時刻は ' + L.minToTime(now.getHours() * 60 + now.getMinutes()) + '（ベトナム時間）です。',
+    '- 工程図のデータは必ずツールで取得し、ツールの結果だけを根拠に答えてください。推測や一般論で補わないでください。',
+    '- データに無いことは「工程図には見当たりません」と答えてください。',
+    '- ユーザーが貼り付けた予定・納期・案件などを工程図と照合するよう求められたら、項目ごとに「一致」「相違（工程図では〜）」「工程図に無い」に分けて示してください。',
+    '- 「完了見込み」はアプリの自動計算による予定で、確定ではないことを必要に応じて添えてください。',
+    '- 日付は M/D(曜) の形で書いてください。',
+    '- 回答はユーザーと同じ言語（日本語・ベトナム語など）で、チャットで読みやすいよう簡潔に。長い一覧は要点に絞ってください。',
+    '- あなたは工程図を見ることしかできません。登録・修正・削除を頼まれたら、アプリで操作するよう案内してください。',
+  ].join('\n');
+}
+
+function runGeminiTool_(name, args, getData, now) {
+  var L = KouteiLib;
+  args = args || {};
+  if (name === 'get_deadlines') {
+    var map = { today: 'today', tomorrow: 'tomorrow', this_week: 'thisWeek', next_week: 'nextWeek', all: 'all' };
+    return buildDeadlineReply_(map[args.range] || 'today', getData(), now);
+  }
+  if (name === 'get_project_list') return buildProjectsReply_(getData());
+  if (name === 'get_project_detail') return buildProjectDetail_(String(args.keyword || ''), getData(), now);
+  if (name === 'get_schedule') {
+    var d = L.parseYMD(String(args.date || ''));
+    if (!d) return 'エラー: date は YYYY-MM-DD で指定してください。';
+    var offset = Math.round((L.startOfDay(d).getTime() - L.startOfDay(now).getTime()) / 86400000);
+    if (offset < 0 || offset > 30) return 'エラー: 予定を確認できるのは今日から30日先までです（過去の予定は残っていません）。';
+    return buildScheduleReply_({ dayOffset: offset, assignee: String(args.assignee || '') }, getData(), now);
+  }
+  if (name === 'get_progress_report') return buildProgressReport_(getData(), now);
+  if (name === 'get_workload') return buildWorkload_(getData(), now, args.days || 5);
+  return 'エラー: 不明なツール ' + name;
+}
+
+function GeminiError_(message, userMessage) {
+  var e = new Error(message);
+  e.userMessage = userMessage;
+  return e;
+}
+
+function callGemini_(apiKey, contents, now, noMoreTools) {
+  var body = {
+    systemInstruction: { parts: [{ text: geminiSystemPrompt_(now) }] },
+    contents: contents,
+    tools: GEMINI_TOOLS,
+    generationConfig: { temperature: 0.2 },
+  };
+  if (noMoreTools) body.toolConfig = { functionCallingConfig: { mode: 'NONE' } };
+  var model = props_().getProperty('GEMINI_MODEL') || BOT_CONFIG.GEMINI_DEFAULT_MODEL;
+  var res = UrlFetchApp.fetch(GEMINI_API + encodeURIComponent(model) + ':generateContent', {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { 'x-goog-api-key': apiKey },
+    payload: JSON.stringify(body),
+    muteHttpExceptions: true,
+  });
+  var code = res.getResponseCode();
+  if (code === 429) {
+    throw GeminiError_('Gemini 429: ' + res.getContentText().slice(0, 300),
+      'Gemini の利用回数の上限（無料枠）に達しました。少し時間をおくか、/納期 などの決まったコマンドをお使いください。');
+  }
+  if (code !== 200) {
+    throw GeminiError_('Gemini ' + code + ': ' + res.getContentText().slice(0, 300),
+      'Gemini に問い合わせできませんでした（エラー ' + code + '）。');
+  }
+  var data = JSON.parse(res.getContentText());
+  var cand = data.candidates && data.candidates[0];
+  if (!cand || !cand.content) {
+    var reason = (data.promptFeedback && data.promptFeedback.blockReason) || (cand && cand.finishReason) || 'unknown';
+    throw GeminiError_('Gemini の応答が空: ' + reason, 'Gemini が回答を返しませんでした（' + reason + '）。質問の言い方を変えてお試しください。');
+  }
+  return cand;
+}
+
+// 質問に答える。戻り値 { text, tools: 使ったツール名の配列 }
+function askGemini_(question, now) {
+  var apiKey = props_().getProperty('GEMINI_API_KEY');
+  if (!apiKey) return { text: 'Gemini の APIキー（GEMINI_API_KEY）が設定されていません。管理者に連絡してください。', tools: [] };
+  var cached = null;
+  // 1回の質問でデータを読むのは1回だけ（ツールを何度呼ばれても Firestore の読み取りを増やさない）
+  var getData = function () {
+    if (!cached) cached = loadData_({ doneSince: projectDoneSince_(now) });
+    return cached;
+  };
+  var contents = [{ role: 'user', parts: [{ text: String(question || '') }] }];
+  var used = [];
+  for (var round = 0; round < BOT_CONFIG.GEMINI_MAX_ROUNDS; round++) {
+    var cand = callGemini_(apiKey, contents, now, round === BOT_CONFIG.GEMINI_MAX_ROUNDS - 1);
+    var parts = cand.content.parts || [];
+    var calls = parts.filter(function (p) { return p.functionCall; });
+    if (!calls.length) {
+      var text = parts.filter(function (p) { return p.text && !p.thought; }).map(function (p) { return p.text; }).join('').trim();
+      return { text: text || '（回答を作れませんでした。質問の言い方を変えてお試しください）', tools: used };
+    }
+    // モデルの発言は署名（thoughtSignature 等）ごとそのまま戻す必要がある
+    contents.push(cand.content);
+    contents.push({
+      role: 'user',
+      parts: calls.map(function (p) {
+        var fc = p.functionCall;
+        used.push(fc.name);
+        var result;
+        try { result = runGeminiTool_(fc.name, fc.args, getData, now); } catch (err) {
+          console.error('Gemini ツールエラー:', err && err.stack ? err.stack : err);
+          result = 'エラー: データを取得できませんでした（' + String(err && err.message || err).slice(0, 200) + '）';
+        }
+        var fr = { name: fc.name, response: { result: result } };
+        if (fc.id) fr.id = fc.id;
+        return { functionResponse: fr };
+      }),
+    });
+  }
+  return { text: '（回答を作れませんでした。質問を短くしてお試しください）', tools: used };
+}
+
+// ---- line-bot/discord.js（Discord Bot：Apps Script 側）----
+// Discord の「/コマンド」は Cloudflare Worker（discord-bot/worker.js）が受け取って署名を確かめ、
+// { relay: 'discord', secret, interaction } の形でここ（doPost）へ中継する。
+// ここで工程図を読み、答えを Discord の Webhook（interaction token）で書き込む。
+// 設定値（スクリプトプロパティ）:
+//   RELAY_SECRET           … Worker と共有する合言葉（makeRelaySecret で作る）
+//   DISCORD_BOT_TOKEN      … コマンド登録（registerDiscordCommands）にだけ使う Bot のトークン
+//   DISCORD_GUILD_ID       … 使ってよい Discord サーバーのID（複数ならカンマ区切り）
+//   DISCORD_APPLICATION_ID … registerDiscordCommands が自動で書き込む
+/* global KouteiLib, props_, loadData_, doneFetchSince_, projectDoneSince_, splitMessages_,
+   buildDeadlineReply_, buildProjectsReply_, buildProjectDetail_, buildScheduleReply_, buildProgressReport_,
+   buildWorkload_, viewpointsOf_, projectIndexer_, tsLabel_, askGemini_ */
+
+var DISCORD_API = 'https://discord.com/api/v10';
+var DISCORD_MAX_CHARS = 1900;  // Discord の1メッセージ上限 2000 字に余裕を持たせる
+var DISCORD_MAX_MESSAGES = 5;
+
+var DISCORD_COMMANDS = [
+  {
+    name: '納期', description: '納期が近い・過ぎている未完了の視点',
+    options: [{
+      type: 3, name: '範囲', description: 'いつの納期か（省略で本日）', required: false,
+      choices: [
+        { name: '本日', value: 'today' }, { name: '明日', value: 'tomorrow' }, { name: '今週', value: 'thisWeek' },
+        { name: '来週', value: 'nextWeek' }, { name: '全体', value: 'all' },
+      ],
+    }],
+  },
+  { name: '案件一覧', description: '進行中の案件（会社別・全体納期・担当・完了見込み）' },
+  {
+    name: '案件', description: '案件の詳細（視点ごとの工程・担当・納期・完了見込み）',
+    options: [{ type: 3, name: '名前', description: '案件名の一部（社内案件名でも可）', required: true, max_length: 100 }],
+  },
+  {
+    name: 'スケジュール', description: '担当者別の作業予定',
+    options: [
+      { type: 3, name: '日', description: 'いつの予定か（省略で本日）', required: false, choices: [{ name: '本日', value: '0' }, { name: '明日', value: '1' }, { name: 'あさって', value: '2' }] },
+      { type: 3, name: '担当者', description: '担当者名で絞り込み（名前の一部でOK）', required: false, max_length: 50 },
+    ],
+  },
+  {
+    name: '空き状況', description: '担当者ごとの今後の予定時間と空き時間',
+    options: [{ type: 4, name: '日数', description: '今日から数える営業日数（省略で5）', required: false, min_value: 1, max_value: 14 }],
+  },
+  { name: '進捗報告', description: '本日納期・納期超過・遅れ見込み・最近の完了・本日の予定のまとめ' },
+  {
+    name: '質問', description: '工程図について自由に質問・照合（AI が工程図のデータを見て答えます）',
+    options: [{ type: 3, name: '内容', description: '例：渋谷マンションは今週中に終わる？／下の予定と工程図を照合して…', required: true, max_length: 4000 }],
+  },
+  {
+    name: '書き出し', description: '工程図の情報を CSV ファイル（Excel・スプレッドシートで開ける）で書き出す',
+    options: [{
+      type: 3, name: '内容', description: '書き出す内容', required: true,
+      choices: [
+        { name: '進行中の視点一覧', value: 'viewpoints' },
+        { name: '今後2週間の予定', value: 'schedule' },
+        { name: '直近30日の完了実績', value: 'done' },
+      ],
+    }],
+  },
+  { name: 'ヘルプ', description: '工程図Botの使い方' },
+];
+
+// ============ 受付（Worker からの中継） ============
+function discordGuildIds_() {
+  return String(props_().getProperty('DISCORD_GUILD_ID') || '').split(/[,\s]+/).filter(Boolean);
+}
+
+function handleDiscordRelay_(body) {
+  var p = props_();
+  var secret = p.getProperty('RELAY_SECRET');
+  if (!secret || body.secret !== secret) {
+    console.warn('Discord 中継: 合言葉（RELAY_SECRET）が一致しないため拒否しました');
+    return { ok: false, error: '合言葉（RELAY_SECRET）が一致しません' };
+  }
+  var i = body.interaction || {};
+  var appId = p.getProperty('DISCORD_APPLICATION_ID');
+  if (!appId || i.application_id !== appId) {
+    return { ok: false, error: 'アプリID が一致しません（registerDiscordCommands を実行してください）' };
+  }
+  if (!i.guild_id || discordGuildIds_().indexOf(i.guild_id) < 0) {
+    sendDiscord_(i, { text: 'このサーバー（またはDM）では工程図Botを使えません。' });
+    return { ok: true };
+  }
+  var out;
+  try {
+    out = runDiscordCommand_(i, new Date());
+  } catch (err) {
+    console.error('Discord コマンドエラー:', err && err.stack ? err.stack : err);
+    out = err && err.userMessage ? { text: err.userMessage } : {
+      markdown: true,
+      text: 'データの取得に失敗しました。時間をおいてもう一度お試しください。\n-# 管理者向け: ' + escapeDiscord_(String(err && err.message || err).slice(0, 200)),
+    };
+  }
+  sendDiscord_(i, out);
+  return { ok: true };
+}
+
+function discordOptions_(i) {
+  var out = {};
+  ((i.data && i.data.options) || []).forEach(function (o) { out[o.name] = o.value; });
+  return out;
+}
+
+// 戻り値 { text, markdown（true なら Gemini の書式をそのまま出す）, file: { name, content } }
+function runDiscordCommand_(i, now) {
+  var name = i.data && i.data.name;
+  var o = discordOptions_(i);
+  if (name === '納期') return { text: buildDeadlineReply_(o['範囲'] || 'today', loadData_(), now) };
+  if (name === '案件一覧') return { text: buildProjectsReply_(loadData_()) };
+  if (name === '案件') return { text: buildProjectDetail_(String(o['名前'] || ''), loadData_({ doneSince: projectDoneSince_(now) }), now) };
+  if (name === 'スケジュール') {
+    return { text: buildScheduleReply_({ dayOffset: Number(o['日'] || 0), assignee: String(o['担当者'] || '') }, loadData_(), now) };
+  }
+  if (name === '空き状況') return { text: buildWorkload_(loadData_(), now, o['日数'] || 5) };
+  if (name === '進捗報告') return { text: buildProgressReport_(loadData_({ doneSince: doneFetchSince_(now) }), now) };
+  if (name === '質問') {
+    var q = String(o['内容'] || '');
+    var ans = askGemini_(q, now);
+    var quoted = q.length > 300 ? q.slice(0, 300) + '…' : q;
+    return {
+      markdown: true,
+      text: quoted.split('\n').map(function (l) { return '> ' + escapeDiscord_(l); }).join('\n') + '\n' + ans.text
+        + '\n-# AI（Gemini）の回答です。正確な一覧は /納期 /案件 などで確認できます。',
+    };
+  }
+  if (name === '書き出し') return buildExport_(o['内容'], now);
+  return { text: discordHelpText_() };
+}
+
+function discordHelpText_() {
+  return [
+    '【工程図Bot（Discord）の使い方】',
+    '「/」を入力するとコマンドの一覧が出ます。',
+    '',
+    '/納期 範囲 … 本日・明日・今週・来週・全体の納期（未完了）',
+    '/案件一覧 … 進行中の案件（会社別）',
+    '/案件 名前 … 案件の詳細（視点ごとの工程・担当・納期・完了見込み）',
+    '/スケジュール 日 担当者 … 担当者別の作業予定',
+    '/空き状況 日数 … 担当者ごとの予定時間と空き時間',
+    '/進捗報告 … 進捗のまとめ',
+    '/質問 内容 … 自由な質問・照合（AI が工程図のデータを見て答えます）',
+    '/書き出し 内容 … CSV ファイルで書き出し',
+    '',
+    '※工程図は見るだけです（Bot から登録・変更はしません）。',
+    '※「完了見込み」はアプリと同じ計算による予定です。',
+  ].join('\n');
+}
+
+// ============ CSV 書き出し ============
+function csvCell_(v) {
+  var s = v == null ? '' : String(v);
+  // 表計算ソフトで数式として実行されないよう、= + - @ で始まる文字（数値以外）には ' を付ける
+  if (/^[=+\-@\t\r]/.test(s) && !/^-?\d+(\.\d+)?$/.test(s)) s = "'" + s;
+  return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function toCsv_(rows) {
+  // 先頭の BOM で Excel でも文字化けしない
+  return '\uFEFF' + rows.map(function (r) { return r.map(csvCell_).join(','); }).join('\r\n') + '\r\n';
+}
+
+function buildExport_(kind, now) {
+  var L = KouteiLib;
+  var ymd = L.fmtYMD(now);
+  var rows, title, file;
+  if (kind === 'viewpoints') {
+    var data = loadData_();
+    var projIdx = projectIndexer_(data);
+    var vps = viewpointsOf_(data.scheduled.active).sort(function (a, b) {
+      return (a.deadline || '9999').localeCompare(b.deadline || '9999') || (projIdx(a.projectName) - projIdx(b.projectName))
+        || a.viewpointName.localeCompare(b.viewpointName, 'ja', { numeric: true });
+    });
+    rows = [['会社', '社外案件名', '社内案件名', '視点', '担当', '未完了の工程', '残り作業(h)', '納期', '全体納期', '完了見込み', '納期遅れ見込み']];
+    vps.forEach(function (v) {
+      var late = v.deadline && v.endTs != null && L.fmtYMD(new Date(v.endTs)) > v.deadline;
+      rows.push([v.companyName, v.projectName, v.projectNameInternal, v.viewpointName, v.assignees.join('・'), v.pendingSteps.join('・'),
+        v.remainingHours.toFixed(1), v.deadline, v.projectDeadline, v.endTs == null ? '' : L.fmtYMD(new Date(v.endTs)) + ' ' + tsLabel_(v.endTs).split(' ')[1],
+        late ? '遅れ見込み' : '']);
+    });
+    var suspended = data.scheduled.suspended || [];
+    viewpointsOf_(suspended).forEach(function (v) {
+      rows.push([v.companyName, v.projectName, v.projectNameInternal, v.viewpointName, v.assignees.join('・'), v.pendingSteps.join('・'),
+        '', v.deadline, v.projectDeadline, '制作中断中', '']);
+    });
+    title = '進行中の視点一覧（' + vps.length + '件' + (suspended.length ? '＋制作中断中' : '') + '）';
+    file = 'koutei_viewpoints_' + ymd + '.csv';
+  } else if (kind === 'schedule') {
+    var sd = loadData_();
+    var end = L.fmtYMD(L.addDays(L.startOfDay(now), 13));
+    rows = [['日付', '曜日', '担当', '開始', '終了', '時間(h)', '会社', '社外案件名', '視点', '工程']];
+    var items = [];
+    sd.scheduled.active.forEach(function (t) {
+      (t.slots || []).forEach(function (s) {
+        var d = L.fmtYMD(s.date);
+        if (d < ymd || d > end) return;
+        items.push({ d: d, s: s, t: t });
+      });
+    });
+    var order = new Map(L.sortAssigneesByMaster(Array.from(new Set(items.map(function (x) { return x.t.assignee || ''; }))), sd.assigneeOrder)
+      .map(function (n, idx) { return [n, idx]; }));
+    items.sort(function (a, b) { return a.d.localeCompare(b.d) || (order.get(a.t.assignee || '') - order.get(b.t.assignee || '')) || (a.s.startMin - b.s.startMin); });
+    items.forEach(function (x) {
+      rows.push([x.d, L.dayName(x.s.date), x.t.assignee || '', L.minToTime(x.s.startMin), L.minToTime(x.s.endMin), ((x.s.endMin - x.s.startMin) / 60).toFixed(1),
+        x.t.companyName || '', x.t.projectName || x.t.projectNameInternal || '', x.t.viewpointName || '', x.t.stepName || '']);
+    });
+    title = '今後2週間の予定（' + (rows.length - 1) + '行）';
+    file = 'koutei_schedule_' + ymd + '.csv';
+  } else if (kind === 'done') {
+    var since = L.addDays(L.startOfDay(now), -30).getTime();
+    var dd = loadData_({ doneSince: since });
+    var done = dd.recentDone.slice().sort(function (a, b) { return (Number(a.completedAt) || 0) - (Number(b.completedAt) || 0); });
+    rows = [['完了日', '担当', '会社', '社外案件名', '社内案件名', '視点', '工程', '作業時間(h)']];
+    done.forEach(function (t) {
+      rows.push([L.fmtYMD(new Date(Number(t.completedAt))), t.assignee || '', t.companyName || '', t.projectName || '', t.projectNameInternal || '',
+        t.viewpointName || '', t.stepName || '', (Number(t.hours) || 0).toFixed(1)]);
+    });
+    title = '直近30日の完了実績（' + done.length + '件・中止を除く）';
+    file = 'koutei_done_' + ymd + '.csv';
+  } else {
+    return { text: '書き出す内容を選んでください。' };
+  }
+  return { text: '【書き出し】' + title + '\nファイルは Excel やGoogle スプレッドシートで開けます。', file: { name: file, content: toCsv_(rows) } };
+}
+
+// ============ Discord への書き込み ============
+// 工程図の文字（案件名など）に含まれる * _ ~ ` | などを、Discord の書式として解釈させない
+function escapeDiscord_(s) {
+  return String(s).replace(/([\\*_~`|])/g, '\\$1').replace(/^([#>-])/gm, '\\$1');
+}
+function formatForDiscord_(text) {
+  return escapeDiscord_(text).replace(/^(【[^\n]*)$/gm, '**$1**');
+}
+
+function discordFetch_(method, path, payload, botToken) {
+  var params = { method: method, muteHttpExceptions: true };
+  if (botToken) params.headers = { Authorization: 'Bot ' + botToken };
+  if (payload && payload.files) {
+    params.payload = payload.files;
+  } else if (payload) {
+    params.contentType = 'application/json';
+    params.payload = JSON.stringify(payload);
+  }
+  var res = UrlFetchApp.fetch(DISCORD_API + path, params);
+  var code = res.getResponseCode();
+  if (code < 200 || code >= 300) {
+    throw new Error('Discord ' + method.toUpperCase() + ' ' + path.replace(/\/webhooks\/\d+\/[^/]+/, '/webhooks/…') + ' → ' + code + ': ' + res.getContentText().slice(0, 300));
+  }
+  return code === 204 ? null : JSON.parse(res.getContentText() || 'null');
+}
+
+// 考え中（deferred）の返事を答えに書き換え、長ければ続きを追加で送る。ファイルは最後に添付する
+function sendDiscord_(i, out) {
+  var hook = '/webhooks/' + i.application_id + '/' + i.token;
+  var text = out.markdown ? String(out.text) : formatForDiscord_(out.text);
+  var chunks = splitMessages_(text, DISCORD_MAX_CHARS, DISCORD_MAX_MESSAGES);
+  var noPing = { parse: [] }; // @everyone などで通知が飛ばないようにする
+  try {
+    discordFetch_('patch', hook + '/messages/@original', { content: chunks[0], allowed_mentions: noPing });
+    for (var k = 1; k < chunks.length; k++) discordFetch_('post', hook, { content: chunks[k], allowed_mentions: noPing });
+    if (out.file) {
+      var blob = Utilities.newBlob('', 'text/csv', out.file.name).setDataFromString(out.file.content, 'UTF-8');
+      discordFetch_('post', hook, {
+        files: {
+          payload_json: JSON.stringify({ allowed_mentions: noPing, attachments: [{ id: 0, filename: out.file.name }] }),
+          'files[0]': blob,
+        },
+      });
+    }
+  } catch (err) {
+    console.error('Discord への書き込みエラー:', err && err.stack ? err.stack : err);
+  }
+}
+
+// ============ 管理用（GAS エディタから手動実行） ============
+// Worker と共有する合言葉を作る。実行ログに出た値を Cloudflare の RELAY_SECRET に貼る
+function makeRelaySecret() {
+  var p = props_();
+  var s = p.getProperty('RELAY_SECRET');
+  if (!s) {
+    s = (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, '');
+    p.setProperty('RELAY_SECRET', s);
+  }
+  console.log('RELAY_SECRET（Cloudflare の Worker に同じ値を設定してください）:\n' + s);
+}
+
+// Discord サーバーに「/納期」などのコマンドを登録する（コマンドを変えたときも再実行）
+function registerDiscordCommands() {
+  var token = props_().getProperty('DISCORD_BOT_TOKEN');
+  var guilds = discordGuildIds_();
+  if (!token || !guilds.length) throw new Error('スクリプトプロパティに DISCORD_BOT_TOKEN と DISCORD_GUILD_ID を設定してください');
+  var app = discordFetch_('get', '/applications/@me', null, token);
+  props_().setProperty('DISCORD_APPLICATION_ID', app.id);
+  guilds.forEach(function (g) {
+    discordFetch_('put', '/applications/' + app.id + '/guilds/' + g + '/commands', DISCORD_COMMANDS, token);
+    console.log('サーバー ' + g + ' にコマンドを登録しました: ' + DISCORD_COMMANDS.map(function (c) { return '/' + c.name; }).join(' '));
+  });
+}
+
+// Discord に送らずに、各コマンドの答えを実行ログで確認する（Gemini は GEMINI_API_KEY があるときだけ）
+function testDiscordCommands() {
+  var now = new Date();
+  var cmd = function (name, options) {
+    return { data: { name: name, options: Object.keys(options || {}).map(function (k) { return { name: k, value: options[k] }; }) } };
+  };
+  [
+    cmd('納期', { '範囲': 'thisWeek' }), cmd('案件一覧'), cmd('空き状況', { '日数': 3 }), cmd('進捗報告'),
+    cmd('書き出し', { '内容': 'viewpoints' }),
+  ].concat(props_().getProperty('GEMINI_API_KEY') ? [cmd('質問', { '内容': '今週納期で遅れそうな案件はある？' })] : [])
+    .forEach(function (i) {
+      var out = runDiscordCommand_(i, now);
+      console.log('===== /' + i.data.name + ' =====\n' + out.text + (out.file ? '\n[添付] ' + out.file.name + '（' + out.file.content.split('\r\n').length + '行）' : ''));
+    });
 }

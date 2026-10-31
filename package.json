@@ -6,13 +6,13 @@
   "description": "工程図 - 建築CG制作スケジュール可視化アプリ",
   "scripts": {
     "dev": "vite",
-    "check": "eslint src line-bot",
+    "check": "eslint src line-bot discord-bot",
     "build:line": "node line-bot/build.mjs",
     "prebuild": "npm run check && npm run build:line",
     "build": "vite build",
     "preview": "vite preview",
     "deploy": "npm run build && gh-pages -d dist",
-    "test": "node sync/test/logic.test.mjs && node sync/test/setup.test.mjs && node test/salesLink.test.mjs && node test/assigneeHours.test.mjs && node test/issuer.test.mjs && node test/workdays.test.mjs && node line-bot/build.mjs && node line-bot/test/bot.test.mjs",
+    "test": "node sync/test/logic.test.mjs && node sync/test/setup.test.mjs && node test/salesLink.test.mjs && node test/assigneeHours.test.mjs && node test/issuer.test.mjs && node test/workdays.test.mjs && node line-bot/build.mjs && node line-bot/test/bot.test.mjs && node line-bot/test/discord.test.mjs && node discord-bot/test/worker.test.mjs",
     "gas:login": "npx --yes @google/clasp login",
     "gas:push": "npx --yes @google/clasp push --force"
   },

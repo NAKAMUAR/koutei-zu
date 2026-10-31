@@ -1,6 +1,6 @@
-// LINE Bot 用の Google Apps Script ファイル（line-bot/dist/Code.gs）を生成する。
+// 工程図Bot（LINE・Discord 共通）の Google Apps Script ファイル（line-bot/dist/Code.gs）を生成する。
 // アプリ本体と同じスケジュール計算を使うため、src/lib・src/viewpoint の純ロジックを
-// ES モジュール構文を外して1つの名前空間（KouteiLib）にまとめ、bot.js と連結する。
+// ES モジュール構文を外して1つの名前空間（KouteiLib）にまとめ、BOT_FILES と連結する。
 // `npm run build` の前に自動実行される（prebuild）。生成物はコミットし、GAS エディタへ貼り付けて使う。
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -13,9 +13,11 @@ const root = join(here, '..');
 const LIB_FILES = ['src/viewpoint/viewpointUtils.js', 'src/lib/utils.js', 'src/lib/schedule.js'];
 const LIB_EXPORTS = [
   'migrateTask', 'normalizePriorities', 'scheduleTasks', 'computeProjectOrder', 'compareCompanyDisplay',
-  'sortAssigneesByMaster', 'syncHolidays', 'isNonWorkingDay', 'DEFAULT_SETTINGS',
-  'fmtYMD', 'parseYMD', 'addDays', 'startOfDay', 'minToTime', 'dayName',
+  'sortAssigneesByMaster', 'computeFreeHours', 'syncHolidays', 'syncWorkdays', 'withAssigneeHours',
+  'isNonWorkingDay', 'DEFAULT_SETTINGS', 'fmtYMD', 'parseYMD', 'addDays', 'startOfDay', 'minToTime', 'dayName',
 ];
+// Bot 本体（GAS の通常のスクリプトとして連結する。関数はファイルをまたいで呼び合う）
+const BOT_FILES = ['bot.js', 'gemini.js', 'discord.js'];
 
 function stripModuleSyntax(src, file) {
   let out = src.replace(/^import\s[^;]*?from\s+['"][^'"]+['"];?[ \t]*$/gm, '');
@@ -34,9 +36,9 @@ const libBody = LIB_FILES.map((f) => {
 
 const bundle = [
   '// ============================================================',
-  '// 工程図 LINE Bot（Google Apps Script）',
+  '// 工程図Bot（LINE・Discord 共通。Google Apps Script）',
   '// このファイルは line-bot/build.mjs が自動生成したものです。直接編集しないでください。',
-  '// 使い方は line-bot/README.md を参照。',
+  '// 使い方は line-bot/README.md（LINE）・discord-bot/README.md（Discord）を参照。',
   '// ============================================================',
   '',
   'var KouteiLib = (function () {',
@@ -44,7 +46,7 @@ const bundle = [
   `return { ${LIB_EXPORTS.join(', ')} };`,
   '})();',
   '',
-  readFileSync(join(here, 'bot.js'), 'utf8'),
+  ...BOT_FILES.map((f) => readFileSync(join(here, f), 'utf8')),
 ].join('\n');
 
 const outDir = join(here, 'dist');

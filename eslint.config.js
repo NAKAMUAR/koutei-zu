@@ -7,15 +7,16 @@ import globals from 'globals';
 
 export default [
   { ignores: ['dist/**', 'node_modules/**', 'sync/**', 'line-bot/dist/**'] },
-  // LINE Bot（Google Apps Script で動く。KouteiLib は build.mjs が src/lib から生成して連結する）
+  // 工程図Bot（Google Apps Script で動く。KouteiLib は build.mjs が src/lib から生成して連結する。
+  // ファイルをまたいで使う関数は各ファイル冒頭の /* global */ に書く）
   {
-    files: ['line-bot/bot.js'],
+    files: ['line-bot/*.js'],
     languageOptions: {
       ecmaVersion: 2023,
       sourceType: 'script',
       globals: {
         KouteiLib: 'readonly', UrlFetchApp: 'readonly', PropertiesService: 'readonly', ContentService: 'readonly',
-        ScriptApp: 'readonly', LockService: 'readonly', CacheService: 'readonly', console: 'readonly',
+        ScriptApp: 'readonly', LockService: 'readonly', CacheService: 'readonly', Utilities: 'readonly', console: 'readonly',
       },
     },
     rules: {
@@ -26,8 +27,18 @@ export default [
       'no-unused-vars': ['warn', { vars: 'local', args: 'none', caughtErrors: 'none' }],
     },
   },
+  // Discord の受付口（Cloudflare Workers）
   {
-    files: ['line-bot/build.mjs'],
+    files: ['discord-bot/worker.js'],
+    languageOptions: {
+      ecmaVersion: 2023,
+      sourceType: 'module',
+      globals: { fetch: 'readonly', Response: 'readonly', crypto: 'readonly', TextEncoder: 'readonly', console: 'readonly' },
+    },
+    rules: { 'no-undef': 'error', 'no-unreachable': 'error', 'no-dupe-keys': 'error', 'no-unused-vars': ['warn', { args: 'none', caughtErrors: 'none' }] },
+  },
+  {
+    files: ['line-bot/build.mjs', 'line-bot/test/*.mjs', 'discord-bot/test/*.mjs'],
     languageOptions: { ecmaVersion: 2023, sourceType: 'module', globals: { ...globals.node } },
     rules: { 'no-undef': 'error' },
   },

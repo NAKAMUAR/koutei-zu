@@ -60,19 +60,26 @@ src/
   views/             # 画面単位（案件=InputView・カレンダー・担当者別・サマリー・完了・マスタ・メモ）
     input/           # 案件タブの下位部品（一覧・視点カード・ステップ行・各セクション）
   billing/ sales/ project/ viewpoint/  # 帳票・売上・案件整理・視点ロジック（従来どおり）
-line-bot/            # LINE Bot（Google Apps Script で動く。設定手順は line-bot/README.md）
-  bot.js             # Bot 本体（言葉の判定・Firestore 読み込み・返信文）
-  build.mjs          # src/lib/utils.js・schedule.js・viewpoint/viewpointUtils.js と bot.js を dist/Code.gs に連結
+line-bot/            # 工程図Bot（LINE・Discord 共通。Google Apps Script で動く。設定手順は line-bot/README.md）
+  bot.js             # Bot 本体・LINE（言葉の判定・Firestore 読み込み・返信文の組み立て build*_）
+  gemini.js          # /質問：Gemini の関数呼び出しで build*_ の結果だけを見せて答えさせる
+  discord.js         # Discord の Apps Script 側（中継の受付・コマンド・CSV 書き出し・コマンド登録）
+  build.mjs          # src/lib/utils.js・schedule.js・viewpoint/viewpointUtils.js と上の3ファイルを dist/Code.gs に連結
   dist/Code.gs       # GAS に貼り付ける自動生成ファイル（直接編集しない・コミットする）
+discord-bot/         # Discord の受付口（Cloudflare Worker）。署名確認→「考え中」→ GAS へ中継。設定手順は discord-bot/README.md
+  worker.js
 ```
 
-### LINE Bot（line-bot/）の注意
+### 工程図Bot（line-bot/・discord-bot/）の注意
 
 - `npm run build` の prebuild で `dist/Code.gs` が自動再生成される。**src/lib・src/viewpoint/viewpointUtils.js を変えると Code.gs も変わる**ので一緒にコミットする。
 - 上記3ファイルは GAS でも動かすため、**ブラウザ専用の API（window・document 等）や他ファイルへの import を足さない**こと（足す場合は build.mjs の LIB_FILES も更新）。
 - Code.gs の変更を Bot に反映するには、ユーザーが GAS エディタへ貼り直して「デプロイを管理」から新バージョンを出す必要がある（README 参照）。変更したらユーザーにその旨を伝える。`appsscript.json` の権限（oauthScopes）を増やしたときは、GAS エディタで関数を1回実行して再承認してもらう必要もある。
 - 定時報告（`sendScheduledReport`・時刻トリガー）は LINE のプッシュ送信＝**無料枠（月200通・送り先の人数ぶん数える）を消費する**。返信（Reply API）は無料。送信前に残り通数を確かめる処理を外さないこと。
-- テスト: `node line-bot/test/bot.test.mjs`（LINE・Firestore・GAS の偽物の上で Code.gs を動かす。`npm test` に含まれる）
+- Bot の集計は **App.jsx と同じ設定の組み立て**（専用キーの holidays・absences・workdays、`withAssigneeHours`）で `scheduleTasks` を呼ぶ（`loadData_`）。App.jsx でスケジュールに効く設定・キーを増やしたら、`loadData_` と build.mjs の LIB_EXPORTS にも足す。
+- Bot は工程図を**読むだけ**。Gemini（/質問）にもデータを書き換えるツールは渡さない。
+- Discord は Worker の署名確認（Ed25519）→ GAS（`RELAY_SECRET`・`DISCORD_APPLICATION_ID`・`DISCORD_GUILD_ID` を確認）の2段階で守っている。どちらかを外さないこと。
+- テスト: `node line-bot/test/bot.test.mjs`（LINE・定時報告）、`node line-bot/test/discord.test.mjs`（Discord・Gemini・CSV）、`node discord-bot/test/worker.test.mjs`（Worker の署名確認と通しの流れ）。偽物の GAS・Firestore・Discord・Gemini は `line-bot/test/fakeGas.mjs`。すべて `npm test` に含まれる。
 
 ## 技術スタック
 
@@ -100,7 +107,7 @@ line-bot/            # LINE Bot（Google Apps Script で動く。設定手順は
 
 ```bash
 npm run dev      # 開発サーバ
-npm run check    # ESLint（UI設計原則の機械チェック。line-bot/ も対象）
+npm run check    # ESLint（UI設計原則の機械チェック。line-bot/・discord-bot/ も対象）
 npm run build:line # LINE Bot の line-bot/dist/Code.gs を生成（build 時に自動実行）
 npm run build    # 本番ビルド（check を自動実行。デプロイ前に必ず）
 npm run deploy   # ビルド→gh-pages公開
