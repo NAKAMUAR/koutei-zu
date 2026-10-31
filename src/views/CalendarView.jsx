@@ -10,7 +10,7 @@ import { tabStyle } from '../components/common.jsx';
 // ============ カレンダービュー ============
 function CalendarView() {
   const {
-    colors, fontJP, fontDisplay, scheduled, settings, now, assigneeOrder,
+    colors, fontJP, fontDisplay, scheduled, settings, now, assigneeOrder, isShownAssignee,
     onReorderAssignee, onReorderProject, onReassignViewpoint,
     handleEditProject: onEditProject,
   } = useApp();
@@ -124,7 +124,8 @@ function CalendarView() {
   const afternoonSlot = dailySlots[1];
   const hoursPerDay = getHoursPerDay(settings);
 
-  const assignees = sortAssigneesByMaster([...new Set([...scheduled.active.map(t => t.assignee), ...scheduled.done.map(t => t.assignee)])], assigneeOrder);
+  // 従業員設定で削除した人（未完了タスクなし）は行を出さない
+  const assignees = sortAssigneesByMaster([...new Set([...scheduled.active.map(t => t.assignee), ...scheduled.done.map(t => t.assignee)])].filter(a => !isShownAssignee || isShownAssignee(a)), assigneeOrder);
 
   const matrix = {};
   for (const task of scheduled.active) {

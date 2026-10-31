@@ -14,6 +14,10 @@
    - 作業終了時に `git status` がクリーン、かつ `git log origin/main..HEAD` が空であることを確認する
 4. コミットメッセージ末尾に `Co-Authored-By:` 行（作業した Claude モデル名）を付ける
 
+5. **作業用ブランチ（`claude/...` など）で作業した場合も、終わったらすぐ main に取り込んで公開まで行う**（オーナーの恒久的な許可あり・2026-10-31）
+   - 手順：作業用ブランチに commit・push → `git checkout main && git pull origin main && git merge <作業用ブランチ>` → `npm test`・`npm run build` → `git push origin main` → `npm run deploy`
+   - 「main に取り込んでよいか」をオーナーに毎回確認しない。取り込みで衝突した場合だけ相談する
+
 > デプロイ（gh-pages）と main への push は**必ずセット**。デプロイだけしてソース（main）への push を忘れると、GitHub のソースが古いまま乖離する（過去に発生済み）。
 
 ## 公開リポジトリの注意

@@ -12,7 +12,7 @@ function MasterView() {
     customerMaster, saveCustomerMaster, employeeMaster, saveEmployeeMaster,
     stepTypeMaster, saveStepTypeMaster,
     addOvertime, removeOvertime, addAbsence, removeAbsence, addHolidays, removeHoliday,
-    saveCompanyOrder,
+    saveCompanyOrder, tasks, confirmDialog, notify,
   } = useApp();
   // ローカル下書き（入力中の値）。props が更新されたら同期する。
   // ただし入力中（未コミット）の下書きは、自分の保存が Firestore から echo で戻ってきた
@@ -84,7 +84,31 @@ function MasterView() {
     saveEmployeeMaster(next);
     setOpenHours(null);
   };
-  const removeEmployee = (id) => { editingEmployees.current = false; const next = employees.filter(e => e.id !== id); setEmployees(next); saveEmployeeMaster(next); };
+  // 従業員の削除：カレンダー・担当者の選択肢からも外れる（App.jsx の isShownAssignee）。
+  // 未完了のタスクが残っている人は、作業が見えなくならないよう完了・担当替えまで表示を続けるので、先に確認する。
+  const removeEmployee = async (id) => {
+    const emp = employees.find(e => e.id === id);
+    const name = ((emp && emp.name) || '').trim();
+    const openCount = name ? (tasks || []).filter(t => t.status !== 'done' && (t.assignee || '').trim() === name).length : 0;
+    if (openCount > 0) {
+      const ok = await confirmDialog({
+        title: `${name} さんを削除しますか？`,
+        message: `${name} さんには未完了のタスクが ${openCount} 件あります。\n削除しても、これらのタスクが完了するか担当者を変更するまでは、カレンダーに表示されたままになります。`,
+        confirmLabel: '削除する',
+      });
+      if (!ok) return;
+    }
+    editingEmployees.current = false;
+    const before = employees;
+    const next = employees.filter(e => e.id !== id);
+    setEmployees(next);
+    saveEmployeeMaster(next);
+    if (emp) {
+      notify(`${name || '（名前なし）'} を従業員から削除しました${openCount ? '' : '（カレンダー・担当者の選択肢からも外れます）'}`, {
+        undo: () => { setEmployees(before); saveEmployeeMaster(before); },
+      });
+    }
+  };
   // 並び順の変更（この順がカレンダー・担当者別・サマリーの表示順になる）
   const moveEmployee = (id, dir) => {
     const i = employees.findIndex(e => e.id === id);

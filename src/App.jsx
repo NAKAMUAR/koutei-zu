@@ -2114,9 +2114,19 @@ export default function App() {
   // 制作担当者の候補：従業員マスタ ＋ 既存タスクの担当者
   // 従業員マスタの並び順 ＝ 担当者の表示順（カレンダー・担当者別・サマリー等）
   const assigneeOrder = useMemo(() => employeeMaster.map(e => e.name).filter(Boolean), [employeeMaster]);
+  // 表示する担当者：従業員マスタにいる人 ＋ 未完了のタスクを持っている人。
+  // 従業員設定で削除した人は、完了済みタスクしか無ければカレンダー・担当者の選択肢から外す
+  // （未完了のタスクが残っている間は、作業が見えなくならないよう表示を続ける）。
+  // 従業員マスタが空のチームは従来どおり全員表示。
+  const isShownAssignee = useMemo(() => {
+    const master = new Set(employeeMaster.map(e => (e.name || '').trim()).filter(Boolean));
+    if (master.size === 0) return () => true;
+    const withOpenTasks = new Set(tasks.filter(t => t.status !== 'done').map(t => (t.assignee || '').trim()));
+    return (name) => master.has((name || '').trim()) || withOpenTasks.has((name || '').trim());
+  }, [tasks, employeeMaster]);
   const assigneeList = useMemo(
-    () => [...new Set([...employeeMaster.map(e => e.name), ...tasks.map(t => t.assignee)])].filter(Boolean),
-    [tasks, employeeMaster]
+    () => [...new Set([...employeeMaster.map(e => e.name), ...tasks.map(t => t.assignee)])].filter(Boolean).filter(isShownAssignee),
+    [tasks, employeeMaster, isShownAssignee]
   );
   // 候補に出す会社名：お客様マスタ ＋ 登録済みの会社 ＋ 既定リスト（重複は除く）
   const companyList = useMemo(() => {
@@ -2198,7 +2208,7 @@ export default function App() {
     // 共有データ
     tasks, scheduled, settings: schedSettings, now, memos,
     projectOrder, projectList, projectInternalList, viewpointList,
-    assigneeList, assigneeOrder, companyList, customerMaster, employeeMaster,
+    assigneeList, assigneeOrder, isShownAssignee, companyList, customerMaster, employeeMaster,
     stepTypeMaster, vpDeliveryCount, offshoreCompanies,
     companyOrder: settings.companyOrder || [],
     usedCompanies: [...new Set(tasks.map(t => (t.companyName || '').trim()).filter(Boolean))],
