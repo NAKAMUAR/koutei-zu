@@ -4,6 +4,7 @@ import { useApp } from '../appContext.js';
 import { ChevronDown, ChevronUp, GripVertical, Plus, Search, Trash2, X } from 'lucide-react';
 import { VN_LUNAR_HOLIDAYS, dayName, expandHolidayDates, fmtMD, fmtYMD, getProjectColor, isValidWorkHours, minToTime, timeToMin, vietnamHolidayCandidates } from '../lib/utils.js';
 import { TimeSelect } from '../components/common.jsx';
+import { WorkdayManager } from './WorkdayManager.jsx';
 
 function MasterView() {
   const {
@@ -11,7 +12,7 @@ function MasterView() {
     customerMaster, saveCustomerMaster, employeeMaster, saveEmployeeMaster,
     stepTypeMaster, saveStepTypeMaster,
     addOvertime, removeOvertime, addAbsence, removeAbsence, addHolidays, removeHoliday,
-    saveCompanyOrder,
+    saveCompanyOrder, tasks, confirmDialog, notify,
   } = useApp();
   // ローカル下書き（入力中の値）。props が更新されたら同期する。
   // ただし入力中（未コミット）の下書きは、自分の保存が Firestore から echo で戻ってきた
@@ -83,7 +84,31 @@ function MasterView() {
     saveEmployeeMaster(next);
     setOpenHours(null);
   };
-  const removeEmployee = (id) => { editingEmployees.current = false; const next = employees.filter(e => e.id !== id); setEmployees(next); saveEmployeeMaster(next); };
+  // 従業員の削除：カレンダー・担当者の選択肢からも外れる（App.jsx の isShownAssignee）。
+  // 未完了のタスクが残っている人は、作業が見えなくならないよう完了・担当替えまで表示を続けるので、先に確認する。
+  const removeEmployee = async (id) => {
+    const emp = employees.find(e => e.id === id);
+    const name = ((emp && emp.name) || '').trim();
+    const openCount = name ? (tasks || []).filter(t => t.status !== 'done' && (t.assignee || '').trim() === name).length : 0;
+    if (openCount > 0) {
+      const ok = await confirmDialog({
+        title: `${name} さんを削除しますか？`,
+        message: `${name} さんには未完了のタスクが ${openCount} 件あります。\n削除しても、これらのタスクが完了するか担当者を変更するまでは、カレンダーに表示されたままになります。`,
+        confirmLabel: '削除する',
+      });
+      if (!ok) return;
+    }
+    editingEmployees.current = false;
+    const before = employees;
+    const next = employees.filter(e => e.id !== id);
+    setEmployees(next);
+    saveEmployeeMaster(next);
+    if (emp) {
+      notify(`${name || '（名前なし）'} を従業員から削除しました${openCount ? '' : '（カレンダー・担当者の選択肢からも外れます）'}`, {
+        undo: () => { setEmployees(before); saveEmployeeMaster(before); },
+      });
+    }
+  };
   // 並び順の変更（この順がカレンダー・担当者別・サマリーの表示順になる）
   const moveEmployee = (id, dir) => {
     const i = employees.findIndex(e => e.id === id);
@@ -151,7 +176,7 @@ function MasterView() {
     <div style={{ maxWidth: 880 }}>
       {/* 表示切替：お客様設定 / 従業員設定 / 会社の表示順 */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 20 }}>
-        {[{ id: 'customer', label: 'お客様設定' }, { id: 'employee', label: '従業員設定' }, { id: 'stepType', label: 'ステップ設定' }, { id: 'companyOrder', label: '会社の表示順' }, { id: 'holiday', label: 'ベトナムの祝日' }].map(t => (
+        {[{ id: 'customer', label: 'お客様設定' }, { id: 'employee', label: '従業員設定' }, { id: 'stepType', label: 'ステップ設定' }, { id: 'companyOrder', label: '会社の表示順' }, { id: 'holiday', label: 'ベトナムの祝日' }, { id: 'workday', label: '土日の出勤日' }].map(t => (
           <button key={t.id} type="button" onClick={() => setMasterTab(t.id)}
             style={{
               padding: '8px 16px', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13, fontWeight: 600,
@@ -546,6 +571,12 @@ function MasterView() {
           colors={colors} fontJP={fontJP} />
       </section>
       </>)}
+
+      {masterTab === 'workday' && (
+      <section style={cardStyle}>
+        <WorkdayManager />
+      </section>
+      )}
     </div>
   );
 }

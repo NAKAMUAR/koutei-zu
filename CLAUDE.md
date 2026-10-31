@@ -14,6 +14,10 @@
    - 作業終了時に `git status` がクリーン、かつ `git log origin/main..HEAD` が空であることを確認する
 4. コミットメッセージ末尾に `Co-Authored-By:` 行（作業した Claude モデル名）を付ける
 
+5. **作業用ブランチ（`claude/...` など）で作業した場合も、終わったらすぐ main に取り込んで公開まで行う**（オーナーの恒久的な許可あり・2026-10-31）
+   - 手順：作業用ブランチに commit・push → `git checkout main && git pull origin main && git merge <作業用ブランチ>` → `npm test`・`npm run build` → `git push origin main` → `npm run deploy`
+   - 「main に取り込んでよいか」をオーナーに毎回確認しない。取り込みで衝突した場合だけ相談する
+
 > デプロイ（gh-pages）と main への push は**必ずセット**。デプロイだけしてソース（main）への push を忘れると、GitHub のソースが古いまま乖離する（過去に発生済み）。
 
 ## 公開リポジトリの注意
@@ -89,7 +93,7 @@ line-bot/            # LINE Bot（Google Apps Script で動く。設定手順は
 - `npm run check`（ESLint）→ `npm run build` の順で必ず通す（build が check を自動実行する）。
 - UIに触れた場合は `npm run preview` でログイン画面が描画されることを最低限確認する（モジュールレベルのクラッシュ検出）。
 - スケジューラ等の純粋ロジックは `src/lib/` に分離済みなので、node スクリプトから直接 import して検証できる。
-- `npm test` で sync のテストとアプリの純ロジックのテスト（`test/salesLink.test.mjs`：請求書⇄売上の紐付け、`test/assigneeHours.test.mjs`：担当者ごとの稼働時間とスケジュール配置、`test/issuer.test.mjs`：帳票の発行元・振込先の引き継ぎ）をまとめて実行する。関係する箇所を触ったら必ず通す。
+- `npm test` で sync のテストとアプリの純ロジックのテスト（`test/salesLink.test.mjs`：請求書⇄売上の紐付け、`test/workdays.test.mjs`：土日の出勤日の稼働枠、`test/assigneeHours.test.mjs`：担当者ごとの稼働時間とスケジュール配置、`test/issuer.test.mjs`：帳票の発行元・振込先の引き継ぎ）をまとめて実行する。関係する箇所を触ったら必ず通す。
 - 大きな改修は機能ごとに `npm run build` を挟みながら進める。
 
 ## 主要コマンド

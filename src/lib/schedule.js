@@ -1,6 +1,6 @@
 // スケジューリング・マイグレーション・並び順・視点グループ化のロジック。App.jsx から分割。
 // ============ マイグレーション ============
-import { COMPANY_PRESETS, addDays, fmtYMD, getDailySlots, getDaySlots, isNonWorkingDay, isSameDay, parseHM, parseYMD, startOfDay, timeToMin } from './utils.js';
+import { COMPANY_PRESETS, addDays, fmtYMD, getDailySlots, getDaySlots, isNonWorkingDay, isRegularNonWorkingDay, workdayIntervals, isSameDay, parseHM, parseYMD, startOfDay, timeToMin } from './utils.js';
 import { deliveryBaseName, deliveryNameForNumber, metaFromGroup, roundTypeOf } from '../viewpoint/viewpointUtils.js';
 function migrateTask(task) {
   let priority = task.priority;
@@ -211,8 +211,12 @@ function dayOvertimeIntervals(assignee, date, overtimes) {
 }
 
 // その担当者・その日の稼働枠（通常の営業スロット（担当者ごとの稼働時間があればそれ）＋残業枠を重複なくマージ）
+// 出勤日（マスタ「土日の出勤日」）が登録されている日は、通常の営業スロットの代わりに登録した出勤時間帯を使う。
+// 本来休みの日で、その担当者の出勤登録が無ければ稼働枠なし（残業も入れない）。
 function dayWorkSlots(assignee, date, settings) {
-  const base = getDaySlots(date, settings, assignee).map(s => [s.start, s.end]);
+  const extra = workdayIntervals(date, settings, assignee);
+  if (!extra && isRegularNonWorkingDay(date)) return [];
+  const base = extra || getDaySlots(date, settings, assignee).map(s => [s.start, s.end]);
   const ot = dayOvertimeIntervals(assignee, date, settings.overtimes || []);
   const all = [...base, ...ot].sort((a, b) => a[0] - b[0]);
   const merged = [];
