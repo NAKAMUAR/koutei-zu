@@ -1307,7 +1307,7 @@ function formatStaffInputTab_(sheet, headerRow, choices) {
     sheet.setColumnWidth(c, def.width * 9);
     const rule = staffValidation_(def.key, choices);
     if (rule) sheet.getRange(start, c, n, 1).setDataValidation(rule);
-    if (def.hours) sheet.getRange(start, c, n, 1).setNumberFormat('0.##');
+    if (def.hours) sheet.getRange(start, c, n, 1).setNumberFormat('General'); // 「0.##」だと Google スプレッドシートでは 6 が「6.」と表示される
   });
   if (isCurrent) sheet.setRowHeight(headerRow, 42);
   // 見出しの上が空なら1行の案内を書く（書き方の本文は『記入ルール/説明』タブ）

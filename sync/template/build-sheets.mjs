@@ -58,9 +58,10 @@ const data = {
   staffRulesLines: g.STAFF_RULES_LINES, staffRulesExamples: g.STAFF_RULES_EXAMPLES, howtoLines: g.HOWTO_LINES,
 };
 
-const dir = mkdtempSync(path.join(tmpdir(), 'koutei-sheets-'));
-const jsonPath = path.join(dir, 'constants.json');
+// 定数の JSON だけ欲しいとき（Google スプレッドシートを API で組み立てるときなど）は SHEETS_JSON_OUT にファイルパスを指定する
+const jsonPath = process.env.SHEETS_JSON_OUT || path.join(mkdtempSync(path.join(tmpdir(), 'koutei-sheets-')), 'constants.json');
 writeFileSync(jsonPath, JSON.stringify(data, null, 1));
+if (process.env.SHEETS_JSON_OUT) { console.log('wrote', jsonPath); process.exit(0); }
 const outDir = process.argv[2] || here;
 const r = spawnSync('python3', ['-I', path.join(here, 'build_sheets.py'), jsonPath, outDir], { stdio: 'inherit' });
 if (r.error) { console.error('python3 を実行できません（openpyxl 入りの Python 3 が必要です）:', r.error.message); process.exit(1); }

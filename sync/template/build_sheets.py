@@ -36,7 +36,8 @@ C_LINE = 'd0d7e2'       # 罫線
 THIN = Side(style='thin', color=C_LINE)
 BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 BOTTOM = Border(bottom=Side(style='thin', color=C_TITLE))
-INPUT_ROWS = 1000  # 入力行の数（プルダウン・罫線を付ける範囲）
+INPUT_ROWS = 1000  # 入力行の数（プルダウンを付ける範囲）
+STYLE_ROWS = 20    # 罫線・配置・数値書式を付ける行数（セルごとに書式を持つとファイルが大きくなるので先頭だけ。Google スプレッドシートに変換した後は書式のコピーで増やせる）
 
 
 def font(bold=False, size=10, color=None, italic=False):
@@ -132,7 +133,7 @@ def build_staff(d, out_dir):
     for i, (head, values) in enumerate(lists_def, start=1):
         write(lists, 2, i, head, font=font(bold=True), fill=C_HEAD, align=Alignment(horizontal='center', vertical='center', wrap_text=True), border=BORDER)
         for r, v in enumerate(values, start=3):
-            write(lists, r, i, v, align=Alignment(horizontal='center'), fmt='0.##' if i == 5 else 'General')
+            write(lists, r, i, v, align=Alignment(horizontal='center'), fmt='General')
         col = get_column_letter(i)
         ranges[i] = "'選択肢'!$%s$3:$%s$%d" % (col, col, 2 + len(values))
     lists.row_dimensions[2].height = 32
@@ -171,14 +172,12 @@ def build_staff(d, out_dir):
             dvs['hours'].add(rng)
         elif key in dvs:
             dvs[key].add(rng)
-        for r in range(first, last + 1):
+        for r in range(first, first + STYLE_ROWS):
             cell = ws.cell(row=r, column=i)
             cell.font = font()
             cell.border = BORDER
             cell.alignment = center if key in ('code', 'number', 'request', 'cut', 'pattern', 'white', 'color', 'other') else left
-            if c.get('hours'):
-                cell.number_format = '0.##'
-            elif key == 'number':
+            if key == 'number':
                 cell.number_format = '0'
     ws.sheet_properties.tabColor = C_TITLE
     ws.sheet_view.zoomScale = 100
@@ -251,7 +250,7 @@ def build_staff_rules(wb, d):
             key = cols[i - 2]['key']
             write(ws, r, i, v, fill=C_TABLE, border=BORDER,
                   align=Alignment(horizontal='center') if key in ('code', 'number', 'request', 'cut', 'pattern', 'white', 'color', 'other') else Alignment(),
-                  fmt='0.##' if cols[i - 2].get('hours') else 'General')
+                  fmt='General')
         r += 1
     set_widths(ws, [3] + [c['width'] * 1.35 for c in cols])
 
@@ -296,7 +295,7 @@ LINK_WIDTHS = {
     'result': 40, 'srcRow': 9, 'link': 32,
 }
 LINK_FORMATS = {'inputDate': 'yyyy-mm-dd', 'deadline': 'yyyy-mm-dd', 'transferredAt': 'yyyy-mm-dd hh:mm', 'sentAt': 'yyyy-mm-dd hh:mm',
-                'white': '0.##', 'color': '0.##', 'other': '0.##', 'round': '0', 'srcRow': '0'}
+                'round': '0', 'srcRow': '0'}
 
 
 def build_admin(d, out_dir):
@@ -331,10 +330,10 @@ def build_admin(d, out_dir):
             dvs[h['key']].add('%s2:%s%d' % (letter, letter, last))
         fmt = LINK_FORMATS.get(h['key'])
         if fmt:
-            for r in range(2, last + 1):
+            for r in range(2, 2 + STYLE_ROWS):
                 ws.cell(row=r, column=i).number_format = fmt
         if h['key'] in ('status', 'send', 'exclude', 'round', 'request', 'cut', 'pattern', 'inputDate'):
-            for r in range(2, last + 1):
+            for r in range(2, 2 + STYLE_ROWS):
                 ws.cell(row=r, column=i).alignment = Alignment(horizontal='center')
 
     # 『会社マスタ』
@@ -378,7 +377,7 @@ def build_admin(d, out_dir):
     pm.row_dimensions[1].height = 30
     pm.freeze_panes = 'A2'
     set_widths(pm, [22, 32, 22, 16, 30])
-    for r in range(2, 202):
+    for r in range(2, 2 + STYLE_ROWS):
         for i in range(1, 6):
             pm.cell(row=r, column=i).border = BORDER
 
