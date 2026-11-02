@@ -1,4 +1,4 @@
-import{y as _a}from"./icons-MtV7XbzB.js";var Co={exports:{}},ve={},xo={exports:{}},_o={};/**
+import{z as _a}from"./icons-DzTdQr8o.js";var Co={exports:{}},ve={},xo={exports:{}},_o={};/**
  * @license React
  * scheduler.production.min.js
  *
