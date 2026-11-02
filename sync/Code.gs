@@ -34,7 +34,7 @@
  */
 
 // ============ 定数 ============
-const SHEET = { LINK: '連携', COMPANY: '会社マスタ', VIEW: '視点マスタ', PROJECT: '案件マスタ', SETTINGS: '設定', HOWTO: '使い方' };
+const SHEET = { LINK: '連携', REG: '案件登録', COMPANY: '会社マスタ', VIEW: '視点マスタ', PROJECT: '案件マスタ', SETTINGS: '設定', HOWTO: '使い方' };
 const STAFF_TAB_DEFAULT = '入力シート';
 const STAFF_RULES_TAB = '記入ルール/説明';
 
@@ -84,6 +84,10 @@ const SETTING_KEYS = {
   workspaceId: 'ワークスペースID',
   autoSend: '自動登録',
   autoWait: '自動登録の待ち時間（分）',
+  notify: '時間計算の催促（Discord）',
+  notifyFirst: '催促するまでの時間（時間）',
+  notifyRepeat: '催促のくり返し（時間）',
+  notifyHours: '催促する時間帯（ベトナム時間）',
   lastAuto: '最後の自動実行',
 };
 const SETTING_DEFAULTS = {
@@ -95,6 +99,10 @@ const SETTING_DEFAULTS = {
   workspaceId: 'liebe-asia-team',
   autoSend: 'する',
   autoWait: 25,
+  notify: 'する',
+  notifyFirst: 2,
+  notifyRepeat: 1,
+  notifyHours: '8-20',
   lastAuto: '',
 };
 const SETTING_NOTES = {
@@ -106,10 +114,15 @@ const SETTING_NOTES = {
   workspaceId: '通常は変更不要',
   autoSend: '「する」：30分ごとの自動実行で、状態が「未送信」の行と「工程図へ」にチェックした行を工程図に登録（「要確認」「更新あり」はチェックするまで待つ）。「しない」：転記だけ自動',
   autoWait: '「未送信」の行は、最後に内容が変わってからこの分数がたってから自動登録する（エンジニアが入力ミスを直す時間）',
+  notify: '「する」：『案件登録』で翻訳済みになってから制作時間が出ない視点を Discord で知らせる（Webhook はメニュー「Discord 通知の設定」）。「しない」：知らせない',
+  notifyFirst: '翻訳済みにチェックが入ってから、この時間たっても制作時間（White・Color・pts）が空なら知らせる',
+  notifyRepeat: '1回目のあとは、この時間ごとに知らせる（30分ごとの自動実行で確かめるので、最大30分ほど遅れる）',
+  notifyHours: 'この時間帯だけ知らせる（例 8-20 ＝ 8時〜20時。時刻はベトナム時間）。夜に止まっていた分は、時間帯に入ったら知らせる',
   lastAuto: '30分ごとの自動実行が最後に動いた日時と結果（自動で書き込み）',
 };
 
 const PROP_SERVICE_ACCOUNT = 'SERVICE_ACCOUNT_JSON';
+const PROP_DISCORD = 'DISCORD_WEBHOOK_URL';
 
 // 旧スタッフシート（「Project Schedule」の『案件シート(一覧)』）。『設定』がこれを指したままなら
 // 「かんたん初期設定」でエンジニア入力シートへ切り替える（意図して旧ファイルを読む設定は触らない）
@@ -143,6 +156,23 @@ const STAFF_INPUT_COLUMNS = [
     note: '写真合成・フォトショップ作業（人物・点景など）の時間（h）\nSố giờ ghép ảnh / Photoshop (người, cây, xe…)' },
   { key: 'note', label: 'メモ', vi: 'Ghi chú', width: 30,
     note: '制作上の注意点など（自由記入）\nLưu ý khi thực hiện (nhập tự do)' },
+  // ここから下は「案件登録」の流れ（管理者が登録 → 通訳が翻訳 → エンジニアが時間を出す）で使う列
+  { key: 'translated', label: '翻訳済み', vi: 'Đã dịch', width: 8, checkbox: true,
+    note: '通訳：資料を翻訳してエンジニアに伝えたらチェック。ここから制作時間の計算が始まります\nPhiên dịch: dịch tài liệu xong và đã truyền đạt cho kỹ sư thì đánh dấu' },
+  { key: 'transAt', label: '翻訳日時', vi: 'Thời gian dịch xong', width: 14, auto: true, datetime: true,
+    note: '翻訳済みにチェックした日時（自動で入る）\nThời điểm đánh dấu đã dịch (tự động)' },
+  { key: 'transNote', label: '翻訳メモ', vi: 'Ghi chú dịch', width: 30,
+    note: '通訳：お客様の指示の訳・注意点など\nPhiên dịch: nội dung dịch yêu cầu của khách, lưu ý…' },
+  { key: 'split', label: '作業の分け方', vi: 'Cách chia công việc', width: 30,
+    note: '分けて作業できるときに書く（例：White＝躯体 3h／家具1 2h／家具2 1h）\nNếu có thể chia công việc thì ghi (VD: White = khung 3h / nội thất 1 2h / nội thất 2 1h)' },
+  { key: 'estimator', label: '時間入力者', vi: 'Người nhập giờ', width: 12,
+    note: 'エンジニア：制作時間を決めた人の名前\nKỹ sư: tên người quyết định số giờ' },
+  { key: 'estimatedAt', label: '時間入力日時', vi: 'Thời gian nhập giờ', width: 14, auto: true, datetime: true,
+    note: 'White・Color・pts を書いた日時（自動で入る）\nThời điểm nhập số giờ (tự động)' },
+  { key: 'total', label: '合計', vi: 'Tổng (giờ)', width: 8, auto: true,
+    note: 'White＋Color＋pts（自動で入る。書かなくてよい）\nTự động tính (không cần nhập)' },
+  { key: 'regNo', label: '登録No', vi: 'Mã đăng ký', width: 8, auto: true,
+    note: '管理者の登録番号（自動で入る。変えない）\nMã đăng ký của quản lý (tự động, không sửa)' },
 ];
 const STAFF_INPUT_HEADERS = STAFF_INPUT_COLUMNS.map(c => c.label);
 // 『入力シート』1行目の案内（見出しの上が空のときだけ書く）
@@ -209,6 +239,7 @@ function onOpen() {
     .createMenu('工程図連携')
     .addItem('0. かんたん初期設定（最初に1回だけ）', 'quickSetup')
     .addSeparator()
+    .addItem('案件登録を入力シートへ写す（翻訳・時間の読み戻しと催促も）', 'syncRegistrationsNow')
     .addItem('1. エンジニア入力シートから転記', 'transferFromStaffSheet')
     .addItem('2. 工程図へ送信（「工程図へ」にチェックした行）', 'sendToKoutei')
     .addItem('送信内容のプレビュー（書き込まない）', 'previewSend')
@@ -220,6 +251,8 @@ function onOpen() {
     .addItem('工程図の会社名一覧を取り込む', 'fetchCompanyNames')
     .addItem('会社マスタの会社を工程図の顧客マスタに追加', 'addCompaniesToKoutei')
     .addItem('工程図との接続テスト', 'testConnection')
+    .addItem('Discord 通知の設定（Webhook URL）', 'setDiscordWebhook')
+    .addItem('Discord 通知のテスト送信', 'testDiscord')
     .addSeparator()
     .addItem('初期設定（タブ・チェックボックスを整える）', 'setupSheet')
     .addItem('エンジニア入力シートを整える（会社コードのプルダウン更新）', 'createStaffInputTab')
@@ -250,6 +283,7 @@ function transfer_() {
 
   const staffRows = readStaffRows_(cfg);
   const sourceRows = collectSourceRows_(staffRows);
+  const regInfo = readRegInfo_(ss); // 登録No → 担当者・納期（『案件登録』から）
 
   const data = link.getDataRange().getValues();
   const byKey = new Map();
@@ -297,12 +331,14 @@ function transfer_() {
       return;
     }
     const j = judgeRow_(s, masters);
+    const ri = s.regNo ? regInfo.get(s.regNo) : null;
     const rowObj = {
       key: s.key, status: j.status, send: false, inputDate: today, // 入力日＝最初に転記した日（あとの転記では変えない）
-      code: s.code, name: j.name, cut: s.cut, pattern: s.pattern, extName: j.extName, round: s.round, request: s.request, deadline: s.deadline,
+      code: s.code, name: j.name, cut: s.cut, pattern: s.pattern, extName: j.extName, round: s.round, request: s.request,
+      deadline: s.deadline !== undefined ? s.deadline : (ri && trimStr_(ri.deadline) !== '' ? parseDeadline_(ri.deadline, now) : undefined),
       white: s.white, color: s.color, other: s.other, item: s.item, note: s.note,
       company: j.company, contact: j.contact, category: j.category, kind: j.kind, stepKind: j.stepKind,
-      assignee: '', memo: '', exclude: false,
+      assignee: (ri && ri.assignee) || '', memo: '', exclude: false,
       transferredAt: stamp, sentAt: '', result: j.note, srcRow: s.srcRow, link: s.link,
     };
     appends.push(rowObjToArray_(rowObj, col));
@@ -379,6 +415,7 @@ function readStaffRows_(cfg) {
       color: toHours_(at(v, sc.color)),
       other: toHours_(at(v, sc.other)),
       done: isChecked_(at(v, sc.done)),
+      regNo: opt(v, sc.regNo, trimStr_),
     });
   }
   return rows;
@@ -430,6 +467,14 @@ function mapStaffColumns_(headers) {
     white: find(['ホワイト', 'White', 'WHITE']),
     color: find(['カラー', 'Color', 'COLOR']),
     other: find(['その他', '人物', 'pts', 'PTS', 'Pts']),
+    translated: find(['翻訳済み']),
+    transAt: find(['翻訳日時']),
+    transNote: find(['翻訳メモ']),
+    estimator: find(['時間入力者']),
+    estimatedAt: find(['時間入力日時']),
+    split: find(['作業の分け方']),
+    total: find(['合計']),
+    regNo: find(['登録No']),
   };
   // 会社コードの列の見出しが「社外案件名」になっている（社外案件名が2つあり、1つ目が案件番号のすぐ左）→ 1つ目を会社コードとみなす
   if (!m.code && m.number && m.name === m.number - 1) {
@@ -479,6 +524,7 @@ function collectSourceRows_(staffRows, today) {
       code: r.code, name: r.name, cut: r.cut, pattern: r.pattern, link: r.link, request: r.request, item: r.item, note: r.note,
       deadline: r.deadlineRaw === undefined ? undefined : parseDeadline_(r.deadlineRaw, today || new Date()),
       white: r.white, color: r.color, other: r.other,
+      regNo: r.regNo || '',
     });
   });
   out.waiting = waiting;
@@ -1017,6 +1063,12 @@ function autoRun() {
     const cfg = readSettings_();
     let waitingKeys = [];
     try {
+      const reg = syncRegistrations_(new Date());
+      if (reg.msg !== '案件登録なし') parts.push('案件登録 ' + reg.msg);
+    } catch (e) {
+      parts.push('案件登録エラー：' + String(e && e.message || e));
+    }
+    try {
       const t = transfer_();
       waitingKeys = t.waitingKeys;
       parts.push('転記 追加' + t.added + (t.needCheck ? '（要確認' + t.needCheck + '）' : '') + '・更新' + t.updated);
@@ -1052,14 +1104,416 @@ function runAutoNow() {
 function installAutoTrigger_() {
   ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === AUTO_HANDLER).forEach(t => ScriptApp.deleteTrigger(t));
   ScriptApp.newTrigger(AUTO_HANDLER).timeBased().everyMinutes(AUTO_EVERY_MINUTES).create();
+  // 入力シートの編集の瞬間に翻訳日時・時間入力日時を入れる（入力シートを開けないときは30分ごとの自動実行で入れる）
+  try { installStaffEditTrigger_(readSettings_().fileId); } catch (e) { console.log('編集トリガーを設定できませんでした: ' + (e && e.message || e)); }
 }
 function startAutoRun() {
   installAutoTrigger_();
   alertOrLog_('30分ごとの自動実行を始めました（転記＋「未送信」の行の自動登録）。\n止めるときはメニュー「自動実行を止める」。');
 }
 function stopAutoRun() {
+  ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === STAFF_EDIT_HANDLER).forEach(t => ScriptApp.deleteTrigger(t));
   const n = ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === AUTO_HANDLER).map(t => ScriptApp.deleteTrigger(t)).length;
   alertOrLog_(n ? '30分ごとの自動実行を止めました。転記・送信はメニューから手で行えます。' : '自動実行は設定されていません。');
+}
+
+// ============ 案件登録（管理者）→ エンジニア入力シート → 翻訳 → 時間計算の催促（Discord） ============
+// 流れ：
+//   ① 管理者が『案件登録』タブに1視点1行で登録（社外案件名・担当者・視点・パターン・サーバーリンク・納期・注文書…）
+//   ② 30分ごとの自動実行（またはメニュー）で、エンジニア入力シートへ必要な列だけ写す（注文書・管理者メモ・担当者・納期は写さない）
+//   ③ 通訳が入力シートの「翻訳済み」にチェック → エンジニアが White・Color・pts と作業の分け方を書く
+//   ④ 翻訳済み・時間・作業の分け方を『案件登録』に読み戻し、状態（翻訳待ち／時間計算待ち／時間入力済み）を付ける
+//   ⑤ 翻訳済みから2時間たっても時間が空なら Discord で催促（以降1時間ごと）
+//   ⑥ 時間が入った行は、いつもの転記 → 自動登録で工程図へ（担当者・納期は『案件登録』から入る）
+const REG_H = {
+  no: '登録No', state: '状態',
+  code: '会社コード', number: '案件番号', name: '社外案件名', internal: '社内案件名', assignee: '担当者', request: '新規or修正',
+  cut: '視点', pattern: 'パターン', link: 'サーバーリンク', deadline: '納期', order: '注文書', memo: '管理者メモ',
+  translated: '翻訳済み', translatedAt: '翻訳日時', transNote: '翻訳メモ', white: 'White', color: 'Color', other: 'pts', total: '合計', split: '作業の分け方',
+  estimator: '時間入力者', estimatedAt: '時間入力日時',
+  regDate: '入力日', copiedAt: '入力シートへ写した日時', notifiedAt: '最後の催促', notifyCount: '催促回数',
+};
+const REG_ORDER = ['no', 'state', 'regDate', 'code', 'number', 'name', 'internal', 'assignee', 'request', 'cut', 'pattern', 'link', 'deadline', 'order', 'memo',
+  'translated', 'translatedAt', 'transNote', 'white', 'color', 'other', 'total', 'split', 'estimator', 'estimatedAt', 'copiedAt', 'notifiedAt', 'notifyCount'];
+// 管理者が書く列（ほかの列は自動で入る）
+const REG_INPUT = ['code', 'number', 'name', 'assignee', 'request', 'cut', 'pattern', 'link', 'deadline', 'order', 'memo'];
+// エンジニア入力シートへ写す列（案件登録 → 入力シート。担当者・納期・注文書・管理者メモは写さない）
+const REG_COPY = ['code', 'number', 'name', 'link', 'request', 'cut', 'pattern'];
+const REG_STATE = { DRAFT: '記入中', TRANSLATE: '翻訳待ち', ESTIMATE: '時間計算待ち', DONE: '時間入力済み', MISSING: '入力シートに無い' };
+const REG_NOTES = {
+  no: '自動で入る番号。入力シートの「登録No」と同じ。消すと次の自動実行でもう一度写す（入力シートに同じ行が2つできるので注意）',
+  state: '自動：記入中（会社コード・案件番号・視点・新規or修正のどれかが空）／翻訳待ち／時間計算待ち（翻訳済み・時間が空）／時間入力済み／入力シートに無い（入力シートで行が消された）',
+  code: 'REN・RIC など（『会社マスタ』の英字）', number: '案件の番号（数字）', name: 'お客様の案件名（工程図の案件名）',
+  internal: '自動：会社コード＋案件番号（RIC.34）', assignee: '工程図の担当者（入力シートには写さない）',
+  request: 'その視点の初回は「新規」、2回目以降は「修正」', cut: 'EX1・IN2 など（『視点マスタ』のキーワード＋番号）', pattern: 'パターン違いがあれば A・B…',
+  link: '保存先フォルダのリンク', deadline: '納期（入力シートには写さない。工程図の納期に入る）', order: '注文書のファイルのリンクなど（入力シートには写さない）',
+  memo: '管理者だけのメモ（入力シートには写さない）',
+  translated: '自動：入力シートで通訳がチェックしたら「済」', translatedAt: '自動：入力シートで翻訳済みにチェックした日時。ここから催促の時間を数える',
+  transNote: '自動：入力シートの翻訳メモ', white: '自動：入力シートの White', color: '自動：入力シートの Color', other: '自動：入力シートの pts',
+  total: '自動：White＋Color＋pts', split: '自動：入力シートの作業の分け方',
+  estimator: '自動：入力シートの時間入力者（制作時間を決めた人）', estimatedAt: '自動：入力シートに制作時間が書かれた日時',
+  regDate: '自動：この行を書き始めた日',
+  copiedAt: '自動：入力シートへ写した（直した）日時', notifiedAt: '自動：最後に Discord で催促した日時', notifyCount: '自動：催促した回数',
+};
+
+/** メニュー：『案件登録』を今すぐ入力シートへ写し、翻訳・時間を読み戻す（催促もここで送る） */
+function syncRegistrationsNow() {
+  return withLock_(() => {
+    const r = syncRegistrations_(new Date());
+    alertOrLog_('案件登録の反映\n\n' + r.msg);
+    return r.msg;
+  });
+}
+
+/** 『案件登録』タブを用意して見出し・注記・プルダウンを整える（何度実行しても安全） */
+function ensureRegSheet_(ss, masters) {
+  let sheet = ss.getSheetByName(SHEET.REG);
+  if (!sheet) sheet = ss.insertSheet(SHEET.REG, 0);
+  const lastCol = sheet.getLastColumn();
+  const first = lastCol ? sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(v => trimStr_(v)) : [];
+  if (first.filter(Boolean).length === 0) {
+    ensureSize_(sheet, 1, REG_ORDER.length);
+    sheet.getRange(1, 1, 1, REG_ORDER.length).setValues([REG_ORDER.map(k => REG_H[k])]);
+  } else {
+    const missing = REG_ORDER.filter(k => first.indexOf(REG_H[k]) < 0);
+    if (missing.length) {
+      ensureSize_(sheet, 1, lastCol + missing.length);
+      sheet.getRange(1, lastCol + 1, 1, missing.length).setValues([missing.map(k => REG_H[k])]);
+    }
+  }
+  if (masters) formatRegSheet_(sheet, masters, readCompanyCodes_(ss));
+  return sheet;
+}
+function formatRegSheet_(sheet, masters, codes) {
+  const rc = regHeaderMap_(sheet);
+  const n = Math.max(sheet.getLastRow(), 1) + 300;
+  ensureSize_(sheet, n, sheet.getLastColumn());
+  sheet.setFrozenRows(1);
+  const dv = () => SpreadsheetApp.newDataValidation();
+  const list = (values, allowInvalid) => dv().requireValueInList(values, true).setAllowInvalid(allowInvalid).build();
+  REG_ORDER.forEach(k => {
+    const head = sheet.getRange(1, rc[k]);
+    head.setNote(REG_NOTES[k] || '').setFontWeight('bold').setBackground(REG_INPUT.indexOf(k) >= 0 ? '#dde5f0' : '#e6e6e6');
+  });
+  if (codes && codes.length) sheet.getRange(2, rc.code, n - 1, 1).setDataValidation(list(codes, true));
+  sheet.getRange(2, rc.number, n - 1, 1).setDataValidation(dv().requireNumberBetween(1, 99999).setAllowInvalid(false).build());
+  sheet.getRange(2, rc.request, n - 1, 1).setDataValidation(list(REQUEST_OPTIONS, false));
+  sheet.getRange(2, rc.cut, n - 1, 1).setDataValidation(list(viewCodeOptions_(masters.views), true));
+  sheet.getRange(2, rc.pattern, n - 1, 1).setDataValidation(list(PATTERN_OPTIONS, true));
+  sheet.getRange(2, rc.deadline, n - 1, 1).setNumberFormat('yyyy-mm-dd');
+  ['translatedAt', 'estimatedAt', 'regDate', 'copiedAt', 'notifiedAt'].forEach(k => sheet.getRange(2, rc[k], n - 1, 1).setNumberFormat(k === 'regDate' ? 'yyyy-mm-dd' : 'yyyy-mm-dd hh:mm'));
+  ['white', 'color', 'other', 'total'].forEach(k => sheet.getRange(2, rc[k], n - 1, 1).setNumberFormat('0.##'));
+}
+function regHeaderMap_(sheet) {
+  const lastCol = sheet.getLastColumn();
+  const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(v => trimStr_(v));
+  const col = {};
+  Object.keys(REG_H).forEach(k => { const i = headers.indexOf(REG_H[k]); if (i >= 0) col[k] = i + 1; });
+  const missing = Object.keys(REG_H).filter(k => !col[k]);
+  if (missing.length) throw new Error('『' + SHEET.REG + '』タブの見出しが見つかりません: ' + missing.map(k => REG_H[k]).join('、') + '（メニュー「初期設定」を実行してください）');
+  return col;
+}
+
+/** 『案件登録』の1行（列名→値）＋入力シートの値 → 状態（純ロジック） */
+function regState_(r) {
+  if (!trimStr_(r.code) || !trimStr_(r.number) || !trimStr_(r.cut) || !trimStr_(r.request)) return REG_STATE.DRAFT;
+  if (r.missing) return REG_STATE.MISSING;
+  if (toHours_(r.white) + toHours_(r.color) + toHours_(r.other) > 0) return REG_STATE.DONE;
+  return r.translated ? REG_STATE.ESTIMATE : REG_STATE.TRANSLATE;
+}
+/** 催促の時間帯（'8-20' / '8:00-20:00'）に now が入っているか。空・読めないときは常に true */
+function inNotifyHours_(now, spec) {
+  const m = String(spec || '').replace(/[〜～~]/g, '-').match(/^\s*(\d{1,2})(?::(\d{2}))?\s*-\s*(\d{1,2})(?::(\d{2}))?\s*$/);
+  if (!m) return true;
+  const cur = now.getHours() * 60 + now.getMinutes();
+  const from = +m[1] * 60 + +(m[2] || 0);
+  const to = +m[3] * 60 + +(m[4] || 0);
+  return from <= to ? (cur >= from && cur < to) : (cur >= from || cur < to);
+}
+/**
+ * 催促する行か（純ロジック）。時間計算待ちで、翻訳済みから first 時間たち、
+ * まだ催促していない／前の催促から repeat 時間たった（5分の余裕）行。
+ */
+function isReminderDue_(r, now, cfg) {
+  if (r.state !== REG_STATE.ESTIMATE) return false;
+  const tr = parseDateTime_(r.translatedAt);
+  if (!tr) return false;
+  const H = 3600000;
+  if (now.getTime() - tr.getTime() < cfg.notifyFirst * H) return false;
+  const last = parseDateTime_(r.notifiedAt);
+  if (!last || last.getTime() < tr.getTime()) return true; // 翻訳済みを付け直したら数え直す
+  return now.getTime() - last.getTime() >= cfg.notifyRepeat * H - 5 * 60000;
+}
+/** 催促のメッセージ（日本語・ベトナム語）。items: [{ label, hours }] */
+function reminderMessage_(items, cfg) {
+  const lines = ['⏰ 制作時間の計算をお願いします / Vui lòng nhập số giờ dự kiến (White / Color / pts)'];
+  items.forEach(it => lines.push('・' + it.label + ' … 翻訳済みから ' + it.hours + '時間 / đã ' + it.hours + ' giờ'));
+  if (cfg && cfg.fileId) lines.push('入力先 / Nhập tại: https://docs.google.com/spreadsheets/d/' + cfg.fileId + '/edit');
+  return lines.join('\n');
+}
+function regLabel_(r) {
+  const req = String(r.request || '').indexOf('修正') === 0 ? '修正' : '新規';
+  return [joinCode_(r.code, r.number), trimStr_(r.name), viewpointNameOf_(r.cut, r.pattern)].filter(Boolean).join(' ') +
+    '（' + req + '）' + (trimStr_(r.assignee) ? ' 担当 ' + trimStr_(r.assignee) : '');
+}
+function nextRegNo_(rows, col) {
+  let max = 0;
+  rows.forEach(r => { const m = String(r[col.no - 1] || '').match(/(\d+)/); if (m) max = Math.max(max, parseInt(m[1], 10)); });
+  return function () { max++; return 'R' + ('000' + max).slice(-4); };
+}
+
+/**
+ * 『案件登録』⇄ エンジニア入力シート の同期と、時間計算の催促。
+ * 戻り値: { msg, copied, updated, estimate, reminded, missing }
+ */
+function syncRegistrations_(now) {
+  const cfg = readSettings_();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const reg = ss.getSheetByName(SHEET.REG);
+  if (!reg || reg.getLastRow() < 2) return { msg: '案件登録なし', copied: 0, updated: 0, estimate: 0, reminded: 0, missing: 0 };
+  const rc = regHeaderMap_(reg);
+  const data = reg.getDataRange().getValues();
+
+  const staffFile = SpreadsheetApp.openById(cfg.fileId);
+  const staff = staffFile.getSheetByName(cfg.tabName);
+  if (!staff) throw new Error('エンジニア入力シートにタブ「' + cfg.tabName + '」が見つかりません');
+  const hr = findStaffHeaderRow_(staff);
+  if (hr < 0) throw new Error('エンジニア入力シートに見出しの行が見つかりません');
+  const sc = ensureStaffExtraColumns_(staff, hr);
+  const width = Math.max.apply(null, Object.keys(sc).map(k => sc[k]));
+  const sLast = staff.getLastRow();
+  const sVals = sLast > hr ? staff.getRange(hr + 1, 1, sLast - hr, width).getValues() : [];
+  const byNo = new Map();
+  let lastData = hr; // 最後に中身がある行（プルダウンだけの行は数えない）
+  sVals.forEach((v, i) => {
+    const no = sc.regNo ? trimStr_(v[sc.regNo - 1]) : '';
+    if (no) byNo.set(no, { row: hr + 1 + i, v });
+    if (['code', 'number', 'cut', 'white', 'regNo'].some(k => sc[k] && trimStr_(v[sc[k] - 1]) !== '')) lastData = hr + 1 + i;
+  });
+
+  const next = nextRegNo_(data.slice(1), rc);
+  const regUpdates = []; // { row, col, value }
+  const staffUpdates = [];
+  const appends = [];
+  const due = [];
+  let copied = 0, updated = 0, estimate = 0, missing = 0;
+  const setReg = (r, k, value) => { if (!sameCell_(data[r][rc[k] - 1], value)) { regUpdates.push({ row: r + 1, col: rc[k], value }); data[r][rc[k] - 1] = value; } };
+
+  for (let r = 1; r < data.length; r++) {
+    const get = (k) => data[r][rc[k] - 1];
+    if (REG_INPUT.every(k => trimStr_(get(k)) === '')) continue;
+    const row = {};
+    Object.keys(rc).forEach(k => { row[k] = get(k); });
+    setReg(r, 'internal', joinCode_(row.code, row.number));
+    if (trimStr_(row.regDate) === '') setReg(r, 'regDate', now); // 入力日＝書き始めた日（あとで変えない）
+    const draft = regState_(row) === REG_STATE.DRAFT;
+    if (draft) { setReg(r, 'state', REG_STATE.DRAFT); continue; }
+
+    let no = trimStr_(row.no);
+    let srow = null; // 入力シートの行の値（配列）
+    if (!no) {
+      no = next();
+      setReg(r, 'no', no);
+      setReg(r, 'copiedAt', now);
+      const arr = new Array(width).fill('');
+      REG_COPY.forEach(k => { if (sc[k]) arr[sc[k] - 1] = k === 'pattern' ? normPattern_(row[k]) : (k === 'number' ? row[k] : trimStr_(row[k])); });
+      arr[sc.regNo - 1] = no;
+      appends.push(arr);
+      srow = arr;
+      copied++;
+    } else if (byNo.has(no)) {
+      const hit = byNo.get(no);
+      srow = hit.v;
+      let changed = false;
+      REG_COPY.forEach(k => {
+        if (!sc[k]) return;
+        const want = k === 'pattern' ? normPattern_(row[k]) : (k === 'number' ? row[k] : trimStr_(row[k]));
+        if (!sameCell_(srow[sc[k] - 1], want)) { staffUpdates.push({ row: hit.row, col: sc[k], value: want }); changed = true; }
+      });
+      if (changed) { setReg(r, 'copiedAt', now); updated++; }
+    } else {
+      row.missing = true;
+    }
+
+    if (srow) {
+      const sv = (k) => (sc[k] ? srow[sc[k] - 1] : '');
+      const srcRow = byNo.has(no) ? byNo.get(no).row : null; // 入力シートの行番号（今回追加した行は null）
+      const putStaff = (k, value) => { if (srcRow && sc[k] && !sameCell_(srow[sc[k] - 1], value)) staffUpdates.push({ row: srcRow, col: sc[k], value }); };
+      const st = readStaffStamps_(srow, sc, now);
+      row.translated = st.translated;
+      row.white = sv('white'); row.color = sv('color'); row.other = sv('other');
+      setReg(r, 'translated', st.translated ? '済' : '');
+      ['white', 'color', 'other'].forEach(k => setReg(r, k, toHours_(row[k]) || ''));
+      setReg(r, 'total', st.total || '');
+      setReg(r, 'split', trimStr_(sv('split')));
+      setReg(r, 'transNote', trimStr_(sv('transNote')));
+      setReg(r, 'estimator', trimStr_(sv('estimator')));
+      // 入力シートの自動列（編集の瞬間に入らなかったときの保険：ここで入れる）
+      putStaff('total', st.total || '');
+      putStaff('transAt', st.transAt || '');
+      putStaff('estimatedAt', st.estimatedAt || '');
+      setReg(r, 'translatedAt', st.transAt || '');
+      setReg(r, 'estimatedAt', st.estimatedAt || '');
+      row.translatedAt = st.transAt || '';
+    }
+    row.state = regState_(row);
+    setReg(r, 'state', row.state);
+    if (row.state === REG_STATE.MISSING) missing++;
+    if (row.state === REG_STATE.ESTIMATE) {
+      estimate++;
+      if (isReminderDue_(row, now, cfg)) {
+        const tr = parseDateTime_(row.translatedAt);
+        due.push({ r, label: regLabel_(row), hours: Math.floor((now.getTime() - tr.getTime()) / 3600000), count: parseInt(row.notifyCount, 10) || 0 });
+      }
+    }
+  }
+
+  // 入力シートへの書き込み（追加は最後に中身がある行の下へ）
+  staffUpdates.forEach(u => staff.getRange(u.row, u.col).setValue(u.value));
+  if (appends.length) {
+    const start = lastData + 1;
+    ensureSize_(staff, start + appends.length - 1, width);
+    staff.getRange(start, 1, appends.length, width).setValues(appends);
+  }
+
+  // 催促（Discord）
+  let reminded = 0, remindNote = '';
+  if (due.length) {
+    const url = PropertiesService.getScriptProperties().getProperty(PROP_DISCORD);
+    if (!cfg.notify) remindNote = '催促 ' + due.length + '件（「しない」設定）';
+    else if (!url) remindNote = '催促 ' + due.length + '件（Discord の Webhook が未設定。メニュー「Discord 通知の設定」）';
+    else if (!inNotifyHours_(now, cfg.notifyHours)) remindNote = '催促 ' + due.length + '件（時間帯の外なので待つ）';
+    else {
+      sendDiscord_(url, reminderMessage_(due, cfg));
+      due.forEach(d => { setReg(d.r, 'notifiedAt', now); setReg(d.r, 'notifyCount', d.count + 1); });
+      reminded = due.length;
+      remindNote = 'Discord で催促 ' + reminded + '件';
+    }
+  }
+  regUpdates.forEach(u => reg.getRange(u.row, u.col).setValue(u.value));
+
+  const msg = '入力シートへ写した ' + copied + '件・直した ' + updated + '件・時間計算待ち ' + estimate + '件' +
+    (missing ? '・入力シートに無い ' + missing + '件' : '') + (remindNote ? '・' + remindNote : '');
+  console.log(msg);
+  return { msg, copied, updated, estimate, reminded, missing };
+}
+
+/**
+ * 入力シートの1行 → 翻訳済み・翻訳日時・合計・時間入力日時（純ロジック）。
+ * 翻訳日時：チェックがあって日時が空なら now、チェックが外れたら空。時間入力日時：時間が入っていて空なら now、時間が全部空なら空。
+ */
+function readStaffStamps_(v, sc, now) {
+  const at = (k) => (sc[k] ? v[sc[k] - 1] : '');
+  const translated = isChecked_(at('translated'));
+  const total = Math.round((toHours_(at('white')) + toHours_(at('color')) + toHours_(at('other'))) * 100) / 100;
+  const tr = parseDateTime_(at('transAt'));
+  const es = parseDateTime_(at('estimatedAt'));
+  return {
+    translated, total,
+    transAt: translated ? (tr || now) : null,
+    estimatedAt: total > 0 ? (es || now) : null,
+  };
+}
+
+/**
+ * エンジニア入力シートを編集した瞬間に動く（「かんたん初期設定」「自動実行を始める」で設定するトリガー）。
+ * 翻訳済みにチェック → 翻訳日時、時間を書く → 時間入力日時・合計 をその場で入れる。
+ * このトリガーは入力シートのファイルで動くので、管理者シートの『設定』は読まない。
+ */
+function onStaffEdit(e) {
+  try {
+    if (!e || !e.range) return;
+    const sheet = e.range.getSheet();
+    const hr = findStaffHeaderRow_(sheet);
+    if (hr < 0 || e.range.getLastRow() <= hr) return;
+    const lastCol = sheet.getLastColumn();
+    const sc = mapStaffColumns_(sheet.getRange(hr, 1, 1, lastCol).getValues()[0]);
+    if (!sc.number || !sc.translated || !sc.transAt || !sc.estimatedAt) return; // 今のレイアウトの入力タブだけ
+    const watch = ['translated', 'white', 'color', 'other'].map(k => sc[k]).filter(Boolean);
+    const c1 = e.range.getColumn(), c2 = e.range.getLastColumn();
+    if (!watch.some(c => c >= c1 && c <= c2)) return;
+    const r1 = Math.max(e.range.getRow(), hr + 1), r2 = e.range.getLastRow();
+    const width = Math.max.apply(null, Object.keys(sc).map(k => sc[k]));
+    const vals = sheet.getRange(r1, 1, r2 - r1 + 1, width).getValues();
+    const now = new Date();
+    vals.forEach((v, i) => {
+      const st = readStaffStamps_(v, sc, now);
+      const put = (k, value) => { if (sc[k] && !sameCell_(v[sc[k] - 1], value)) sheet.getRange(r1 + i, sc[k]).setValue(value); };
+      put('transAt', st.transAt || '');
+      put('estimatedAt', st.estimatedAt || '');
+      put('total', st.total || '');
+    });
+  } catch (err) {
+    console.log('onStaffEdit: ' + (err && err.message || err));
+  }
+}
+const STAFF_EDIT_HANDLER = 'onStaffEdit';
+/** 入力シートの編集トリガーを設定する（既にあれば作り直す。何度実行しても1つだけ） */
+function installStaffEditTrigger_(fileId) {
+  ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === STAFF_EDIT_HANDLER).forEach(t => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger(STAFF_EDIT_HANDLER).forSpreadsheet(fileId).onEdit().create();
+}
+
+/** 『案件登録』の 登録No → { assignee, deadline }（転記のとき『連携』の担当者・納期に入れる） */
+function readRegInfo_(ss) {
+  const reg = ss.getSheetByName(SHEET.REG);
+  const map = new Map();
+  if (!reg || reg.getLastRow() < 2) return map;
+  let rc;
+  try { rc = regHeaderMap_(reg); } catch (e) { return map; }
+  reg.getDataRange().getValues().slice(1).forEach(v => {
+    const no = trimStr_(v[rc.no - 1]);
+    if (no) map.set(no, { assignee: trimStr_(v[rc.assignee - 1]), deadline: v[rc.deadline - 1] });
+  });
+  return map;
+}
+
+// ============ Discord ============
+/** Discord の Webhook へ送る（2000文字の上限があるので分けて送る） */
+function sendDiscord_(url, text) {
+  const chunks = [];
+  let buf = '';
+  String(text).split('\n').forEach(line => {
+    if ((buf + '\n' + line).length > 1900) { if (buf) chunks.push(buf); buf = line.slice(0, 1900); }
+    else buf = buf ? buf + '\n' + line : line;
+  });
+  if (buf) chunks.push(buf);
+  chunks.forEach(c => {
+    const res = UrlFetchApp.fetch(url, { method: 'post', contentType: 'application/json', payload: JSON.stringify({ content: c }), muteHttpExceptions: true });
+    const code = res.getResponseCode();
+    if (code >= 300) throw new Error('Discord への送信に失敗しました（' + code + '）: ' + String(res.getContentText()).slice(0, 200));
+  });
+}
+function isDiscordWebhook_(url) {
+  return /^https:\/\/(discord|discordapp)\.com\/api\/webhooks\/\d+\/[\w-]+/.test(trimStr_(url));
+}
+/** メニュー：Discord の Webhook URL を保存する（スクリプトプロパティに保存。シートには書かない） */
+function setDiscordWebhook() {
+  const ui = SpreadsheetApp.getUi();
+  const res = ui.prompt('Discord 通知の設定',
+    'Discord の通知を送りたいチャンネルの「連携サービス」→「ウェブフック」→「ウェブフックURLをコピー」で写した URL を貼り付けてください。\n' +
+    '（URL はこのスクリプトの中にだけ保存され、シートには書かれません。空のまま OK を押すと削除します）', ui.ButtonSet.OK_CANCEL);
+  if (res.getSelectedButton() !== ui.Button.OK) return;
+  alertOrLog_(saveDiscordWebhook_(res.getResponseText()));
+}
+function saveDiscordWebhook_(text) {
+  const url = trimStr_(text);
+  const props = PropertiesService.getScriptProperties();
+  if (!url) { props.deleteProperty(PROP_DISCORD); return 'Discord の Webhook を削除しました。催促は送られません。'; }
+  if (!isDiscordWebhook_(url)) throw new Error('Discord の Webhook URL ではないようです（https://discord.com/api/webhooks/… で始まる URL を貼ってください）');
+  props.setProperty(PROP_DISCORD, url);
+  return '保存しました。メニュー「Discord 通知のテスト送信」で届くか確かめてください。';
+}
+/** メニュー：Discord にテストのメッセージを送る */
+function testDiscord() {
+  const url = PropertiesService.getScriptProperties().getProperty(PROP_DISCORD);
+  if (!url) { alertOrLog_('Discord の Webhook が未設定です。メニュー「Discord 通知の設定」で URL を貼り付けてください。'); return; }
+  try {
+    sendDiscord_(url, '✅ 工程図連携シートからのテスト送信です / Tin nhắn thử từ bảng liên kết 工程図');
+    alertOrLog_('Discord に送りました。チャンネルに届いているか確かめてください。');
+  } catch (e) {
+    alertOrLog_(String(e && e.message || e));
+  }
 }
 
 /** 手で押した転記・送信と自動実行が同時に動かないようにする */
@@ -1233,6 +1687,20 @@ function ensureStaffInputTab_(ss) {
     STAFF_RULES_TAB + '』タブを書き直しました。（『設定』のタブ名を「' + STAFF_TAB_DEFAULT + '」、取込開始行を 2 にしました）';
 }
 
+/**
+ * 今のレイアウトの入力シートに、後から増えた列（翻訳済み・翻訳メモ・作業の分け方・合計・登録No）が無ければ右端に足す。
+ * 既存の列は動かさない。戻り値は列番号の対応（mapStaffColumns_ と同じ形）
+ */
+function ensureStaffExtraColumns_(sheet, headerRow) {
+  const lastCol = Math.max(sheet.getLastColumn(), 1);
+  let sc = mapStaffColumns_(sheet.getRange(headerRow, 1, 1, lastCol).getValues()[0]);
+  const missing = STAFF_INPUT_COLUMNS.filter(d => !sc[d.key]);
+  if (!missing.length) return sc;
+  ensureSize_(sheet, headerRow, lastCol + missing.length);
+  sheet.getRange(headerRow, lastCol + 1, 1, missing.length).setValues([missing.map(d => d.label + '\n' + d.vi)]);
+  return mapStaffColumns_(sheet.getRange(headerRow, 1, 1, lastCol + missing.length).getValues()[0]);
+}
+
 /** そのタブに、今の列構成（会社コード・案件番号・視点・White など）の見出し行があるか */
 function hasStaffInputHeaders_(sheet) {
   const row = findStaffHeaderRow_(sheet);
@@ -1277,6 +1745,8 @@ function staffValidation_(key, choices) {
       return list(PATTERN_OPTIONS, true, 'パターン違いが無ければ空欄 / Không có phương án khác thì để trống');
     case 'white': case 'color': case 'other':
       return list(HOUR_OPTIONS, true, '時間（h）/ Số giờ');
+    case 'translated':
+      return dv().requireCheckbox().build();
     default:
       return null;
   }
@@ -1290,8 +1760,9 @@ function formatStaffInputTab_(sheet, headerRow, choices) {
   const n = 1000; // 見出しより下の入力行にプルダウン等を付ける行数
   const lastCol = Math.max(sheet.getLastColumn(), STAFF_INPUT_COLUMNS.length);
   ensureSize_(sheet, headerRow + n, lastCol);
-  const sc = mapStaffColumns_(sheet.getRange(headerRow, 1, 1, lastCol).getValues()[0]);
+  let sc = mapStaffColumns_(sheet.getRange(headerRow, 1, 1, lastCol).getValues()[0]);
   const isCurrent = !!sc.number;
+  if (isCurrent) sc = ensureStaffExtraColumns_(sheet, headerRow);
   const start = headerRow + 1;
   STAFF_INPUT_COLUMNS.forEach(def => {
     const c = sc[def.key];
@@ -1302,7 +1773,9 @@ function formatStaffInputTab_(sheet, headerRow, choices) {
     sheet.setColumnWidth(c, def.width * 9);
     const rule = staffValidation_(def.key, choices);
     if (rule) sheet.getRange(start, c, n, 1).setDataValidation(rule);
-    if (def.hours) sheet.getRange(start, c, n, 1).setNumberFormat('0.##');
+    if (def.hours || def.key === 'total') sheet.getRange(start, c, n, 1).setNumberFormat('0.##');
+    if (def.datetime) sheet.getRange(start, c, n, 1).setNumberFormat('yyyy-mm-dd hh:mm');
+    if (def.auto) { head.setBackground('#e6e6e6'); sheet.getRange(start, c, n, 1).setBackground('#f3f3f3'); }
   });
   if (isCurrent) sheet.setRowHeight(headerRow, 42);
   // 見出しの上が空なら1行の案内を書く（書き方の本文は『記入ルール/説明』タブ）
@@ -1409,7 +1882,7 @@ function quickSetup() {
   const lines = [];
   let ok = true;
   setupSheet_(ss);
-  lines.push('✓ 管理者シート（連携・案件マスタ・会社マスタ・視点マスタ・設定・使い方）を整えました。');
+  lines.push('✓ 管理者シート（案件登録・連携・案件マスタ・会社マスタ・視点マスタ・設定・使い方）を整えました。');
   const moved = migrateLegacyStaffSetting_(ss);
   if (moved) lines.push('✓ ' + moved);
   try {
@@ -1507,11 +1980,16 @@ function setupSheet_(ss) {
   }
   const cAuto = settings.getRange(1, 1, settings.getLastRow(), 1).getValues().map(r => trimStr_(r[0])).indexOf(SETTING_KEYS.autoSend) + 1;
   if (cAuto) settings.getRange(cAuto, 2).setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(['する', 'しない'], true).build());
+  const cNotify = settings.getRange(1, 1, settings.getLastRow(), 1).getValues().map(r => trimStr_(r[0])).indexOf(SETTING_KEYS.notify) + 1;
+  if (cNotify) settings.getRange(cNotify, 2).setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(['する', 'しない'], true).build());
   settings.getRange(1, 1, 1, 3).setFontWeight('bold');
 
   // 『連携』の既存行のプルダウン（区分・種類は視点マスタから作るので、マスタを整えた後に付ける）
+  const masters = readMasters_(ss);
   const n = Math.max(link.getLastRow() - 1, 0);
-  if (n > 0) applyValidations_(link, col, 2, n, readMasters_(ss));
+  if (n > 0) applyValidations_(link, col, 2, n, masters);
+  // 『案件登録』（管理者が案件を登録するタブ。会社コード・視点のプルダウンもマスタから作る）
+  ensureRegSheet_(ss, masters);
 
   writeHowto_(ss);
 }
@@ -1644,6 +2122,10 @@ function readSettings_() {
   cfg.workspaceId = trimStr_(cfg.workspaceId);
   cfg.autoSend = !/^(しない|いいえ|off|no|false)$/i.test(trimStr_(cfg.autoSend));
   cfg.autoWait = Math.max(0, parseFloat(cfg.autoWait) || 0);
+  cfg.notify = !/^(しない|いいえ|off|no|false)$/i.test(trimStr_(cfg.notify));
+  cfg.notifyFirst = Math.max(0, parseFloat(cfg.notifyFirst) || 0) || 2;
+  cfg.notifyRepeat = Math.max(0.5, parseFloat(cfg.notifyRepeat) || 1);
+  cfg.notifyHours = trimStr_(cfg.notifyHours);
   if (!cfg.fileId) throw new Error('『設定』タブの「スタッフシートのファイルID」が空です');
   return cfg;
 }
@@ -1713,9 +2195,18 @@ const HOWTO_LINES = [
   'エンジニア（入力シートを書く人）には共有しないでください。共有しなければ、このファイルは入力シート側から見えません（会社名・担当者などの紐づけ情報を含みます）。',
   '同じファイルの中でタブを隠す方法は、編集できる人なら誰でも再表示できるため使いません。',
   '',
+  '■ 案件の登録（管理者）→ 翻訳（通訳）→ 制作時間（エンジニア）',
+  '1. 管理者がこのファイルの『案件登録』タブに1視点1行で書く：会社コード・案件番号・社外案件名・担当者・新規or修正・視点・パターン・サーバーリンク・納期・注文書・管理者メモ（青い見出しの列）。',
+  '2. 30分ごとの自動実行（すぐ写したいときはメニュー「案件登録を入力シートへ写す」）で、エンジニア入力シートへ 会社コード・案件番号・社外案件名・サーバーリンク・新規or修正・視点・パターン と「登録No」だけを写します。担当者・納期・注文書・管理者メモは写しません。',
+  '3. 通訳が入力シートの「翻訳済み」にチェック（訳は「翻訳メモ」へ。「翻訳日時」は自動）→ エンジニアが White・Color・pts と「作業の分け方」「時間入力者」を書く（「時間入力日時」「合計」は自動）。',
+  '4. 翻訳済み・時間・作業の分け方は『案件登録』の灰色の列に読み戻され、「状態」が 翻訳待ち → 時間計算待ち → 時間入力済み と進みます。',
+  '5. 翻訳済みになってから2時間たっても時間が空なら Discord で催促し、以降1時間ごとにくり返します（『設定』で時間・時間帯を変えられます。Webhook はメニュー「Discord 通知の設定」）。',
+  '6. 時間が入った行は、いつもどおり『連携』へ転記され、工程図に登録されます。『案件登録』の担当者・納期が工程図に入ります。',
+  '・『案件登録』で会社コード・視点などを直すと、入力シートの行も直ります。入力シートの行を消すと、状態が「入力シートに無い」になります（もう一度写したいときは登録Noを消す）。',
+  '',
   '■ エンジニアが書く場所',
   '「工程図 エンジニア入力シート」の『入力シート』タブ。書き方は同じファイルの『記入ルール/説明』タブ（日本語・ベトナム語の併記。メニュー「0. かんたん初期設定」で整います）。',
-  '列: 会社コード（REN・RIC…）/ 案件番号 / 社外案件名 / サーバーリンク / 新規or修正 / 視点（『視点マスタ』のキーワード＋番号。EX1・IN1・EXCB1…）/ パターン（A・B…）/ White / Color / pts / メモ',
+  '列: 会社コード（REN・RIC…）/ 案件番号 / 社外案件名 / サーバーリンク / 新規or修正 / 視点（『視点マスタ』のキーワード＋番号。EX1・IN1・EXCB1…）/ パターン（A・B…）/ White / Color / pts / メモ / 翻訳済み / 翻訳日時 / 翻訳メモ / 作業の分け方 / 時間入力者 / 時間入力日時 / 合計 / 登録No',
   '1視点（パターン違いも別）1行。依頼のたびに行を足します。会社コード＋案件番号は「RIC.34」のように1つの社内案件名として扱います。',
   '会社コード・視点のプルダウンは『会社マスタ』『視点マスタ』から作ります。マスタを変えたらメニュー「エンジニア入力シートを整える」を押してください。',
   '',

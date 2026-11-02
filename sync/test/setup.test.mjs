@@ -28,6 +28,11 @@ class FakeRange {
   }
   setValues(vals) { vals.forEach((rv, i) => rv.forEach((v, j) => this.sheet.set(this.row + i, this.col + j, v))); return this; }
   setValue(v) { this.sheet.set(this.row, this.col, v); return this; }
+  getSheet() { return this.sheet; }
+  getRow() { return this.row; }
+  getLastRow() { return this.row + this.nr - 1; }
+  getColumn() { return this.col; }
+  getLastColumn() { return this.col + this.nc - 1; }
   setNote(t) { this.sheet.notes[this.row + ',' + this.col] = t; return this; }
   setNotes(arr) { arr.forEach((rv, i) => rv.forEach((t, j) => { this.sheet.notes[(this.row + i) + ',' + (this.col + j)] = t; })); return this; }
   setFontWeight() { return this; }
@@ -187,7 +192,7 @@ function fakeFirestore(customers) {
 }
 
 function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KOUTEI_CUSTOMERS }) {
-  const env = { admin, files, alerts: [], triggers: [], fs: fakeFirestore(customers) };
+  const env = { admin, files, alerts: [], triggers: [], fs: fakeFirestore(customers), props: {}, discord: [], discordCode: 204 };
   const ctx = { console: { log() {} } };
   ctx.SpreadsheetApp = {
     getActiveSpreadsheet: () => env.admin,
@@ -204,7 +209,11 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
     },
     getUi: () => ({ alert: (m) => env.alerts.push(String(m)) }),
   };
-  ctx.PropertiesService = { getScriptProperties: () => ({ getProperty: () => null }) };
+  ctx.PropertiesService = { getScriptProperties: () => ({
+    getProperty: (k) => (k in env.props ? env.props[k] : null),
+    setProperty: (k, v) => { env.props[k] = v; },
+    deleteProperty: (k) => { delete env.props[k]; },
+  }) };
   ctx.LockService = { getScriptLock: () => ({ tryLock: () => true, releaseLock() {} }) };
   ctx.ScriptApp = {
     getOAuthToken: () => 'tok',
@@ -212,18 +221,23 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
     deleteTrigger: (t) => { env.triggers = env.triggers.filter(x => x !== t); },
     newTrigger: (fn) => {
       const t = { fn, getHandlerFunction: () => fn };
-      const b = { timeBased: () => b, everyMinutes: (n) => { t.every = n; return b; }, create: () => { env.triggers.push(t); return t; } };
+      const b = { timeBased: () => b, everyMinutes: (n) => { t.every = n; return b; }, forSpreadsheet: (id) => { t.file = id; return b; }, onEdit: () => { t.onEdit = true; return b; },
+        create: () => { env.triggers.push(t); return t; } };
       return b;
     },
   };
   ctx.UrlFetchApp = {
     fetch: (url, opt) => {
+      if (url.indexOf('https://discord.com/') === 0) {
+        env.discord.push(JSON.parse(opt.payload).content);
+        return { getResponseCode: () => env.discordCode, getContentText: () => '' };
+      }
       if (fetchCode !== 200) return { getResponseCode: () => fetchCode, getContentText: () => '{"error":"PERMISSION_DENIED"}' };
       return env.fs.fetch(url, opt);
     },
   };
   vm.createContext(ctx);
-  const names = ['quickSetup', 'createStaffInputTab', 'transferFromStaffSheet', 'autoRun', 'readSettings_', 'readStaffRows_', 'collectSourceRows_', 'findStaffHeaderRow_',
+  const names = ['onStaffEdit', 'syncRegistrationsNow', 'saveDiscordWebhook_', 'inNotifyHours_', 'isReminderDue_', 'regState_', 'REG_STATE', 'quickSetup', 'createStaffInputTab', 'transferFromStaffSheet', 'autoRun', 'readSettings_', 'readStaffRows_', 'collectSourceRows_', 'findStaffHeaderRow_',
     'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT'];
   env.g = vm.runInContext(src + '\n;({' + names.join(',') + '})', ctx);
   return env;
@@ -326,7 +340,7 @@ test('かんたん初期設定：管理者シート・入力シート（2か国�
   assert.ok(!customers.includes('株式会社サンゲツ'));
   assert.equal(customers.length, KOUTEI_CUSTOMERS.length + COMPANIES_0928.length - 7);
   // 30分ごとの自動実行が1つ
-  same(env.triggers.map(t => [t.fn, t.every]), [['autoRun', 30]]);
+  same(env.triggers.map(t => [t.fn, t.every || null, t.file || null]), [['autoRun', 30, null], ['onStaffEdit', null, NEW_ID]], '30分ごとの自動実行＋入力シートの編集トリガー');
 
   // 結果は1つのダイアログ
   assert.equal(env.alerts.length, 1);
@@ -445,6 +459,7 @@ test('メニュー「エンジニア入力シートを整える」：会社・�
 // 入力シートに行を書く補助
 const writer = (tab) => (r, vals) => vals.forEach((v, j) => tab.set(r, j + 1, v));
 const NEWR = '新規 / Mới', FIXR = '修正 / Sửa';
+const isDate = (v) => Object.prototype.toString.call(v) === '[object Date]';
 const linkAt = (admin) => { const link = admin.getSheetByName('連携'); const h = link.header(); return { link, h, at: (r, name) => link.rows[r - 1][h.indexOf(name)], set: (r, name, v) => link.set(r, h.indexOf(name) + 1, v) }; };
 
 test('転記：入力シートの行が『連携』に追記され、入力日・社内案件名（RIC.34）・区分・社外視点名などが自動で入る', () => {
@@ -600,6 +615,153 @@ test('30分ごとの自動実行：転記 → 25分たった「未送信」だ�
   r = env.g.autoRun();
   assert.ok(r.indexOf('自動登録はしない設定') >= 0, r);
   assert.equal(at(6, '状態'), '未送信');
+});
+
+test('案件登録 → 入力シートへ写す → 翻訳済み → 2時間で Discord 催促（以降1時間ごと）→ 時間が入ると工程図へ（担当者・納期つき）', () => {
+  const admin = adminSheet();
+  const eng = engineerFile();
+  const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
+  env.g.quickSetup();
+  const st = admin.getSheetByName('設定');
+  st.set(st.rows.findIndex(x => x[0] === '催促する時間帯（ベトナム時間）') + 1, 2, '0-24'); // テストはいつでも送る
+  const reg = admin.getSheetByName('案件登録');
+  const rh = reg.header();
+  const R = (r, name) => reg.rows[r - 1][rh.indexOf(name)];
+  const setR = (r, name, v) => reg.set(r, rh.indexOf(name) + 1, v);
+  ['会社コード', '案件番号', '社外案件名', '担当者', '新規or修正', '視点', 'パターン', 'サーバーリンク', '納期', '注文書', '管理者メモ'].forEach(h => assert.ok(rh.includes(h), h));
+  assert.equal(admin.getSheets()[0].getName(), '案件登録', '案件登録タブは先頭');
+
+  // 管理者が2行登録（2行目は視点が空＝記入中）
+  [['RIC', 34, 'マンション', 'Quynh', NEWR, 'EX1', 'A', LINK, '2030-01-20', 'https://drive/order.pdf', '急ぎ']].forEach((vals, i) =>
+    ['会社コード', '案件番号', '社外案件名', '担当者', '新規or修正', '視点', 'パターン', 'サーバーリンク', '納期', '注文書', '管理者メモ'].forEach((h, j) => setR(2 + i, h, vals[j])));
+  setR(3, '会社コード', 'REN'); setR(3, '案件番号', 72);
+  let msg = env.g.syncRegistrationsNow();
+  assert.ok(msg.indexOf('入力シートへ写した 1件') >= 0, msg);
+  assert.equal(R(2, '登録No'), 'R0001');
+  assert.equal(R(2, '社内案件名'), 'RIC.34');
+  assert.equal(R(2, '状態'), '翻訳待ち');
+  assert.equal(R(3, '状態'), '記入中');
+  assert.equal(R(3, '登録No'), '');
+  assert.ok(isDate(R(2, '入力日')) && isDate(R(3, '入力日')), '書き始めた行には入力日が自動で入る');
+
+  // 入力シート：必要な列と登録Noだけ（担当者・納期・注文書・管理者メモは写さない）。後から増えた列は右端に
+  const tab = eng.getSheetByName('入力シート');
+  const sh = tab.header(2).map(h => h.split('\n')[0]);
+  ['翻訳済み', '翻訳日時', '翻訳メモ', '作業の分け方', '時間入力者', '時間入力日時', '合計', '登録No'].forEach(h => assert.ok(sh.includes(h), h));
+  const S = (name) => tab.rows[2][sh.indexOf(name)];
+  same([S('会社コード'), S('案件番号'), S('社外案件名'), S('新規or修正'), S('視点'), S('パターン'), S('サーバーリンク'), S('登録No')], ['RIC', 34, 'マンション', NEWR, 'EX1', 'A', LINK, 'R0001']);
+  assert.ok(!tab.rows[2].some(v => v === 'Quynh' || v === 'https://drive/order.pdf' || v === '急ぎ'), '管理者だけの情報は写さない');
+  // 時間が空なので転記はまだ（記入途中）
+  env.g.transferFromStaffSheet();
+  assert.equal(admin.getSheetByName('連携').getLastRow(), 1);
+
+  // 何度動かしても二重に写さない。管理者が視点を直すと入力シートも直る
+  env.g.syncRegistrationsNow();
+  assert.equal(tab.getLastRow(), 3);
+  setR(2, '視点', 'EX2');
+  msg = env.g.syncRegistrationsNow();
+  assert.ok(msg.indexOf('直した 1件') >= 0, msg);
+  assert.equal(S('視点'), 'EX2');
+
+  // 通訳が翻訳済みにチェック → 時間計算待ち（翻訳日時が入る）
+  tab.set(3, sh.indexOf('翻訳済み') + 1, true);
+  tab.set(3, sh.indexOf('翻訳メモ') + 1, '昼景・植栽多め');
+  env.g.syncRegistrationsNow();
+  assert.equal(R(2, '状態'), '時間計算待ち');
+  assert.equal(R(2, '翻訳済み'), '済');
+  assert.equal(R(2, '翻訳メモ'), '昼景・植栽多め');
+  assert.ok(isDate(R(2, '翻訳日時')), '翻訳日時（入力シートにも入る）');
+  assert.ok(isDate(S('翻訳日時')));
+  assert.equal(env.discord.length, 0, 'まだ2時間たっていない');
+
+  // 2時間たっても時間が空 → Webhook 未設定なら送らずに結果へ書く
+  tab.set(3, sh.indexOf('翻訳日時') + 1, new Date(Date.now() - 2.5 * 3600000)); // 2.5時間前にチェックした
+  msg = env.g.syncRegistrationsNow();
+  assert.ok(msg.indexOf('Webhook が未設定') >= 0, msg);
+  assert.throws(() => env.g.saveDiscordWebhook_('https://example.com/x'));
+  env.g.saveDiscordWebhook_('https://discord.com/api/webhooks/123/abc-DEF');
+  msg = env.g.syncRegistrationsNow();
+  assert.ok(msg.indexOf('Discord で催促 1件') >= 0, msg);
+  assert.equal(env.discord.length, 1);
+  assert.ok(env.discord[0].indexOf('RIC.34 マンション EX2-A（新規） 担当 Quynh') >= 0, env.discord[0]);
+  assert.ok(env.discord[0].indexOf('翻訳済みから 2時間') >= 0, env.discord[0]);
+  assert.equal(R(2, '催促回数'), 1);
+  // すぐにはくり返さない。1時間たったらもう一度
+  env.g.syncRegistrationsNow();
+  assert.equal(env.discord.length, 1);
+  setR(2, '最後の催促', new Date(Date.now() - 61 * 60000));
+  env.g.syncRegistrationsNow();
+  assert.equal(env.discord.length, 2);
+  assert.equal(R(2, '催促回数'), 2);
+
+  // エンジニアが時間と作業の分け方を書く → 時間入力済み（合計は入力シートにも入る）→ 転記で担当者・納期が『連携』に入る
+  tab.set(3, sh.indexOf('White') + 1, 3);
+  tab.set(3, sh.indexOf('Color') + 1, 2.5);
+  tab.set(3, sh.indexOf('作業の分け方') + 1, 'White＝躯体2h／家具1h');
+  tab.set(3, sh.indexOf('時間入力者') + 1, 'Tú Mĩ');
+  env.g.autoRun();
+  assert.equal(R(2, '時間入力者'), 'Tú Mĩ');
+  assert.ok(isDate(R(2, '時間入力日時')) && isDate(S('時間入力日時')), '時間入力日時が自動で入る');
+  assert.equal(R(2, '状態'), '時間入力済み');
+  assert.equal(R(2, '合計'), 5.5);
+  assert.equal(S('合計'), 5.5);
+  assert.equal(R(2, '作業の分け方'), 'White＝躯体2h／家具1h');
+  assert.equal(env.discord.length, 2, '時間が入ったら催促しない');
+  const { at } = linkAt(admin);
+  assert.equal(at(2, '社内案件名'), 'RIC.34');
+  assert.equal(at(2, '担当者'), 'Quynh');
+  assert.equal(at(2, '納期'), '2030-01-20');
+
+  // 入力シートで行が消されたら「入力シートに無い」（勝手に写し直さない）
+  tab.rows[2] = [];
+  env.g.syncRegistrationsNow();
+  assert.equal(R(2, '状態'), '入力シートに無い');
+  assert.equal(tab.getLastRow(), 2);
+});
+
+test('入力シートを編集した瞬間：翻訳済みのチェックで翻訳日時、時間を書くと時間入力日時と合計が入る', () => {
+  const admin = adminSheet();
+  const eng = engineerFile();
+  const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
+  env.g.quickSetup();
+  const tab = eng.getSheetByName('入力シート');
+  const sh = tab.header(2).map(h => h.split('\n')[0]);
+  const c = (name) => sh.indexOf(name) + 1;
+  const put = writer(tab);
+  put(3, ['RIC', 34, 'マンション', LINK, NEWR, 'EX1', '', '', '', '', '']);
+  const edit = (r, col, v, nr = 1, nc = 1) => { tab.set(r, col, v); env.g.onStaffEdit({ range: tab.getRange(r, col, nr, nc) }); };
+  edit(3, c('翻訳メモ'), 'メモだけ');
+  assert.equal(tab.rows[2][c('翻訳日時') - 1] || '', '', '関係ない列の編集では入れない');
+  edit(3, c('翻訳済み'), true);
+  assert.ok(isDate(tab.rows[2][c('翻訳日時') - 1]));
+  edit(3, c('White'), 3);
+  edit(3, c('Color'), 2);
+  assert.ok(isDate(tab.rows[2][c('時間入力日時') - 1]));
+  assert.equal(tab.rows[2][c('合計') - 1], 5);
+  edit(3, c('翻訳済み'), false);
+  assert.equal(tab.rows[2][c('翻訳日時') - 1], '', 'チェックを外したら消す');
+  // 見出しより上・他のタブの編集は無視
+  env.g.onStaffEdit({ range: tab.getRange(1, 1) });
+  env.g.onStaffEdit({ range: eng.getSheetByName('記入ルール/説明').getRange(5, 2) });
+});
+
+test('催促の時間帯と判定', () => {
+  const env = makeEnv({ admin: adminSheet(), files: {} });
+  const at = (h, m = 0) => new Date(2030, 0, 7, h, m);
+  assert.equal(env.g.inNotifyHours_(at(8), '8-20'), true);
+  assert.equal(env.g.inNotifyHours_(at(20), '8-20'), false);
+  assert.equal(env.g.inNotifyHours_(at(7, 59), '8:00-20:00'), false);
+  assert.equal(env.g.inNotifyHours_(at(23), '22-6'), true);
+  assert.equal(env.g.inNotifyHours_(at(3), ''), true);
+  const cfg = { notifyFirst: 2, notifyRepeat: 1 };
+  const now = at(12);
+  const base = { state: env.g.REG_STATE.ESTIMATE, translatedAt: at(9, 30) };
+  assert.equal(env.g.isReminderDue_(base, now, cfg), true);
+  assert.equal(env.g.isReminderDue_({ ...base, translatedAt: at(10, 30) }, now, cfg), false);
+  assert.equal(env.g.isReminderDue_({ ...base, notifiedAt: at(11, 30) }, now, cfg), false);
+  assert.equal(env.g.isReminderDue_({ ...base, notifiedAt: at(11, 0) }, now, cfg), true);
+  assert.equal(env.g.isReminderDue_({ ...base, notifiedAt: at(9, 0) }, now, cfg), true, '翻訳済みを付け直したら数え直す');
+  assert.equal(env.g.isReminderDue_({ ...base, state: env.g.REG_STATE.DONE }, now, cfg), false);
 });
 
 console.log(`\n${passed} tests passed`);
