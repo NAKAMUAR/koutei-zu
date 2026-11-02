@@ -170,7 +170,7 @@ const STAFF_INPUT_COLUMNS = [
   { key: 'estimatedAt', label: '時間入力日時', vi: 'Thời gian nhập giờ', width: 14, auto: true, datetime: true,
     note: 'White・Color・pts を書いた日時（自動で入る）\nThời điểm nhập số giờ (tự động)' },
   { key: 'total', label: '合計', vi: 'Tổng (giờ)', width: 8, auto: true,
-    note: 'White＋Color＋pts（自動で入る。書かなくてよい）\nTự động tính (không cần nhập)' },
+    note: 'White＋Color＋pts（自動で計算。書かなくてよい）\nTự động tính (không cần nhập)' },
   { key: 'regNo', label: '登録No', vi: 'Mã đăng ký', width: 8, auto: true,
     note: '管理者の登録番号（自動で入る。変えない）\nMã đăng ký của quản lý (tự động, không sửa)' },
 ];
@@ -1186,15 +1186,21 @@ function ensureRegSheet_(ss, masters) {
 }
 function formatRegSheet_(sheet, masters, codes) {
   const rc = regHeaderMap_(sheet);
-  const n = Math.max(sheet.getLastRow(), 1) + 300;
+  const n = Math.max(sheet.getMaxRows(), 1000); // 式を入れるので「最後の行＋α」にはしない（押すたびに広がらないように）
   ensureSize_(sheet, n, sheet.getLastColumn());
   sheet.setFrozenRows(1);
   const dv = () => SpreadsheetApp.newDataValidation();
   const list = (values, allowInvalid) => dv().requireValueInList(values, true).setAllowInvalid(allowInvalid).build();
   REG_ORDER.forEach(k => {
     const head = sheet.getRange(1, rc[k]);
-    head.setNote(REG_NOTES[k] || '').setFontWeight('bold').setBackground(REG_INPUT.indexOf(k) >= 0 ? '#dde5f0' : '#e6e6e6');
+    // 人が書く列＝黄色、自動の列＝灰色（『連携』と同じ色分け）
+    head.setNote(REG_NOTES[k] || '').setFontWeight('bold').setBackground(REG_INPUT.indexOf(k) >= 0 ? '#fff2cc' : '#e6e6e6');
   });
+  // 社内案件名（会社コード＋案件番号）と合計（White＋Color＋pts）は式。値はスクリプトから書かない
+  const C = (k) => 'RC' + rc[k];
+  sheet.getRange(2, rc.internal, n - 1, 1).setFormulaR1C1('=IF(' + C('code') + '="","",IF(OR(' + C('number') + '="",REGEXMATCH(' + C('code') + '&"","\\d")),' + C('code') + ',' + C('code') + '&"."&' + C('number') + '))');
+  const hrs = C('white') + ',' + C('color') + ',' + C('other');
+  sheet.getRange(2, rc.total, n - 1, 1).setFormulaR1C1('=IF(COUNT(' + hrs + ')=0,"",SUM(' + hrs + '))');
   if (codes && codes.length) sheet.getRange(2, rc.code, n - 1, 1).setDataValidation(list(codes, true));
   sheet.getRange(2, rc.number, n - 1, 1).setDataValidation(dv().requireNumberBetween(1, 99999).setAllowInvalid(false).build());
   sheet.getRange(2, rc.request, n - 1, 1).setDataValidation(list(REQUEST_OPTIONS, false));
@@ -1202,7 +1208,6 @@ function formatRegSheet_(sheet, masters, codes) {
   sheet.getRange(2, rc.pattern, n - 1, 1).setDataValidation(list(PATTERN_OPTIONS, true));
   sheet.getRange(2, rc.deadline, n - 1, 1).setNumberFormat('yyyy-mm-dd');
   ['translatedAt', 'estimatedAt', 'regDate', 'copiedAt', 'notifiedAt'].forEach(k => sheet.getRange(2, rc[k], n - 1, 1).setNumberFormat(k === 'regDate' ? 'yyyy-mm-dd' : 'yyyy-mm-dd hh:mm'));
-  ['white', 'color', 'other', 'total'].forEach(k => sheet.getRange(2, rc[k], n - 1, 1).setNumberFormat('0.##'));
 }
 function regHeaderMap_(sheet) {
   const lastCol = sheet.getLastColumn();
@@ -1304,7 +1309,6 @@ function syncRegistrations_(now) {
     if (REG_INPUT.every(k => trimStr_(get(k)) === '')) continue;
     const row = {};
     Object.keys(rc).forEach(k => { row[k] = get(k); });
-    setReg(r, 'internal', joinCode_(row.code, row.number));
     if (trimStr_(row.regDate) === '') setReg(r, 'regDate', now); // 入力日＝書き始めた日（あとで変えない）
     const draft = regState_(row) === REG_STATE.DRAFT;
     if (draft) { setReg(r, 'state', REG_STATE.DRAFT); continue; }
@@ -1344,12 +1348,10 @@ function syncRegistrations_(now) {
       row.white = sv('white'); row.color = sv('color'); row.other = sv('other');
       setReg(r, 'translated', st.translated ? '済' : '');
       ['white', 'color', 'other'].forEach(k => setReg(r, k, toHours_(row[k]) || ''));
-      setReg(r, 'total', st.total || '');
       setReg(r, 'split', trimStr_(sv('split')));
       setReg(r, 'transNote', trimStr_(sv('transNote')));
       setReg(r, 'estimator', trimStr_(sv('estimator')));
       // 入力シートの自動列（編集の瞬間に入らなかったときの保険：ここで入れる）
-      putStaff('total', st.total || '');
       putStaff('transAt', st.transAt || '');
       putStaff('estimatedAt', st.estimatedAt || '');
       setReg(r, 'translatedAt', st.transAt || '');
@@ -1371,9 +1373,11 @@ function syncRegistrations_(now) {
   // 入力シートへの書き込み（追加は最後に中身がある行の下へ）
   staffUpdates.forEach(u => staff.getRange(u.row, u.col).setValue(u.value));
   if (appends.length) {
+    // 写す列と登録Noだけを書く（行ごと書くと、合計などの式を消してしまう）
     const start = lastData + 1;
     ensureSize_(staff, start + appends.length - 1, width);
-    staff.getRange(start, 1, appends.length, width).setValues(appends);
+    const cols = REG_COPY.map(k => sc[k]).concat([sc.regNo]).filter(Boolean);
+    appends.forEach((arr, i) => cols.forEach(c => { if (arr[c - 1] !== '') staff.getRange(start + i, c).setValue(arr[c - 1]); }));
   }
 
   // 催促（Discord）
@@ -1417,7 +1421,7 @@ function readStaffStamps_(v, sc, now) {
 
 /**
  * エンジニア入力シートを編集した瞬間に動く（「かんたん初期設定」「自動実行を始める」で設定するトリガー）。
- * 翻訳済みにチェック → 翻訳日時、時間を書く → 時間入力日時・合計 をその場で入れる。
+ * 翻訳済みにチェック → 翻訳日時、時間を書く → 時間入力日時 をその場で入れる（合計は式）。
  * このトリガーは入力シートのファイルで動くので、管理者シートの『設定』は読まない。
  */
 function onStaffEdit(e) {
@@ -1441,7 +1445,6 @@ function onStaffEdit(e) {
       const put = (k, value) => { if (sc[k] && !sameCell_(v[sc[k] - 1], value)) sheet.getRange(r1 + i, sc[k]).setValue(value); };
       put('transAt', st.transAt || '');
       put('estimatedAt', st.estimatedAt || '');
-      put('total', st.total || '');
     });
   } catch (err) {
     console.log('onStaffEdit: ' + (err && err.message || err));
@@ -1773,7 +1776,12 @@ function formatStaffInputTab_(sheet, headerRow, choices) {
     sheet.setColumnWidth(c, def.width * 9);
     const rule = staffValidation_(def.key, choices);
     if (rule) sheet.getRange(start, c, n, 1).setDataValidation(rule);
-    if (def.hours || def.key === 'total') sheet.getRange(start, c, n, 1).setNumberFormat('0.##');
+    if (def.hours) sheet.getRange(start, c, n, 1).setNumberFormat('0.##');
+    // 合計は式（White＋Color＋pts）。値はスクリプトから書かない
+    if (def.key === 'total' && sc.white && sc.color && sc.other) {
+      const refs = 'RC' + sc.white + ',RC' + sc.color + ',RC' + sc.other;
+      sheet.getRange(start, c, n, 1).setFormulaR1C1('=IF(COUNT(' + refs + ')=0,"",SUM(' + refs + '))');
+    }
     if (def.datetime) sheet.getRange(start, c, n, 1).setNumberFormat('yyyy-mm-dd hh:mm');
     if (def.auto) { head.setBackground('#e6e6e6'); sheet.getRange(start, c, n, 1).setBackground('#f3f3f3'); }
   });
@@ -1809,6 +1817,13 @@ const STAFF_RULES_LINES = [
   ['', 'Color：色付きパースまでの制作時間（White の時間は含めない）', 'Color: số giờ làm phối cảnh màu (không tính số giờ White)'],
   ['', 'pts：写真合成・フォトショップ作業（人物・点景など）の時間', 'pts: số giờ ghép ảnh / làm Photoshop (người, cây, xe…)'],
   ['', 'メモ：制作上の注意点など（自由記入）', 'Ghi chú: lưu ý khi thực hiện (nhập tự do)'],
+  ['', '翻訳済み：通訳が資料を翻訳してエンジニアに伝えたらチェック（翻訳日時は自動で入ります）', 'Đã dịch: phiên dịch đánh dấu khi đã dịch tài liệu và truyền đạt cho kỹ sư (thời gian tự động ghi)'],
+  ['', '翻訳メモ：通訳がお客様の指示の訳・注意点を書く', 'Ghi chú dịch: phiên dịch ghi nội dung dịch yêu cầu của khách, lưu ý'],
+  ['', '作業の分け方：分けて作業できるときに書く（例 White＝躯体 3h／家具1 2h／家具2 1h）', 'Cách chia công việc: ghi khi có thể chia việc (VD: White = khung 3h / nội thất 1 2h / nội thất 2 1h)'],
+  ['', '時間入力者：制作時間を決めた人の名前（時間入力日時・合計は自動で入ります）', 'Người nhập giờ: tên người quyết định số giờ (thời gian nhập và tổng tự động ghi)'],
+  ['', '登録No：管理者が登録した行に自動で入ります。変えないでください', 'Mã đăng ký: tự động có ở dòng do quản lý đăng ký. Không sửa'],
+  ['', '※ 管理者が登録した行（登録No あり）は、会社コード〜パターンが自動で入ります。翻訳済みから2時間たっても時間が空だと Discord で催促が届きます',
+    '※ Dòng do quản lý đăng ký (có Mã đăng ký) sẽ tự điền từ Mã công ty đến Phương án. Nếu 2 giờ sau khi dịch xong vẫn chưa có số giờ, sẽ có nhắc nhở qua Discord'],
   ['h', '■ 視点コード', '■ Mã góc nhìn'],
 ];
 // 記入例（『記入ルール/説明』の最後に表で載せる。入力シートの列の順）
@@ -2196,7 +2211,7 @@ const HOWTO_LINES = [
   '同じファイルの中でタブを隠す方法は、編集できる人なら誰でも再表示できるため使いません。',
   '',
   '■ 案件の登録（管理者）→ 翻訳（通訳）→ 制作時間（エンジニア）',
-  '1. 管理者がこのファイルの『案件登録』タブに1視点1行で書く：会社コード・案件番号・社外案件名・担当者・新規or修正・視点・パターン・サーバーリンク・納期・注文書・管理者メモ（青い見出しの列）。',
+  '1. 管理者がこのファイルの『案件登録』タブに1視点1行で書く：会社コード・案件番号・社外案件名・担当者・新規or修正・視点・パターン・サーバーリンク・納期・注文書・管理者メモ（黄色い見出しの列）。',
   '2. 30分ごとの自動実行（すぐ写したいときはメニュー「案件登録を入力シートへ写す」）で、エンジニア入力シートへ 会社コード・案件番号・社外案件名・サーバーリンク・新規or修正・視点・パターン と「登録No」だけを写します。担当者・納期・注文書・管理者メモは写しません。',
   '3. 通訳が入力シートの「翻訳済み」にチェック（訳は「翻訳メモ」へ。「翻訳日時」は自動）→ エンジニアが White・Color・pts と「作業の分け方」「時間入力者」を書く（「時間入力日時」「合計」は自動）。',
   '4. 翻訳済み・時間・作業の分け方は『案件登録』の灰色の列に読み戻され、「状態」が 翻訳待ち → 時間計算待ち → 時間入力済み と進みます。',

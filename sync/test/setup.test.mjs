@@ -44,11 +44,12 @@ class FakeRange {
   setVerticalAlignment() { return this; }
   setDataValidation(rule) { this.sheet.validations.push({ row: this.row, col: this.col, nr: this.nr, rule }); return this; }
   setNumberFormat(f) { this.sheet.formats.push({ row: this.row, col: this.col, f }); return this; }
+  setFormulaR1C1(f) { this.sheet.formulas.push({ row: this.row, col: this.col, nr: this.nr, f }); return this; }
 }
 class FakeSheet {
   // size 省略時は新規タブと同じ 1000行×26列。CSV から作ったタブなどは中身ぴったりの大きさを渡す
   constructor(name, rows = [], size) {
-    this.name = name; this.rows = rows.map(r => r.slice()); this.notes = {}; this.validations = []; this.formats = []; this.frozen = 0;
+    this.name = name; this.rows = rows.map(r => r.slice()); this.notes = {}; this.validations = []; this.formats = []; this.formulas = []; this.frozen = 0;
     this.maxRows = size ? size.rows : 1000; this.maxCols = size ? size.cols : 26;
   }
   getMaxRows() { return this.maxRows; }
@@ -638,8 +639,11 @@ test('案件登録 → 入力シートへ写す → 翻訳済み → 2時間で 
   let msg = env.g.syncRegistrationsNow();
   assert.ok(msg.indexOf('入力シートへ写した 1件') >= 0, msg);
   assert.equal(R(2, '登録No'), 'R0001');
-  assert.equal(R(2, '社内案件名'), 'RIC.34');
   assert.equal(R(2, '状態'), '翻訳待ち');
+  // 社内案件名・合計は式（スクリプトは値を書かない）
+  const fOf = (sheet, col) => sheet.formulas.filter(f => f.col === col).map(f => f.f).pop() || '';
+  assert.ok(fOf(reg, rh.indexOf('社内案件名') + 1).indexOf('REGEXMATCH') >= 0);
+  assert.equal(fOf(reg, rh.indexOf('合計') + 1), '=IF(COUNT(RC19,RC20,RC21)=0,"",SUM(RC19,RC20,RC21))');
   assert.equal(R(3, '状態'), '記入中');
   assert.equal(R(3, '登録No'), '');
   assert.ok(isDate(R(2, '入力日')) && isDate(R(3, '入力日')), '書き始めた行には入力日が自動で入る');
@@ -649,8 +653,11 @@ test('案件登録 → 入力シートへ写す → 翻訳済み → 2時間で 
   const sh = tab.header(2).map(h => h.split('\n')[0]);
   ['翻訳済み', '翻訳日時', '翻訳メモ', '作業の分け方', '時間入力者', '時間入力日時', '合計', '登録No'].forEach(h => assert.ok(sh.includes(h), h));
   const S = (name) => tab.rows[2][sh.indexOf(name)];
+  assert.equal(fOf(tab, sh.indexOf('合計') + 1), '=IF(COUNT(RC8,RC9,RC10)=0,"",SUM(RC8,RC9,RC10))', '入力シートの合計も式');
   same([S('会社コード'), S('案件番号'), S('社外案件名'), S('新規or修正'), S('視点'), S('パターン'), S('サーバーリンク'), S('登録No')], ['RIC', 34, 'マンション', NEWR, 'EX1', 'A', LINK, 'R0001']);
   assert.ok(!tab.rows[2].some(v => v === 'Quynh' || v === 'https://drive/order.pdf' || v === '急ぎ'), '管理者だけの情報は写さない');
+  assert.equal(tab.rows[2].length, sh.indexOf('登録No') + 1, '写す列と登録Noだけを書く（合計の式などには触らない）');
+  assert.equal(tab.rows[2][sh.indexOf('合計')], '', '合計の列は書かない');
   // 時間が空なので転記はまだ（記入途中）
   env.g.transferFromStaffSheet();
   assert.equal(admin.getSheetByName('連携').getLastRow(), 1);
@@ -703,8 +710,6 @@ test('案件登録 → 入力シートへ写す → 翻訳済み → 2時間で 
   assert.equal(R(2, '時間入力者'), 'Tú Mĩ');
   assert.ok(isDate(R(2, '時間入力日時')) && isDate(S('時間入力日時')), '時間入力日時が自動で入る');
   assert.equal(R(2, '状態'), '時間入力済み');
-  assert.equal(R(2, '合計'), 5.5);
-  assert.equal(S('合計'), 5.5);
   assert.equal(R(2, '作業の分け方'), 'White＝躯体2h／家具1h');
   assert.equal(env.discord.length, 2, '時間が入ったら催促しない');
   const { at } = linkAt(admin);
@@ -719,7 +724,7 @@ test('案件登録 → 入力シートへ写す → 翻訳済み → 2時間で 
   assert.equal(tab.getLastRow(), 2);
 });
 
-test('入力シートを編集した瞬間：翻訳済みのチェックで翻訳日時、時間を書くと時間入力日時と合計が入る', () => {
+test('入力シートを編集した瞬間：翻訳済みのチェックで翻訳日時、時間を書くと時間入力日時が入る', () => {
   const admin = adminSheet();
   const eng = engineerFile();
   const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
@@ -737,7 +742,6 @@ test('入力シートを編集した瞬間：翻訳済みのチェックで翻�
   edit(3, c('White'), 3);
   edit(3, c('Color'), 2);
   assert.ok(isDate(tab.rows[2][c('時間入力日時') - 1]));
-  assert.equal(tab.rows[2][c('合計') - 1], 5);
   edit(3, c('翻訳済み'), false);
   assert.equal(tab.rows[2][c('翻訳日時') - 1], '', 'チェックを外したら消す');
   // 見出しより上・他のタブの編集は無視
