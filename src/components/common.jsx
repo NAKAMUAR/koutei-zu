@@ -526,8 +526,34 @@ function Combobox({ value, onChange, options, placeholder, inputStyle, colors, f
   );
 }
 
+// 清算月プルダウンの候補（YYYY-MM）。現在月の前後を並べ、既存値が範囲外でも必ず含める。
+const monthYmLabel = (ym) => {
+  const [y, m] = String(ym).split('-');
+  return `${y}年${Number(m)}月`;
+};
+function buildMonthOptions(now, includeValue) {
+  const base = now instanceof Date ? now : new Date();
+  const set = new Set();
+  for (let i = -12; i <= 12; i++) {
+    const dt = new Date(base.getFullYear(), base.getMonth() + i, 1);
+    set.add(`${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`);
+  }
+  if (/^\d{4}-\d{2}$/.test(includeValue || '')) set.add(includeValue);
+  return [...set].sort();
+}
+// 清算月セレクト（（未設定）＋ YYYY年M月 の一覧）
+function MonthSelect({ value, onChange, now, style, title }) {
+  return (
+    <select value={value || ''} onChange={(e) => onChange(e.target.value)} style={style} title={title}>
+      <option value="">（未設定）</option>
+      {buildMonthOptions(now, value).map((ym) => <option key={ym} value={ym}>{monthYmLabel(ym)}</option>)}
+    </select>
+  );
+}
+
 
 export {
+  MonthSelect,
   ConfirmModal, PromptModal, ToastStack, DeadlineConfirmModal, TimeSelect, DurationSelect, NavButton, NavGroup,
   iconBtnStyle, miniBtnStyle, progressBtnStyle, tabStyle,
   DateTimeField, EndTimeFields, CompleteDialog, Combobox,

@@ -6,6 +6,7 @@ import { compareCompanyDisplay, computeProjectOrder, elapsedHoursForSlots } from
 import { Check, CheckCircle2, ChevronDown, ChevronUp, Clock, Copy, Edit2, FileText, GripVertical, PauseCircle, Plus, Trash2, User, X, Zap } from 'lucide-react';
 import { ROUND_TYPES, deliveryBaseName, num as vpNum, roundTypeOf, stepDeliveryName } from '../../viewpoint/viewpointUtils.js';
 import { DateTimeField, iconBtnStyle, miniBtnStyle, progressBtnStyle } from '../../components/common.jsx';
+import { estimateForSteps } from '../../lib/stage.js';
 
 // 登録日時（createdAt）の表示用フォーマット：M/D HH:MM（年が違う場合のみ YYYY/ を前置）
 function fmtRegDateTime(ts) {
@@ -571,7 +572,7 @@ function ViewpointGroupList({ groups, allActive, sortMode, defaultCollapsed }) {
 // 視点の「制作・納品」パネル：納品名（自動/上書き）・納品集計・制作履歴（初回/追加/修正の依頼日）・
 // オフショア金額・外注情報。売上登録表へは自動同期（金額の入ったラウンドが売上行になる）。
 function ViewpointMetaPanel({ group, isOffshore }) {
-  const { colors, fontJP, setViewpointMeta, setStepMeta, createBillingFromViewpoint } = useApp();
+  const { colors, fontJP, setViewpointMeta, setStepMeta, createBillingFromViewpoint, pricing } = useApp();
   const [open, setOpen] = useState(false);
   const base = group.deliveryBaseName || deliveryBaseName(group.projectName, group.viewpointNameExternal || group.viewpointName, group.deliveryNameOverride);
   const countAs = group.countAsDelivery !== false;
@@ -584,6 +585,17 @@ function ViewpointMetaPanel({ group, isOffshore }) {
   const totalAmount = steps.reduce((s, t) => s + vpNum(t.stepAmount), 0);
   const totalVND = steps.reduce((s, t) => s + vpNum(t.stepOutVND), 0);
   const yen = (v) => '¥' + Math.round(v).toLocaleString('ja-JP');
+  // 目安金額：まだ金額が入っていないステップ（今回の回）の制作時間 × 時間単価
+  const est = estimateForSteps(steps, pricing);
+  const showEst = est.hours > 0 && ((isOffshore && est.yen > 0) || est.vnd > 0);
+  const applyEstimate = () => {
+    const first = steps.find(t => t.id === est.firstId);
+    if (!first) return;
+    const patch = {};
+    if (isOffshore && est.yen > 0) patch.stepAmount = String(est.yen);
+    if (est.vnd > 0) patch.stepOutVND = String(est.vnd);
+    updateStep(first, patch);
+  };
 
   const inputBase = { fontFamily: fontJP, fontSize: 11, padding: '3px 5px', border: `1px solid ${colors.border}`, borderRadius: 3, background: '#fff', color: colors.text, boxSizing: 'border-box' };
   const labelStyle = { fontSize: 9.5, color: colors.textMute, marginBottom: 2, fontWeight: 600 };
@@ -604,6 +616,7 @@ function ViewpointMetaPanel({ group, isOffshore }) {
         {steps.length > 0 && <span style={{ fontSize: 10.5, color: colors.textMute }}>ステップ {steps.length}件</span>}
         {totalAmount > 0 && <span style={{ fontSize: 10.5, color: '#3a7bd5', fontWeight: 600 }}>金額 {yen(totalAmount)}</span>}
         {totalVND > 0 && <span style={{ fontSize: 10.5, color: '#7a8471' }}>外注 {Math.round(totalVND).toLocaleString('ja-JP')}₫</span>}
+        {showEst && isOffshore && est.yen > 0 && <span style={{ fontSize: 10.5, color: '#3a7bd5' }}>目安 {yen(est.yen)}（未入力）</span>}
         {!countAs && <span style={{ fontSize: 10, color: '#b00', border: '1px solid #e6b3b3', borderRadius: 3, padding: '0 5px' }}>集計対象外</span>}
       </div>
 
@@ -628,6 +641,21 @@ function ViewpointMetaPanel({ group, isOffshore }) {
           <div style={{ ...labelStyle, fontSize: 10.5, marginBottom: 4 }}>
             ステップごとの請求（種類・依頼日・金額・外注。金額や外注VNDを入力すると売上登録表へ自動連携されます。ステップの追加・削除は「ステップ追加／視点編集」で行います）
           </div>
+          {showEst && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', background: '#eef4fc', border: '1px solid #c9daf2', borderRadius: 4, padding: '6px 10px', marginBottom: 8, fontSize: 11.5 }}>
+              <span style={{ fontWeight: 700, color: '#3a7bd5' }}>目安金額</span>
+              <span style={{ color: colors.text }}>
+                {est.parts.map(p => `${p.name} ${Math.round(p.hours * 100) / 100}h`).join(' ＋ ')}
+                {est.parts.length > 1 ? ` ＝ ${est.hours}h` : ''}
+                {isOffshore && est.yen > 0 && <> → <b>{yen(est.yen)}</b>（税抜・時間単価 {Number(pricing.unitYen).toLocaleString('ja-JP')}円）</>}
+                {est.vnd > 0 && <> ／ 外注 <b>{est.vnd.toLocaleString('ja-JP')}₫</b></>}
+              </span>
+              <button type="button" onClick={applyEstimate}
+                style={{ marginLeft: 'auto', padding: '3px 10px', background: '#3a7bd5', color: '#fff', border: 'none', borderRadius: 3, cursor: 'pointer', fontFamily: fontJP, fontSize: 11, fontWeight: 600 }}>
+                この金額を入れる
+              </button>
+            </div>
+          )}
           {steps.length === 0 ? (
             <div style={{ fontSize: 11, color: colors.textMute, padding: '4px 0 8px' }}>ステップがありません。</div>
           ) : (

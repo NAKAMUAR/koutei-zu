@@ -7,6 +7,7 @@
 import { useState, useMemo } from 'react';
 import { Download, Printer, Plus, X } from 'lucide-react';
 import { useApp } from '../appContext.js';
+import { MonthSelect } from '../components/common.jsx';
 
 const WD = ['日', '月', '火', '水', '木', '金', '土'];
 function fmtJDate(s) {
@@ -35,31 +36,6 @@ const toDateInput = (s) => {
   const str = String(s || '').trim();
   return /^\d{4}-\d{2}-\d{2}/.test(str) ? str.slice(0, 10) : '';
 };
-
-// 清算月プルダウンの候補（YYYY-MM）。現在月の前後を並べ、既存値が範囲外でも必ず含める。
-const monthYmLabel = (ym) => {
-  const [y, m] = String(ym).split('-');
-  return `${y}年${Number(m)}月`;
-};
-function buildMonthOptions(now, includeValue) {
-  const base = now instanceof Date ? now : new Date();
-  const set = new Set();
-  for (let i = -12; i <= 12; i++) {
-    const dt = new Date(base.getFullYear(), base.getMonth() + i, 1);
-    set.add(`${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`);
-  }
-  if (/^\d{4}-\d{2}$/.test(includeValue || '')) set.add(includeValue);
-  return [...set].sort();
-}
-// 清算月セレクト（（未設定）＋ YYYY年M月 の一覧）
-function MonthSelect({ value, onChange, now, style, title }) {
-  return (
-    <select value={value || ''} onChange={(e) => onChange(e.target.value)} style={style} title={title}>
-      <option value="">（未設定）</option>
-      {buildMonthOptions(now, value).map((ym) => <option key={ym} value={ym}>{monthYmLabel(ym)}</option>)}
-    </select>
-  );
-}
 
 export default function ProjectSheetView({ tasks, customerMaster, colors, fontJP, fontDisplay }) {
   const { patchTasksByIds, addProjectFromSheet, companyList, assigneeList, now } = useApp();

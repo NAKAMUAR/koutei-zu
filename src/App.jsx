@@ -9,6 +9,7 @@ import { billingStore, memberList, salesStore, signIn, signOutUser, storage, sub
 import { computeDeadlineReorder, computeProjectOrder, deadlineInsertPriority, deadlineKey, isOnLeaveAt, latestActualEnd, migrateTask, normalizePriorities, projectEndTs, scheduleTasks, simulateFormSchedule, workingHoursBetweenTs } from './lib/schedule.js';
 import { collectSalesSyncRows, reconcileLedger } from './viewpoint/salesSync.js';
 import { blankDoc, blankItem, issuerFromDocs } from './billing/billingUtils.js';
+import { isReviewDue, normalizePricing } from './lib/stage.js';
 import { CheckCircle2, ClipboardList, FileText, Folder, MessageSquare, Plus, RotateCcw, Settings as SettingsIcon, StickyNote, Table, TrendingUp } from 'lucide-react';
 import { CompleteDialog, ConfirmModal, DeadlineConfirmModal, NavButton, NavGroup, PromptModal, TimeSelect, ToastStack } from './components/common.jsx';
 import { MemberSettings } from './components/MemberSettings.jsx';
@@ -64,6 +65,8 @@ export default function App() {
   const [stepTypeMaster, setStepTypeMaster] = useState(() => DEFAULT_STEP_TYPES.map(t => ({ ...t })));
   // 売上登録表（自動同期用）。null=未ロード, {}=空。視点の制作履歴から売上行を生成する。
   const [salesLedgerSync, setSalesLedgerSync] = useState(null);
+  // 目安金額の単価（時間単価・最低金額・切り上げ単位・外注の時間単価VND）
+  const [pricing, setPricing] = useState(() => normalizePricing(null));
   // メンバー許可リスト（オーナー以外にアクセスを許可する Gmail。設定画面から編集）
   const [memberEmails, setMemberEmails] = useState([]);
   // タスクメモ（[{ id, title, date, startTime, endTime, allDay, note, color, createdAt, updatedAt }]）
@@ -286,6 +289,11 @@ export default function App() {
       catch (e) { setStepTypeMaster(DEFAULT_STEP_TYPES.map(t => ({ ...t }))); }
     });
 
+    const unsubPricing = storage.subscribe('pricing', (val) => {
+      try { setPricing(normalizePricing(val ? JSON.parse(val) : null)); }
+      catch (e) { setPricing(normalizePricing(null)); }
+    });
+
     // タスクメモを購読
     const unsubMemos = storage.subscribe('memos', (val) => {
       if (!val) { setMemos([]); return; }
@@ -357,6 +365,7 @@ export default function App() {
       unsubCustomer();
       unsubEmployee();
       unsubStepTypes();
+      unsubPricing();
       unsubMemos();
       unsubSalesLedger();
       unsubMembers();
@@ -743,6 +752,12 @@ export default function App() {
     setEmployeeMaster(arr);
     try { await storage.set('employeeMaster', JSON.stringify(arr)); }
     catch (e) { console.error('従業員マスタ保存エラー:', e); }
+  };
+  const savePricing = async (p) => {
+    const norm = normalizePricing(p);
+    setPricing(norm);
+    try { await storage.set('pricing', JSON.stringify(norm)); }
+    catch (e) { console.error('単価設定の保存エラー:', e); }
   };
   const saveStepTypeMaster = async (arr) => {
     const norm = normalizeStepTypes(arr);
@@ -1814,7 +1829,7 @@ export default function App() {
   const reopenReview = async (g) => {
     if (!(await confirmDialog({ message: `「${g.projectName} ／ ${g.viewpointName}」を進行中に戻しますか？`, confirmLabel: '進行中に戻す' }))) return;
     saveTasks(prev => normalizePriorities(prev.map(t => reviewMatch(t, g)
-      ? { ...t, status: 'pending', reviewState: null, reviewAt: null, reviewUpdatedAt: null, completedAt: null, actualEnd: null }
+      ? { ...t, status: 'pending', reviewState: null, reviewAt: null, reviewUpdatedAt: null, reviewDueDate: null, completedAt: null, actualEnd: null }
       : t)));
   };
   // 追加修正メモの記入。最終更新時刻も更新する（3日グレー・7日自動完了の基準をリセット）
@@ -2085,12 +2100,10 @@ export default function App() {
     return result.sort((a, b) => a.endTs - b.endTs);
   }, [scheduled.active, now, settings.endPromptState]);
 
-  // 確認待ちが7日間更新されなければ、自動で完了タブへ移す
+  // 確認待ちは、確認日（あれば）になったら、無ければ7日間更新が無ければ、自動で完了タブへ移す（＝納品完了）
   useEffect(() => {
     if (!tasksLoaded) return;
-    const SEVEN = 7 * 24 * 60 * 60 * 1000;
-    const nowMs = now.getTime();
-    const isStale = (t) => t.reviewState === 'waiting' && t.reviewUpdatedAt && (nowMs - t.reviewUpdatedAt) >= SEVEN;
+    const isStale = (t) => isReviewDue(t, now);
     if (!tasksRef.current.some(isStale)) return;
     saveTasks(prev => prev.map(t => isStale(t) ? { ...t, reviewState: null } : t));
   }, [now, tasksLoaded]);
@@ -2210,6 +2223,7 @@ export default function App() {
     projectOrder, projectList, projectInternalList, viewpointList,
     assigneeList, assigneeOrder, isShownAssignee, companyList, customerMaster, employeeMaster,
     stepTypeMaster, vpDeliveryCount, offshoreCompanies,
+    salesLedger: salesLedgerSync || {}, pricing, savePricing,
     companyOrder: settings.companyOrder || [],
     usedCompanies: [...new Set(tasks.map(t => (t.companyName || '').trim()).filter(Boolean))],
     dragTaskId,

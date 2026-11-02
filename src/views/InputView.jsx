@@ -1,5 +1,5 @@
 // 入力ビュー（新規案件登録フォーム＋進行中一覧タブ）。App.jsx から分割。
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { lazy, Suspense, useState, useEffect, useMemo, useRef } from 'react';
 import { useApp } from '../appContext.js';
 import { VIEWPOINT_PRESETS, viewpointCategoryOptions, dayName, fmtHM, fmtMD, fmtYMD, getProjectColor, kanaNormalize, makeEmptyStep, makeViewpointFromPreset, minToTime, parseHM, sheetsLabel } from '../lib/utils.js';
 import { computeRevisionStats, deliveryBaseName, findStepType, num as vpNum, resolveViewpointSteps, stepDeliveryName } from '../viewpoint/viewpointUtils.js';
@@ -11,6 +11,8 @@ import { AssigneeBoard, ReviewSection, SuspendedSection } from './input/sections
 import { ViewpointGroupList } from './input/ViewpointList.jsx';
 import { CalendarView } from './CalendarView.jsx';
 import { AssigneeView } from './AssigneeView.jsx';
+// 進行状況（段階の一覧）は開いたときに読み込む
+const StageView = lazy(() => import('./StageView.jsx'));
 
 function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdit, selectedAssignee, setSelectedAssignee }) {
   const {
@@ -1372,9 +1374,9 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
         </>)}
       </section>
 
-      {/* 表示切替：進行中一覧 / カレンダー / 担当者別 */}
+      {/* 表示切替：進行中一覧 / 進行状況 / カレンダー / 担当者別 */}
       <div ref={tabBarRef} style={{ display: 'flex', gap: 8, flexWrap: 'wrap', scrollMarginTop: 12 }}>
-        {[{ id: 'list', label: '進行中一覧' }, { id: 'calendar', label: 'カレンダー' }, { id: 'assignee', label: '担当者別' }].map(t => (
+        {[{ id: 'list', label: '進行中一覧' }, { id: 'stage', label: '進行状況' }, { id: 'calendar', label: 'カレンダー' }, { id: 'assignee', label: '担当者別' }].map(t => (
           <button key={t.id} type="button" onClick={() => switchTab(t.id)}
             style={{
               padding: '8px 16px', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 13, fontWeight: 600,
@@ -1552,6 +1554,11 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
 
       <ReviewSection review={scheduled.review} />
       </>)}
+      {inputTab === 'stage' && (
+        <Suspense fallback={<div style={{ padding: 40, textAlign: 'center', color: colors.textMute, fontFamily: fontJP, fontSize: 13 }}>読み込み中...</div>}>
+          <StageView />
+        </Suspense>
+      )}
       {inputTab === 'calendar' && <CalendarView />}
       {inputTab === 'assignee' && (
         <AssigneeView selectedAssignee={selectedAssignee} setSelectedAssignee={setSelectedAssignee} />

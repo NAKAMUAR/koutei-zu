@@ -128,15 +128,16 @@ function ReviewSection({ review }) {
   const didInitCollapse = useRef(false);
   // 視点単位にまとめ、確認待ちのメタ情報（開始・最終更新・メモ・完了日・完了時刻）を付与
   const groups = groupByViewpoint(review || [], vpDeliveryCount).map(g => {
-    let reviewAt = Infinity, reviewUpdatedAt = 0, completedAt = 0, reviewNote = '', actualEnd = '';
+    let reviewAt = Infinity, reviewUpdatedAt = 0, completedAt = 0, reviewNote = '', actualEnd = '', reviewDueDate = '';
     for (const t of g.tasks) {
       if (t.reviewAt && t.reviewAt < reviewAt) reviewAt = t.reviewAt;
       if (t.reviewUpdatedAt && t.reviewUpdatedAt > reviewUpdatedAt) reviewUpdatedAt = t.reviewUpdatedAt;
       if (t.completedAt && t.completedAt > completedAt) completedAt = t.completedAt;
       if (!reviewNote && t.reviewNote) reviewNote = t.reviewNote;
       if (!actualEnd && t.actualEnd) actualEnd = t.actualEnd;
+      if (!reviewDueDate && t.reviewDueDate) reviewDueDate = t.reviewDueDate;
     }
-    return { ...g, reviewAt: reviewAt === Infinity ? null : reviewAt, reviewUpdatedAt: reviewUpdatedAt || null, completedAt: completedAt || null, reviewNote, actualEnd };
+    return { ...g, reviewAt: reviewAt === Infinity ? null : reviewAt, reviewUpdatedAt: reviewUpdatedAt || null, completedAt: completedAt || null, reviewNote, actualEnd, reviewDueDate };
   });
   // 最終更新が古い順（＝自動完了が近い順）に並べる
   groups.sort((a, b) => (a.reviewUpdatedAt || 0) - (b.reviewUpdatedAt || 0));
@@ -229,7 +230,7 @@ function ReviewSection({ review }) {
 }
 
 function ReviewCard({ g }) {
-  const { colors, fontJP, now, finalizeReview, reopenReview, setReviewNote, setReviewActualEnd } = useApp();
+  const { colors, fontJP, now, finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, patchTasksByIds } = useApp();
   const [note, setNote] = useState(g.reviewNote || '');
   // 他端末などで g.reviewNote が更新されたら、編集中でなければ追従
   const [focused, setFocused] = useState(false);
@@ -271,7 +272,9 @@ function ReviewCard({ g }) {
           </span>
         )}
         <span style={{ marginLeft: 'auto', fontSize: 11, color: colors.textMute, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-          <span style={{ color: gray ? colors.textMute : colors.accent }}>あと {daysLeft} 日で自動完了</span>
+          <span style={{ color: gray ? colors.textMute : colors.accent }}>
+            {g.reviewDueDate ? `確認日 ${fmtMD(new Date(g.reviewDueDate + 'T00:00:00'))} に納品完了` : `あと ${daysLeft} 日で自動完了`}
+          </span>
         </span>
       </div>
 
@@ -281,6 +284,14 @@ function ReviewCard({ g }) {
           onChange={(v) => setReviewActualEnd(g, v)}
           defaultTime="17:00" colors={colors} fontJP={fontJP} />
         <span style={{ fontSize: 10, color: colors.textMute }}>直すとこの時刻を起点に、担当者の残りスケジュールが組み直ります（早く終われば前倒し）</span>
+      </div>
+
+      <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <label style={{ fontSize: 11, color: colors.textMute, whiteSpace: 'nowrap' }}>確認日</label>
+        <input type="date" value={g.reviewDueDate || ''}
+          onChange={(e) => patchTasksByIds(g.tasks.map(t => t.id), { reviewDueDate: e.target.value || null })}
+          style={{ padding: '4px 8px', border: `1px solid ${colors.border}`, borderRadius: 3, fontFamily: fontJP, fontSize: 12 }} />
+        <span style={{ fontSize: 10, color: colors.textMute }}>この日になったら自動で納品完了（空欄なら、最後の更新から{REVIEW_AUTO_DONE_DAYS}日）</span>
       </div>
 
       <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
