@@ -1,4 +1,4 @@
-import{as as Ne,ao as Te,i as Ce,a3 as We,$ as $e,n as De,t as Ee,a7 as t,J as G,ah as J,_ as ue,ab as U,R as ge,an as Re,W as Ie,U as he,al as me}from"./index-DuSc4Nn3.js";import{z as x,M as xe,d as Be,w as Fe}from"./icons-DzTdQr8o.js";import"./react-BACzpHg3.js";import"./firebase-BMZBa7_g.js";const Ae=["TAMAZEN","SUMUS"],T="__all__",ke=[`おはようございます。
+import{at as Ne,ao as Te,i as Ce,a3 as We,$ as $e,n as De,t as Ee,a7 as t,J as G,ah as J,_ as ue,ab as U,R as ge,an as Re,W as Ie,U as he,al as me}from"./index-BK-zetxV.js";import{z as x,M as xe,d as Be,w as Fe}from"./icons-DzTdQr8o.js";import"./react-BACzpHg3.js";import"./firebase-BMZBa7_g.js";const Ae=["TAMAZEN","SUMUS"],T="__all__",ke=[`おはようございます。
 何かお手伝いできることがございましたら、いつでもお声がけくださいませ。
 本日もどうぞよろしくお願い致します(bow)`,`おはようございます。
 新規案件がございましたら、ぜひご連絡いただけますと幸いに存じます。
