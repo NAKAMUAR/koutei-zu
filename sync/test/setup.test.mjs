@@ -717,6 +717,12 @@ test('案件登録 → 入力シートへ写す → 翻訳済み → 2時間で 
   assert.equal(at(2, '担当者'), 'Quynh');
   assert.equal(at(2, '納期'), '2030-01-20');
 
+  // 工程図が納品名を書き出すと、『案件登録』と入力シートの「納品名」に表示される
+  env.fs.docs['workspaces/liebe-asia-team/data/deliveryNames'] = { value: { stringValue: JSON.stringify({ 'RIC34::EX2-A::1': ['マンション_外観目線視点②_パターンA白色', 'マンション_外観目線視点②_パターンA色付'] }) } };
+  env.g.syncRegistrationsNow();
+  assert.equal(R(2, '納品名'), 'マンション_外観目線視点②_パターンA白色 / マンション_外観目線視点②_パターンA色付');
+  assert.equal(S('納品名'), R(2, '納品名'));
+
   // 入力シートで行が消されたら「入力シートに無い」（勝手に写し直さない）
   tab.rows[2] = [];
   env.g.syncRegistrationsNow();

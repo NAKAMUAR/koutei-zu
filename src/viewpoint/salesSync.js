@@ -252,3 +252,35 @@ export function reconcileLedger(ledger, syncRows, fallbackMonth) {
   for (const ym of changedMonths) next[ym].updatedAt = Date.now();
   return { ledger: next, changed: changedMonths.size > 0, changedMonths: [...changedMonths] };
 }
+
+// シートから登録したタスク（externalId あり）の納品名を、連携シートの行（取込キー）ごとにまとめる。
+// 取込キー＝externalId の先頭3つ（案件コード::視点名::n回目）。値は納品名の配列（視点内のステップ順）。
+// 連携シート（Apps Script）が data/deliveryNames を読み、『案件登録』と入力シートの「納品名」に表示する。
+export function collectDeliveryNames(tasks) {
+  const vpMeta = new Map();
+  for (const t of (tasks || [])) {
+    const key = viewpointKey(t.projectName, t.viewpointName);
+    const e = vpMeta.get(key) || { ext: '', override: '' };
+    if (!e.ext && t.viewpointNameExternal) e.ext = t.viewpointNameExternal;
+    if (!e.override && t.deliveryNameOverride) e.override = t.deliveryNameOverride;
+    vpMeta.set(key, e);
+  }
+  const groups = new Map();
+  const sorted = [...(tasks || [])].filter(t => t && t.externalId && !t.cancelled)
+    .sort((a, b) => (a.stepOrder ?? 0) - (b.stepOrder ?? 0) || (a.createdAt || 0) - (b.createdAt || 0));
+  for (const t of sorted) {
+    const parts = String(t.externalId).split('::');
+    if (parts.length < 4) continue;
+    const rowKey = parts.slice(0, 3).join('::');
+    const meta = vpMeta.get(viewpointKey(t.projectName, t.viewpointName)) || {};
+    const base = deliveryBaseName(t.projectName, meta.ext || t.viewpointNameExternal || t.viewpointName, meta.override || '');
+    const name = (t.stepDeliveryNameOverride || '').trim() || stepDeliveryName(base, t.stepDeliverySuffix || t.stepName);
+    if (!name) continue;
+    if (!groups.has(rowKey)) groups.set(rowKey, []);
+    const list = groups.get(rowKey);
+    if (!list.includes(name)) list.push(name);
+  }
+  const out = {};
+  for (const k of [...groups.keys()].sort()) out[k] = groups.get(k);
+  return out;
+}

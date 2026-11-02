@@ -7,7 +7,7 @@ import { COMPANY_PRESETS, DEFAULT_SETTINGS, VIEWPOINT_PRESETS, withAssigneeHours
 import { DEFAULT_STEP_TYPES, deliveryBaseName, findStepType, normalizeHistory, normalizeStepTypes, num as vpNum, resolveViewpointSteps, roundTypeOf, stepDeliveryName } from './viewpoint/viewpointUtils.js';
 import { billingStore, memberList, salesStore, signIn, signOutUser, storage, subscribeAuth, tasksStore } from './firebase.js';
 import { computeDeadlineReorder, computeProjectOrder, deadlineInsertPriority, deadlineKey, isOnLeaveAt, latestActualEnd, migrateTask, normalizePriorities, projectEndTs, scheduleTasks, simulateFormSchedule, workingHoursBetweenTs } from './lib/schedule.js';
-import { collectSalesSyncRows, reconcileLedger } from './viewpoint/salesSync.js';
+import { collectDeliveryNames, collectSalesSyncRows, reconcileLedger } from './viewpoint/salesSync.js';
 import { blankDoc, blankItem, issuerFromDocs } from './billing/billingUtils.js';
 import { isReviewDue, normalizePricing } from './lib/stage.js';
 import { CheckCircle2, ClipboardList, FileText, Folder, MessageSquare, Plus, RotateCcw, Settings as SettingsIcon, StickyNote, Table, TrendingUp } from 'lucide-react';
@@ -25,6 +25,7 @@ const BillingView = lazy(() => import('./billing/BillingView.jsx'));
 const SalesView = lazy(() => import('./sales/SalesView.jsx'));
 const ProjectSheetView = lazy(() => import('./project/ProjectSheetView.jsx'));
 const CompanySummaryView = lazy(() => import('./sales/CompanySummaryView.jsx'));
+const SheetExportView = lazy(() => import('./views/SheetExportView.jsx'));
 export default function App() {
   const [tasks, setTasks] = useState([]);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
@@ -67,6 +68,9 @@ export default function App() {
   const [salesLedgerSync, setSalesLedgerSync] = useState(null);
   // 目安金額の単価（時間単価・最低金額・切り上げ単位・外注の時間単価VND）
   const [pricing, setPricing] = useState(() => normalizePricing(null));
+  // 連携シートに見せる納品名（data/deliveryNames に保存済みの JSON 文字列）。読み込み前は null
+  const deliveryNamesRef = useRef(null);
+  const [deliveryNamesLoaded, setDeliveryNamesLoaded] = useState(false);
   // メンバー許可リスト（オーナー以外にアクセスを許可する Gmail。設定画面から編集）
   const [memberEmails, setMemberEmails] = useState([]);
   // タスクメモ（[{ id, title, date, startTime, endTime, allDay, note, color, createdAt, updatedAt }]）
@@ -289,6 +293,10 @@ export default function App() {
       catch (e) { setStepTypeMaster(DEFAULT_STEP_TYPES.map(t => ({ ...t }))); }
     });
 
+    const unsubDeliveryNames = storage.subscribe('deliveryNames', (val) => {
+      deliveryNamesRef.current = val || '';
+      setDeliveryNamesLoaded(true);
+    });
     const unsubPricing = storage.subscribe('pricing', (val) => {
       try { setPricing(normalizePricing(val ? JSON.parse(val) : null)); }
       catch (e) { setPricing(normalizePricing(null)); }
@@ -366,11 +374,27 @@ export default function App() {
       unsubEmployee();
       unsubStepTypes();
       unsubPricing();
+      unsubDeliveryNames();
       unsubMemos();
       unsubSalesLedger();
       unsubMembers();
     };
   }, [auth.allowed]);
+
+  // シートから登録した視点の納品名を data/deliveryNames にまとめる（連携シートが読んで「納品名」列に表示する）。
+  // 中身が変わったときだけ書き込む
+  useEffect(() => {
+    if (!auth.allowed || !tasksLoaded || !deliveryNamesLoaded) return;
+    const handle = setTimeout(() => {
+      try {
+        const json = JSON.stringify(collectDeliveryNames(tasksRef.current));
+        if (json === deliveryNamesRef.current) return;
+        deliveryNamesRef.current = json;
+        storage.set('deliveryNames', json).catch(e => console.error('納品名の保存エラー:', e));
+      } catch (e) { console.error('納品名の集計に失敗:', e); }
+    }, 1500);
+    return () => clearTimeout(handle);
+  }, [tasks, auth.allowed, tasksLoaded, deliveryNamesLoaded]);
 
   // tasks と settings の両方が最初の同期完了 → 読み込み終了
   useEffect(() => {
@@ -2266,6 +2290,7 @@ export default function App() {
     { id: 'sales', icon: <Table size={15} />, label: '売上登録' },
     { id: 'projectSheet', icon: <ClipboardList size={15} />, label: '案件整理' },
     { id: 'companySummary', icon: <TrendingUp size={15} />, label: '会社別集計' },
+    { id: 'sheetExport', icon: <Table size={15} />, label: 'シート貼り付け用' },
   ];
 
   return (
@@ -2377,6 +2402,7 @@ export default function App() {
           <ProjectSheetView tasks={tasks} customerMaster={customerMaster}
             colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
         )}
+        {view === 'sheetExport' && <SheetExportView />}
         {view === 'companySummary' && (
           <CompanySummaryView tasks={tasks} now={now}
             colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />

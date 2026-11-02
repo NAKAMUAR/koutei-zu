@@ -173,6 +173,8 @@ const STAFF_INPUT_COLUMNS = [
     note: 'White＋Color＋pts（自動で計算。書かなくてよい）\nTự động tính (không cần nhập)' },
   { key: 'regNo', label: '登録No', vi: 'Mã đăng ký', width: 8, auto: true,
     note: '管理者の登録番号（自動で入る。変えない）\nMã đăng ký của quản lý (tự động, không sửa)' },
+  { key: 'delivery', label: '納品名', vi: 'Tên file giao', width: 30, auto: true,
+    note: '工程図に登録されると、納品するファイルの名前が自動で入る（ステップが複数なら「 / 」区切り）\nTên file giao hàng (tự động sau khi đăng ký vào 工程図)' },
 ];
 const STAFF_INPUT_HEADERS = STAFF_INPUT_COLUMNS.map(c => c.label);
 // 『入力シート』1行目の案内（見出しの上が空のときだけ書く）
@@ -475,6 +477,7 @@ function mapStaffColumns_(headers) {
     split: find(['作業の分け方']),
     total: find(['合計']),
     regNo: find(['登録No']),
+    delivery: find(['納品名']),
   };
   // 会社コードの列の見出しが「社外案件名」になっている（社外案件名が2つあり、1つ目が案件番号のすぐ左）→ 1つ目を会社コードとみなす
   if (!m.code && m.number && m.name === m.number - 1) {
@@ -1131,10 +1134,10 @@ const REG_H = {
   cut: '視点', pattern: 'パターン', link: 'サーバーリンク', deadline: '納期', order: '注文書', memo: '管理者メモ',
   translated: '翻訳済み', translatedAt: '翻訳日時', transNote: '翻訳メモ', white: 'White', color: 'Color', other: 'pts', total: '合計', split: '作業の分け方',
   estimator: '時間入力者', estimatedAt: '時間入力日時',
-  regDate: '入力日', copiedAt: '入力シートへ写した日時', notifiedAt: '最後の催促', notifyCount: '催促回数',
+  regDate: '入力日', delivery: '納品名', copiedAt: '入力シートへ写した日時', notifiedAt: '最後の催促', notifyCount: '催促回数',
 };
 const REG_ORDER = ['no', 'state', 'regDate', 'code', 'number', 'name', 'internal', 'assignee', 'request', 'cut', 'pattern', 'link', 'deadline', 'order', 'memo',
-  'translated', 'translatedAt', 'transNote', 'white', 'color', 'other', 'total', 'split', 'estimator', 'estimatedAt', 'copiedAt', 'notifiedAt', 'notifyCount'];
+  'translated', 'translatedAt', 'transNote', 'white', 'color', 'other', 'total', 'split', 'estimator', 'estimatedAt', 'copiedAt', 'notifiedAt', 'notifyCount', 'delivery'];
 // 管理者が書く列（ほかの列は自動で入る）
 const REG_INPUT = ['code', 'number', 'name', 'assignee', 'request', 'cut', 'pattern', 'link', 'deadline', 'order', 'memo'];
 // エンジニア入力シートへ写す列（案件登録 → 入力シート。担当者・納期・注文書・管理者メモは写さない）
@@ -1154,6 +1157,7 @@ const REG_NOTES = {
   estimator: '自動：入力シートの時間入力者（制作時間を決めた人）', estimatedAt: '自動：入力シートに制作時間が書かれた日時',
   regDate: '自動：この行を書き始めた日',
   copiedAt: '自動：入力シートへ写した（直した）日時', notifiedAt: '自動：最後に Discord で催促した日時', notifyCount: '自動：催促した回数',
+  delivery: '自動：工程図での納品名（工程図に登録された後に入る。ステップが複数なら「 / 」区切り）',
 };
 
 /** メニュー：『案件登録』を今すぐ入力シートへ写し、翻訳・時間を読み戻す（催促もここで送る） */
@@ -1289,13 +1293,24 @@ function syncRegistrations_(now) {
   const sLast = staff.getLastRow();
   const sVals = sLast > hr ? staff.getRange(hr + 1, 1, sLast - hr, width).getValues() : [];
   const byNo = new Map();
+  const keyByNo = new Map(); // 登録No → 取込キー（『連携』の行・工程図の externalId の先頭と同じ）
+  const counts = new Map();
   let lastData = hr; // 最後に中身がある行（プルダウンだけの行は数えない）
   sVals.forEach((v, i) => {
     const no = sc.regNo ? trimStr_(v[sc.regNo - 1]) : '';
     if (no) byNo.set(no, { row: hr + 1 + i, v });
+    const code = joinCode_(v[sc.code - 1], sc.number ? v[sc.number - 1] : '');
+    const cut = trimStr_(v[sc.cut - 1]);
+    if (code && cut) {
+      const base = normCode_(code) + '::' + normCut_(viewpointNameOf_(cut, sc.pattern ? v[sc.pattern - 1] : ''));
+      const n = (counts.get(base) || 0) + 1;
+      counts.set(base, n);
+      if (no) keyByNo.set(no, base + '::' + n);
+    }
     if (['code', 'number', 'cut', 'white', 'regNo'].some(k => sc[k] && trimStr_(v[sc[k] - 1]) !== '')) lastData = hr + 1 + i;
   });
 
+  const deliveryNames = readDeliveryNames_(cfg);
   const next = nextRegNo_(data.slice(1), rc);
   const regUpdates = []; // { row, col, value }
   const staffUpdates = [];
@@ -1357,6 +1372,13 @@ function syncRegistrations_(now) {
       setReg(r, 'translatedAt', st.transAt || '');
       setReg(r, 'estimatedAt', st.estimatedAt || '');
       row.translatedAt = st.transAt || '';
+      // 納品名（工程図に登録された後）
+      const names = deliveryNames && keyByNo.has(no) ? deliveryNames[keyByNo.get(no)] : null;
+      if (names) {
+        const text = names.join(' / ');
+        setReg(r, 'delivery', text);
+        putStaff('delivery', text);
+      }
     }
     row.state = regState_(row);
     setReg(r, 'state', row.state);
@@ -1455,6 +1477,18 @@ const STAFF_EDIT_HANDLER = 'onStaffEdit';
 function installStaffEditTrigger_(fileId) {
   ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === STAFF_EDIT_HANDLER).forEach(t => ScriptApp.deleteTrigger(t));
   ScriptApp.newTrigger(STAFF_EDIT_HANDLER).forSpreadsheet(fileId).onEdit().create();
+}
+
+/** 工程図が書き出した納品名（data/deliveryNames：取込キー → 納品名の配列）。読めなければ null（納品名の表示だけ見送る） */
+function readDeliveryNames_(cfg) {
+  try {
+    const s = fsGetValueString_(getAuth_(), cfg, 'deliveryNames');
+    const v = s ? JSON.parse(s) : {};
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+  } catch (e) {
+    console.log('納品名を読めませんでした: ' + (e && e.message || e));
+    return null;
+  }
 }
 
 /** 『案件登録』の 登録No → { assignee, deadline }（転記のとき『連携』の担当者・納期に入れる） */
@@ -1822,6 +1856,7 @@ const STAFF_RULES_LINES = [
   ['', '作業の分け方：分けて作業できるときに書く（例 White＝躯体 3h／家具1 2h／家具2 1h）', 'Cách chia công việc: ghi khi có thể chia việc (VD: White = khung 3h / nội thất 1 2h / nội thất 2 1h)'],
   ['', '時間入力者：制作時間を決めた人の名前（時間入力日時・合計は自動で入ります）', 'Người nhập giờ: tên người quyết định số giờ (thời gian nhập và tổng tự động ghi)'],
   ['', '登録No：管理者が登録した行に自動で入ります。変えないでください', 'Mã đăng ký: tự động có ở dòng do quản lý đăng ký. Không sửa'],
+  ['', '納品名：工程図に登録されると、納品するファイルの名前が自動で入ります。納品のときはこの名前を使ってください', 'Tên file giao: tự động có sau khi đăng ký vào 工程図. Khi giao hàng, hãy dùng tên này'],
   ['', '※ 管理者が登録した行（登録No あり）は、会社コード〜パターンが自動で入ります。翻訳済みから2時間たっても時間が空だと Discord で催促が届きます',
     '※ Dòng do quản lý đăng ký (có Mã đăng ký) sẽ tự điền từ Mã công ty đến Phương án. Nếu 2 giờ sau khi dịch xong vẫn chưa có số giờ, sẽ có nhắc nhở qua Discord'],
   ['h', '■ 視点コード', '■ Mã góc nhìn'],
@@ -2217,11 +2252,12 @@ const HOWTO_LINES = [
   '4. 翻訳済み・時間・作業の分け方は『案件登録』の灰色の列に読み戻され、「状態」が 翻訳待ち → 時間計算待ち → 時間入力済み と進みます。',
   '5. 翻訳済みになってから2時間たっても時間が空なら Discord で催促し、以降1時間ごとにくり返します（『設定』で時間・時間帯を変えられます。Webhook はメニュー「Discord 通知の設定」）。',
   '6. 時間が入った行は、いつもどおり『連携』へ転記され、工程図に登録されます。『案件登録』の担当者・納期が工程図に入ります。',
+  '7. 工程図で決まった納品名（ファイル名）は、『案件登録』と入力シートの「納品名」列に自動で表示されます（工程図で納品名を直すと、次の自動実行で追従）。',
   '・『案件登録』で会社コード・視点などを直すと、入力シートの行も直ります。入力シートの行を消すと、状態が「入力シートに無い」になります（もう一度写したいときは登録Noを消す）。',
   '',
   '■ エンジニアが書く場所',
   '「工程図 エンジニア入力シート」の『入力シート』タブ。書き方は同じファイルの『記入ルール/説明』タブ（日本語・ベトナム語の併記。メニュー「0. かんたん初期設定」で整います）。',
-  '列: 会社コード（REN・RIC…）/ 案件番号 / 社外案件名 / サーバーリンク / 新規or修正 / 視点（『視点マスタ』のキーワード＋番号。EX1・IN1・EXCB1…）/ パターン（A・B…）/ White / Color / pts / メモ / 翻訳済み / 翻訳日時 / 翻訳メモ / 作業の分け方 / 時間入力者 / 時間入力日時 / 合計 / 登録No',
+  '列: 会社コード（REN・RIC…）/ 案件番号 / 社外案件名 / サーバーリンク / 新規or修正 / 視点（『視点マスタ』のキーワード＋番号。EX1・IN1・EXCB1…）/ パターン（A・B…）/ White / Color / pts / メモ / 翻訳済み / 翻訳日時 / 翻訳メモ / 作業の分け方 / 時間入力者 / 時間入力日時 / 合計 / 登録No / 納品名',
   '1視点（パターン違いも別）1行。依頼のたびに行を足します。会社コード＋案件番号は「RIC.34」のように1つの社内案件名として扱います。',
   '会社コード・視点のプルダウンは『会社マスタ』『視点マスタ』から作ります。マスタを変えたらメニュー「エンジニア入力シートを整える」を押してください。',
   '',
