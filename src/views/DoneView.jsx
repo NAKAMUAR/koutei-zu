@@ -7,6 +7,8 @@ import { dayName, fmtYMD, fmtYMDJP, getProjectColor, startOfDay } from '../lib/u
 import { EndTimeFields, iconBtnStyle } from '../components/common.jsx';
 
 // ============ 完了タスクビュー ============
+// 完了タブを開いたときに表示する期間（直近◯ヶ月）
+const RECENT_MONTHS = 3;
 // ============ 視点別 修正集計（完了タブ） ============
 // 「①新規 → ②完成 → ③追加の変更・修正 → ④完成」の③が、視点ごとに何回・
 // どれだけ時間がかかっているかを自動集計して表示する。元データは computeRevisionStats。
@@ -100,7 +102,20 @@ function RevisionStatsSection({ tasks, colors, fontJP, fontDisplay }) {
 
 function DoneView() {
   const { colors, fontJP, fontDisplay, scheduled, tasks, toggleStatus, handleDelete, setActualEnd, handleEditProject } = useApp();
-  const doneTasks = [...scheduled.doneFinal].sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
+  const allDoneTasks = [...scheduled.doneFinal].sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
+
+  // 表示期間：最初は直近3ヶ月分だけ表示し（件数が多いと画面が重くなるため）、
+  // 「全期間を表示」ボタンで過去分もすべて表示する。完了日時が不明なものは常に表示する。
+  const [showAllPeriod, setShowAllPeriod] = useState(false);
+  const periodStart = useMemo(() => {
+    const d = startOfDay(new Date());
+    d.setMonth(d.getMonth() - RECENT_MONTHS);
+    return d.getTime();
+  }, []);
+  const doneTasks = showAllPeriod
+    ? allDoneTasks
+    : allDoneTasks.filter(t => !t.completedAt || t.completedAt >= periodStart);
+  const hiddenCount = allDoneTasks.length - doneTasks.length;
 
   // 検索：案件名・社内案件名・会社名・お客様担当者・制作担当者・視点名・ステップ名・メモで絞り込み
   const [searchQuery, setSearchQuery] = useState('');
@@ -128,13 +143,39 @@ function DoneView() {
     byAssignee[t.assignee].hours += t.hours;
   }
 
+  const periodBar = (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+      background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 6,
+      padding: '8px 12px', marginBottom: 16, fontSize: 12, color: colors.textMute,
+    }}>
+      <span>
+        {showAllPeriod
+          ? `全期間の完了タスクを表示中（${allDoneTasks.length}件）`
+          : `直近${RECENT_MONTHS}ヶ月（${fmtYMDJP(new Date(periodStart))}以降）の完了タスクを表示中`
+            + (hiddenCount > 0 ? ` ・ それより前の ${hiddenCount}件は非表示` : '')}
+      </span>
+      {(showAllPeriod || hiddenCount > 0) && (
+        <button type="button" onClick={() => setShowAllPeriod(!showAllPeriod)}
+          style={{
+            marginLeft: 'auto', padding: '5px 12px', borderRadius: 4, cursor: 'pointer',
+            border: `1px solid ${colors.border}`, background: showAllPeriod ? '#fff' : '#f4f1e8',
+            color: colors.text, fontFamily: fontJP, fontSize: 12, fontWeight: 600,
+          }}>
+          {showAllPeriod ? `直近${RECENT_MONTHS}ヶ月だけに戻す` : '全期間を表示'}
+        </button>
+      )}
+    </div>
+  );
+
   if (doneTasks.length === 0) {
     return (
       <div>
         <h2 style={{ fontFamily: fontDisplay, fontSize: 20, margin: '0 0 20px 0', fontWeight: 500 }}>完了タスク</h2>
+        {hiddenCount > 0 && periodBar}
         <div style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 6, padding: 48, textAlign: 'center', color: colors.textMute }}>
           <CheckCircle2 size={32} style={{ opacity: 0.3, marginBottom: 12 }} />
-          <div>まだ完了したタスクはありません</div>
+          <div>{hiddenCount > 0 ? `直近${RECENT_MONTHS}ヶ月に完了したタスクはありません` : 'まだ完了したタスクはありません'}</div>
         </div>
       </div>
     );
@@ -148,6 +189,8 @@ function DoneView() {
           {q ? `${filtered.length} / ${doneTasks.length}件` : `${doneTasks.length}件 完了`}{cancelledCount > 0 ? `（うち中止 ${cancelledCount}件）` : ''} ・ 合計 {totalHours}時間
         </span>
       </div>
+
+      {periodBar}
 
       {/* 検索 */}
       <div style={{ position: 'relative', maxWidth: 480, marginBottom: 20 }}>
@@ -178,6 +221,14 @@ function DoneView() {
       {filtered.length === 0 && (
         <div style={{ background: '#fff', border: `1px dashed ${colors.border}`, borderRadius: 6, padding: 48, textAlign: 'center', color: colors.textMute, fontSize: 13 }}>
           「{searchQuery}」に一致する完了タスクはありません。
+          {!showAllPeriod && hiddenCount > 0 && (
+            <div style={{ marginTop: 10 }}>
+              <button type="button" onClick={() => setShowAllPeriod(true)}
+                style={{ padding: '5px 12px', borderRadius: 4, cursor: 'pointer', border: `1px solid ${colors.border}`, background: '#f4f1e8', color: colors.text, fontFamily: fontJP, fontSize: 12 }}>
+                全期間から探す
+              </button>
+            </div>
+          )}
         </div>
       )}
 
