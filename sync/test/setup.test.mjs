@@ -838,7 +838,7 @@ test('連絡文：ひな形から作り、同じ案件・同じ入力日の視�
   assert.equal(tab.rows[2][sh.indexOf('管理者からの連絡')], '昼景・植栽多めと指示あり');
   const limI = new Date(env.g.addWorkMinutes_(R(2, '登録日時'), 90, '8-12,13-17').getTime());
   const limIText = (limI.getMonth() + 1) + '/' + limI.getDate() + ' ' + limI.getHours() + ':' + String(limI.getMinutes()).padStart(2, '0');
-  assert.equal(R(2, '通訳向け連絡文'), '戸建て案件(REN.50)の資料を共有しますので、翻訳をお願いします。\n⇩サーバーリンク\n' + LINK + '\n\n制作時間の計算については' + limIText + 'までに記入してください。\n昼景・植栽多めと指示あり');
+  assert.equal(R(2, '通訳向け連絡文'), 'REN.50案件の資料を共有しますので、翻訳をお願いします。\n⇩サーバーリンク\n' + LINK + '\n\n制作時間の計算については' + limIText + 'までに記入してください。\n昼景・植栽多めと指示あり');
   assert.ok(!String(R(2, '連絡文')).includes('昼景'), 'エンジニア向けの既定の文には入れない');
 
   // 『設定』の「今すぐ全部連携」にチェック → 自動実行と同じ処理が動き、チェックが外れる
@@ -938,7 +938,7 @@ test('『登録一覧』の「コピー」列：チェックするとその案�
   setR(2, 'コピー', true);
   env.g.onAdminEdit({ range: reg.getRange(2, ci) });
   const html2 = env.dialogs[env.dialogs.length - 1].html;
-  assert.equal((html2.match(/戸建て案件\(REN\.50\)/g) || []).length, 1, '同じ案件の視点をまとめて通訳向けも1通');
+  assert.equal((html2.match(/REN\.50案件の資料/g) || []).length, 1, '同じ案件の視点をまとめて通訳向けも1通');
   assert.ok(!html2.includes('RIC.34の資料') && !html2.includes('マンション') && !html2.includes('EX2'), '別の案件は入れない');
   assert.equal((html2.match(/REN\.50の資料を共有します。/g) || []).length, 1, 'エンジニア向けは1通');
   // R0002（2つ目の視点）にチェックしても同じ1通
@@ -997,7 +997,7 @@ test('『案件登録』は入力専用：「登録」にチェックした行�
   assert.equal(EV(2, '状態'), '記入中（視点が空）');
   assert.equal(EV(3, '会社コード') || '', '', '3行目は空になる');
   assert.equal(EV(2, '登録'), false);
-  assert.ok(String(R(2, '通訳向け連絡文')).includes('(REN.50)の資料を共有しますので') && R(3, '通訳向け連絡文') === R(2, '通訳向け連絡文'), '同じ案件・同じ日の視点は1通');
+  assert.ok(String(R(2, '通訳向け連絡文')).includes('REN.50案件の資料を共有しますので') && R(3, '通訳向け連絡文') === R(2, '通訳向け連絡文'), '同じ案件・同じ日の視点は1通');
   // もう一度チェックしても二重に登録しない
   env.g.autoRun();
   assert.equal(staffRows(), before + 2);
@@ -1053,7 +1053,7 @@ test('入力画面（縦型・1案件ずつ）：足りない項目を知らせ�
   same([R(2, '視点'), R(2, 'パターン'), R(2, '担当者'), R(2, '通訳へのメッセージ'), R(2, '状態')], ['EX1', 'A', '武田', '昼景で', '翻訳待ち']);
   same([R(3, '視点'), R(3, 'パターン')], ['EX2', 'B']);
   assert.equal(staffRows(), before + 2, '入力シートに2行');
-  assert.ok(String(R(2, '通訳向け連絡文')).startsWith('マンション案件(REN.50)の資料を共有しますので、翻訳をお願いします。') && String(R(2, '通訳向け連絡文')).endsWith('昼景で'), R(2, '通訳向け連絡文'));
+  assert.ok(String(R(2, '通訳向け連絡文')).startsWith('REN.50案件の資料を共有しますので、翻訳をお願いします。') && String(R(2, '通訳向け連絡文')).endsWith('昼景で'), R(2, '通訳向け連絡文'));
   // 次の登録は続きの番号
   const res2 = env.g.submitEntryForm({ ...base, number: '51', views: [{ cut: 'IN1', pattern: '', request: '新規 / Mới' }] });
   same(res2.nos, ['R0003']);
@@ -1160,12 +1160,12 @@ test('『案件入力』タブ（縦型フォーム）：①日本語の区分�
   assert.ok(html.includes('通訳へのメッセージ') && html.includes('2F 外観目線②（EX2_2F）'), html.slice(0, 300));
   assert.ok(!html.includes('onclick='));
   new vm.Script(html.split('<script>')[1].split('</script>')[0]);
-  assert.ok(html.includes('戸建案件(REN.60)の資料を共有しますので、翻訳をお願いします。'), '確認画面に通訳への連絡文（ひな形から）');
+  assert.ok(html.includes('REN.60案件の資料を共有しますので、翻訳をお願いします。'), '確認画面に通訳への連絡文（ひな形から）');
   assert.ok(!html.split('<script>')[1].includes('\\'), '画面のスクリプトにバックスラッシュが無い（文字列のまま送るため）');
   assert.equal(list().length, 5, '画面で「登録する」を押すまでは登録しない');
   const res = env.g.submitFormSheet('昼景でお願いします');
   assert.equal(res.ok, true, res.msg);
-  assert.ok(String(res.interp).startsWith('戸建案件(REN.60)の資料を共有しますので') && String(res.interp).endsWith('昼景でお願いします'), '登録後に通訳への連絡文を返す（画面でコピー）');
+  assert.ok(String(res.interp).startsWith('REN.60案件の資料を共有しますので') && String(res.interp).endsWith('昼景でお願いします'), '登録後に通訳への連絡文を返す（画面でコピー）');
   assert.ok(String(cell(m.result, 2)).startsWith('✓ 登録しました：R0001・R0002・R0003・R0004・R0005（REN.60）'), cell(m.result, 2));
   const reg = admin.getSheetByName('登録一覧');
   const rh = reg.header();
