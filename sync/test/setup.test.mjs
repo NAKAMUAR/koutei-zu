@@ -2,7 +2,7 @@
 // 実行: node sync/test/setup.test.mjs
 // Apps Script は手元で動かせないため、SpreadsheetApp などを最小限の偽物に置き換えて、
 // 9/28 時点の管理者シート（マスタは管理者が直した後）＋エンジニア入力シート（入力シート・記入ルール/説明）→ かんたん初期設定 →
-// 転記 → 30分ごとの自動実行（自動登録）まで、偽の Firestore を相手に通して確かめる。
+// 転記 → 15分ごとの自動実行（自動登録）まで、偽の Firestore を相手に通して確かめる。
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import assert from 'node:assert/strict';
@@ -247,7 +247,7 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
   };
   vm.createContext(ctx);
   const names = ['onAdminEdit', 'renderRegMessage_', 'onStaffEdit', 'syncRegistrationsNow', 'saveDiscordWebhook_', 'inNotifyHours_', 'isReminderDue_', 'regState_', 'REG_STATE', 'quickSetup', 'createStaffInputTab', 'transferFromStaffSheet', 'autoRun', 'readSettings_', 'readStaffRows_', 'collectSourceRows_', 'findStaffHeaderRow_',
-    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY'];
+    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_'];
   env.g = vm.runInContext(src + '\n;({' + names.join(',') + '})', ctx);
   return env;
 }
@@ -275,7 +275,7 @@ test('見出し行の検索：入力シートは2行目／旧レイアウトや�
   assert.equal(env.g.findStaffHeaderRow_(new FakeSheet('空')), -1);
 });
 
-test('かんたん初期設定：管理者シート・入力シート（2か国語・マスタからのプルダウン）・顧客マスタ・30分ごとの自動実行が1回で整う', () => {
+test('かんたん初期設定：管理者シート・入力シート（2か国語・マスタからのプルダウン）・顧客マスタ・15分ごとの自動実行が1回で整う', () => {
   const admin = adminSheet();
   const eng = engineerFile();
   const legacy = legacyFile();
@@ -307,11 +307,11 @@ test('かんたん初期設定：管理者シート・入力シート（2か国�
   assert.equal(st['スタッフシートのタブ名'], '入力シート');
   assert.equal(st['取込開始行'], 2);
   assert.equal(st['自動登録'], 'する');
-  assert.equal(st['自動登録の待ち時間（分）'], 25);
+  assert.equal(st['自動登録の待ち時間（分）'], 15);
   assert.ok('最後の自動実行' in st);
   // 『案件マスタ』『使い方』
   same(admin.getSheetByName('案件マスタ').header(), ['社内案件名', '社外案件名', '会社名', 'お客様担当者', '備考']);
-  assert.ok(admin.getSheetByName('使い方').rows.some(r => String(r[0]).indexOf('30分ごと') >= 0));
+  assert.ok(admin.getSheetByName('使い方').rows.some(r => String(r[0]).indexOf('15分ごと') >= 0));
 
   // エンジニア入力シート：タブは増えない。『入力シート』の見出しが2段（1列目の書き間違いは「会社コード」に直る）
   same(eng.getSheets().map(s => s.getName()), ['Untitled', '入力シート', '記入ルール/説明']);
@@ -352,15 +352,15 @@ test('かんたん初期設定：管理者シート・入力シート（2か国�
   // 2つのシートのタイムゾーンはベトナム時間に合わせる
   assert.equal(admin.getSpreadsheetTimeZone(), 'Asia/Ho_Chi_Minh');
   assert.equal(eng.getSpreadsheetTimeZone(), 'Asia/Ho_Chi_Minh');
-  // 30分ごとの自動実行が1つ
-  same(env.triggers.map(t => [t.fn, t.every || null, t.file || null]), [['autoRun', 30, null], ['onStaffEdit', null, NEW_ID], ['onAdminEdit', null, 'id:工程図連携']],
-    '30分ごとの自動実行＋入力シートの編集トリガー＋管理者シートの編集トリガー');
+  // 15分ごとの自動実行が1つ
+  same(env.triggers.map(t => [t.fn, t.every || null, t.file || null]), [['autoRun', 15, null], ['onStaffEdit', null, NEW_ID], ['onAdminEdit', null, 'id:工程図連携']],
+    '15分ごとの自動実行＋入力シートの編集トリガー＋管理者シートの編集トリガー');
 
   // 結果は1つのダイアログ
   assert.equal(env.alerts.length, 1);
   const msg = env.alerts[0];
   assert.ok(msg.indexOf('✗') < 0, msg);
-  ['接続OK', '顧客マスタに 10 社を追加', '株式会社サンゲツ → 工程図では「サンゲツ」', '30分ごとの自動実行を設定しました', '準備ができました'].forEach(w => assert.ok(msg.indexOf(w) >= 0, w + '\n' + msg));
+  ['接続OK', '顧客マスタに 10 社を追加', '株式会社サンゲツ → 工程図では「サンゲツ」', '15分ごとの自動実行を設定しました', '準備ができました'].forEach(w => assert.ok(msg.indexOf(w) >= 0, w + '\n' + msg));
 
   // 転記の読み取り：見出し（2行目）より下だけを読む。会社コード＋案件番号 → RIC.34
   assert.equal(env.g.readStaffRows_(env.g.readSettings_()).length, 0);
@@ -561,7 +561,7 @@ test('転記：入力シートの行が『連携』に追記され、入力日�
   assert.equal(at(9, '入力日'), today);
 });
 
-test('30分ごとの自動実行：転記 → 25分たった「未送信」だけ自動登録、「要確認」「更新あり」はチェックしたら登録', () => {
+test('15分ごとの自動実行：転記 → 15分たった「未送信」だけ自動登録、「要確認」「更新あり」はチェックしたら登録', () => {
   const admin = adminSheet();
   const eng = engineerFile();
   const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
@@ -574,14 +574,14 @@ test('30分ごとの自動実行：転記 → 25分たった「未送信」だ�
   admin.getSheetByName('会社マスタ').set(19, 1, 'NEWCO'); admin.getSheetByName('会社マスタ').set(19, 2, 'ニューコ');
   const { at, set } = linkAt(admin);
 
-  // 1回目：転記だけ（転記したばかりの行は25分待つ）
+  // 1回目：転記だけ（転記したばかりの行は15分待つ）
   let r = env.g.autoRun();
   assert.ok(r.indexOf('転記 追加4（要確認1）') >= 0, r);
   assert.ok(r.indexOf('自動登録 対象なし') >= 0, r);
   assert.equal(env.fs.tasks().length, 0);
   assert.ok(String(settingsOf(admin)['最後の自動実行']).indexOf('転記 追加4') >= 0);
 
-  // 2回目（30分後）：変わりが無ければ転記は何もしない。未送信の3行を自動登録（要確認は待つ）
+  // 2回目（15分後）：変わりが無ければ転記は何もしない。未送信の3行を自動登録（要確認は待つ）
   const hourAgo = new Date(Date.now() - 60 * 60000);
   for (let i = 2; i <= 5; i++) set(i, '転記日時', hourAgo);
   r = env.g.autoRun();
@@ -607,10 +607,18 @@ test('30分ごとの自動実行：転記 → 25分たった「未送信」だ�
   assert.equal(at(4, '状態'), '登録済み');
   assert.equal(env.fs.tasks().length, 6); // EX1（ホワイト・カラー）＋モデル作成＋NEWCO の IN1（ホワイト・カラー）＋ EX1 2回目のホワイト
 
-  // 登録後にエンジニアが時間を直す → 更新あり（自動では送らない）→ チェックで工程図の時間を更新
+  // 登録後にエンジニアが時間を直す → 更新あり（自動では送らない）＋ Discord で確認を頼む → チェックで工程図の時間を更新
+  env.props.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/1/abc';
   eng.getSheetByName('入力シート').set(3, 8, 7);
-  env.g.autoRun();
+  r = env.g.autoRun();
   assert.equal(at(2, '状態'), '更新あり');
+  assert.ok(r.indexOf('登録後の変更 1件を Discord で確認依頼') >= 0, r);
+  const cm = env.discord[env.discord.length - 1];
+  assert.ok(cm.startsWith('⚠ 工程図に登録した後で'), cm);
+  assert.ok(cm.includes('RIC.34 EX1（White 6→7）'), cm);
+  const nDiscord = env.discord.length;
+  env.g.autoRun();
+  assert.equal(env.discord.length, nDiscord, '同じ変更で何度も送らない');
   const white = () => env.fs.tasks().find(t => t.externalId === 'RIC34::EX1::1::white');
   assert.equal(white().hours, 6, 'チェックするまで工程図は変えない');
   set(2, '工程図へ', true);
@@ -638,7 +646,7 @@ test('案件登録 → 入力シートへ写す → 翻訳済み → 2時間で 
   env.g.quickSetup();
   const st = admin.getSheetByName('設定');
   st.set(st.rows.findIndex(x => x[0] === '催促する時間帯（ベトナム時間）') + 1, 2, '0-24'); // テストはいつでも送る
-  const reg = admin.getSheetByName('案件登録');
+  const reg = admin.getSheetByName('登録一覧');
   const rh = reg.header();
   const R = (r, name) => reg.rows[r - 1][rh.indexOf(name)];
   const setR = (r, name, v) => reg.set(r, rh.indexOf(name) + 1, v);
@@ -784,7 +792,7 @@ test('連絡文：ひな形から作り、同じ案件・同じ入力日の視�
   const eng = engineerFile();
   const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
   env.g.quickSetup();
-  const reg = admin.getSheetByName('案件登録');
+  const reg = admin.getSheetByName('登録一覧');
   const rh = reg.header();
   const setR = (row, name, v) => reg.set(row, rh.indexOf(name) + 1, v);
   const R = (row, name) => reg.rows[row - 1][rh.indexOf(name)];
@@ -889,12 +897,12 @@ await (async () => {
 })();
 test('連絡文の画面：開いたら文を選んでおき、コピーは clipboard が無くても・拒否されても黙って止まらない', () => {});
 
-test('『案件登録』の「コピー」列：チェックするとその案件（同じ登録日の視点をまとめて）の連絡文の画面が開き、チェックは外れる（連携は動かさない）', () => {
+test('『登録一覧』の「コピー」列：チェックするとその案件（同じ登録日の視点をまとめて）の連絡文の画面が開き、チェックは外れる（連携は動かさない）', () => {
   const admin = adminSheet();
   const eng = engineerFile();
   const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
   env.g.quickSetup();
-  const reg = admin.getSheetByName('案件登録');
+  const reg = admin.getSheetByName('登録一覧');
   const rh = reg.header();
   const ci = rh.indexOf('コピー') + 1;
   assert.ok(ci > 0, '「コピー」列がある');
@@ -937,6 +945,76 @@ test('『案件登録』の「コピー」列：チェックするとその案�
   assert.equal(reg.rows[4][ci - 1], false);
   assert.equal(env.dialogs.length, nDialogs);
   assert.ok(env.alerts.some(a => a.includes('そろった行がありません')), env.alerts.join('/'));
+});
+
+test('『案件登録』は入力専用：「登録」にチェックした行だけ登録No を付けて『登録一覧』と入力シートへ移し、残りは上に詰める', () => {
+  const admin = adminSheet();
+  const eng = engineerFile();
+  const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
+  env.g.quickSetup();
+  assert.equal(admin.getSheets()[0].getName(), '案件登録', '入力タブが先頭');
+  assert.equal(admin.getSheets()[1].getName(), '登録一覧');
+  const ent = admin.getSheetByName('案件登録');
+  const eh = ent.header();
+  same(eh.slice(0, 5), ['登録', '状態', '会社コード', '案件番号', '社外案件名']);
+  assert.ok(eh.indexOf('登録No') < 0, '入力タブに登録No は無い');
+  assert.equal(ruleAt(ent, 2, 1).type, 'checkbox');
+  const E = (row, name, v) => ent.set(row, eh.indexOf(name) + 1, v);
+  const EV = (row, name) => (ent.rows[row - 1] || [])[eh.indexOf(name)];
+  const edit = (row, name) => env.g.onAdminEdit({ range: ent.getRange(row, eh.indexOf(name) + 1) });
+  const fill = (row, cut, pattern) => { E(row, '会社コード', 'REN'); E(row, '案件番号', 50); E(row, '社外案件名', 'マンション'); E(row, '担当者', '武田'); E(row, '新規or修正', '新規 / Mới'); E(row, '視点', cut); E(row, 'パターン', pattern); E(row, 'サーバーリンク', LINK); };
+  const staffRows = () => eng.getSheetByName('入力シート').rows.slice(2).filter(r => r.some(v => v !== '' && v !== false && v !== undefined)).length;
+  const before = staffRows();
+  // 書き終えただけでは送らない（状態だけ「登録できます」）
+  fill(2, 'EX1', 'A'); edit(2, '視点');
+  assert.equal(EV(2, '状態'), '登録できます');
+  assert.equal(staffRows(), before, 'チェックするまでエンジニアには届かない');
+  fill(3, 'EX2', 'B');
+  E(4, '会社コード', 'REN'); E(4, '案件番号', 50); E(4, '新規or修正', '新規 / Mới'); // 視点が空
+  // 足りない行にチェック → 移さずチェックを外し、足りない項目を出す
+  E(4, '登録', true); edit(4, '登録');
+  assert.equal(EV(4, '登録'), false);
+  assert.equal(EV(4, '状態'), '記入中（視点が空）');
+  // 2行にチェック → 『登録一覧』へ移り、登録No が付いて入力シートに載る。残った行は2行目へ詰まる
+  E(2, '登録', true); E(3, '登録', true); edit(2, '登録');
+  const reg = admin.getSheetByName('登録一覧');
+  const rh = reg.header();
+  const R = (row, name) => reg.rows[row - 1][rh.indexOf(name)];
+  same([R(2, '登録No'), R(2, '視点'), R(2, 'パターン'), R(2, '担当者')], ['R0001', 'EX1', 'A', '武田']);
+  same([R(3, '登録No'), R(3, '視点')], ['R0002', 'EX2']);
+  assert.equal(R(2, '状態'), '翻訳待ち');
+  assert.equal(staffRows(), before + 2, '入力シートに2行');
+  assert.equal(EV(2, '視点') || '', '', '残った行（視点が空）が2行目へ');
+  assert.equal(EV(2, '会社コード'), 'REN');
+  assert.equal(EV(2, '状態'), '記入中（視点が空）');
+  assert.equal(EV(3, '会社コード') || '', '', '3行目は空になる');
+  assert.equal(EV(2, '登録'), false);
+  assert.ok(String(R(2, '通訳向け連絡文')).includes('視点：EX1-A・EX2-B'), '同じ案件・同じ日の視点は1通');
+  // もう一度チェックしても二重に登録しない
+  env.g.autoRun();
+  assert.equal(staffRows(), before + 2);
+  assert.equal(reg.rows.filter(r => /^R\d{4}$/.test(r[rh.indexOf('登録No')] || '')).length, 2);
+  // Discord の確認文（純ロジック）
+  assert.ok(env.g.changedMessage_(['REN.50 EX1-A（White 2→3）']).includes('・REN.50 EX1-A（White 2→3）'));
+});
+
+test('移行：前の『案件登録』（登録No の列あり）はそのまま『登録一覧』になり、新しい入力専用の『案件登録』ができる', () => {
+  const admin = adminSheet();
+  const eng = engineerFile();
+  const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
+  env.g.quickSetup();
+  // 前の形に戻す：『登録一覧』を『案件登録』という名前に、入力専用タブは消す
+  admin.sheets = admin.sheets.filter(s => s.getName() !== '案件登録');
+  const old = admin.getSheetByName('登録一覧'); old.setName('案件登録');
+  const oh = old.header();
+  old.set(2, oh.indexOf('登録No') + 1, 'R0007'); old.set(2, oh.indexOf('会社コード') + 1, 'REN'); old.set(2, oh.indexOf('視点') + 1, 'EX1');
+  env.g.quickSetup();
+  const reg = admin.getSheetByName('登録一覧');
+  assert.ok(reg, '『登録一覧』ができた');
+  assert.equal(reg.rows[1][reg.header().indexOf('登録No')], 'R0007', '前の行がそのまま残る');
+  const ent = admin.getSheetByName('案件登録');
+  assert.equal(ent.header()[0], '登録', '新しい『案件登録』は入力専用');
+  assert.equal(admin.getSheets()[0].getName(), '案件登録');
 });
 
 console.log(`\n${passed} tests passed`);

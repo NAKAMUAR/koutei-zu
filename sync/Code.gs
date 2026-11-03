@@ -10,7 +10,7 @@
  *      会社コード（REN/RIC…）・案件番号・社外案件名・サーバーリンク・新規or修正・視点（EX1/IN1/EXCB1…）・
  *      パターン（A/B…）・White/Color/pts の時間・メモ
  *      （旧「product schedule」タブや旧「Project Schedule」の『案件シート(一覧)』も読める。列は見出し名で探す）
- *   2. 30分ごとの自動実行（または「転記」ボタン）で『連携』タブへ新しい行・変わった行だけ反映し（入力日＝最初に転記した日）、
+ *   2. 15分ごとの自動実行（または「転記」ボタン）で『連携』タブへ新しい行・変わった行だけ反映し（入力日＝最初に転記した日）、
  *      『案件マスタ』『会社マスタ』『視点マスタ』で 会社名・お客様担当者・区分（外観目線など）・
  *      種類（パース/写真合成/モデル/VR/動画）・社外視点名（外観目線視点①）を自動判定。記入途中の行（時間が空など）は待つ
  *   3. 自動判定がすべてできた「未送信」の行は、同じ自動実行で工程図へ自動登録（入力ミスを直す時間として25分待つ）。
@@ -34,7 +34,7 @@
  */
 
 // ============ 定数 ============
-const SHEET = { LINK: '連携', REG: '案件登録', COMPANY: '会社マスタ', VIEW: '視点マスタ', PROJECT: '案件マスタ', SETTINGS: '設定', HOWTO: '使い方' };
+const SHEET = { LINK: '連携', REG: '登録一覧', ENTRY: '案件登録', COMPANY: '会社マスタ', VIEW: '視点マスタ', PROJECT: '案件マスタ', SETTINGS: '設定', HOWTO: '使い方' };
 const STAFF_TAB_DEFAULT = '入力シート';
 const STAFF_RULES_TAB = '記入ルール/説明';
 
@@ -111,7 +111,7 @@ const SETTING_DEFAULTS = {
   projectId: 'koutei-zu',
   workspaceId: 'liebe-asia-team',
   autoSend: 'する',
-  autoWait: 25,
+  autoWait: 15,
   notify: 'する',
   notifyFirst: 2,
   notifyRepeat: 1,
@@ -133,17 +133,17 @@ const SETTING_NOTES = {
   assigneeSingle: '写真合成・モデル作成・VR制作・動画制作の作業に付ける担当者（同上）',
   projectId: '通常は変更不要',
   workspaceId: '通常は変更不要',
-  autoSend: '「する」：30分ごとの自動実行で、状態が「未送信」の行と「工程図へ」にチェックした行を工程図に登録（「要確認」「更新あり」はチェックするまで待つ）。「しない」：転記だけ自動',
+  autoSend: '「する」：15分ごとの自動実行で、状態が「未送信」の行と「工程図へ」にチェックした行を工程図に登録（「要確認」「更新あり」はチェックするまで待つ）。「しない」：転記だけ自動',
   autoWait: '「未送信」の行は、最後に内容が変わってからこの分数がたってから自動登録する（エンジニアが入力ミスを直す時間）',
   notify: '「する」：『案件登録』で翻訳済みになってから制作時間が出ない視点を Discord で知らせる（Webhook はメニュー「Discord 通知の設定」）。「しない」：知らせない',
   notifyFirst: '翻訳済みにチェックが入ってから、この時間たっても制作時間（White・Color・pts）が空なら知らせる',
-  notifyRepeat: '1回目のあとは、この時間ごとに知らせる（30分ごとの自動実行で確かめるので、最大30分ほど遅れる）',
+  notifyRepeat: '1回目のあとは、この時間ごとに知らせる（15分ごとの自動実行で確かめるので、最大15分ほど遅れる）',
   regMessage: '『案件登録』の「連絡文」列とメニュー「連絡文をコピー」のひな形（エンジニア向け）。使える文字：{社内案件名} {社外案件名} {サーバーリンク} {視点一覧} {視点} {パターン} {担当者} {納期} {新規or修正} {通訳へのメッセージ} {登録日時} {計算期限}（＝登録日時＋「制作時間の計算の期限」）（セルの中の改行もそのまま使えます）',
   calcMinutes: '連絡文の {計算期限} ＝『案件登録』の登録日時＋この分数（75 ＝ 1時間15分後）',
   interpMessage: '『案件登録』の「通訳向け連絡文」列のひな形。使える文字は「登録時の連絡文」と同じ。{通訳へのメッセージ} には『案件登録』の「通訳へのメッセージ」が入る',
   manualRun: 'チェックすると、その場で 案件登録→入力シート・転記・工程図への登録 をまとめて動かす（終わるとチェックは外れ、結果は「最後の自動実行」に出る）',
   notifyHours: 'この時間帯だけ知らせる（例 8-20 ＝ 8時〜20時。時刻はベトナム時間）。夜に止まっていた分は、時間帯に入ったら知らせる',
-  lastAuto: '30分ごとの自動実行が最後に動いた日時と結果（自動で書き込み）',
+  lastAuto: '15分ごとの自動実行が最後に動いた日時と結果（自動で書き込み）',
 };
 
 const PROP_SERVICE_ACCOUNT = 'SERVICE_ACCOUNT_JSON';
@@ -280,12 +280,12 @@ function onOpen() {
     .addItem('0. かんたん初期設定（最初に1回だけ）', 'quickSetup')
     .addSeparator()
     .addItem('案件登録を入力シートへ写す（翻訳・時間の読み戻しと催促も）', 'syncRegistrationsNow')
-    .addItem('連絡文をコピー（『案件登録』で選んだ行）', 'showRegMessage')
+    .addItem('連絡文をコピー（『登録一覧』で選んだ行）', 'showRegMessage')
     .addItem('1. エンジニア入力シートから転記', 'transferFromStaffSheet')
     .addItem('2. 工程図へ送信（「工程図へ」にチェックした行）', 'sendToKoutei')
     .addItem('送信内容のプレビュー（書き込まない）', 'previewSend')
     .addSeparator()
-    .addItem('自動実行（30分ごと）を今すぐ1回動かす', 'runAutoNow')
+    .addItem('自動実行（15分ごと）を今すぐ1回動かす', 'runAutoNow')
     .addItem('自動実行を始める', 'startAutoRun')
     .addItem('自動実行を止める', 'stopAutoRun')
     .addSeparator()
@@ -315,6 +315,14 @@ function transferFromStaffSheet() {
  * 転記の本体。入力シートの新しい行を『連携』に足し、変わった行だけ書き換える（何も変わっていなければ何も書かない）。
  * 戻り値: { msg, added, updated, waitingKeys: 記入途中の行の取込キー }
  */
+// 登録後の変更を Discord で知らせるときの項目名
+const CHANGE_LABEL = { code: '案件', cut: '視点', pattern: 'パターン', request: '新規or修正', deadline: '納期', white: 'White', color: 'Color', other: 'pts', item: '制作項目', name: '社外案件名', split: '作業の分け方' };
+/** 登録後に入力が変わった行の確認の文（Discord 用。純ロジック） */
+function changedMessage_(items) {
+  return ['⚠ 工程図に登録した後で、エンジニア入力シートの内容が変わりました。確認してください / Nội dung đã thay đổi sau khi đăng ký'].concat(
+    items.map(x => '・' + x),
+    ['管理者用シートの『連携』で内容を見て、よければ「工程図へ」にチェック（工程図の未完了の作業に反映）。そのままでよければ何もしなくてかまいません。']).join('\n');
+}
 function transfer_() {
   const cfg = readSettings_();
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -339,6 +347,7 @@ function transfer_() {
   const appends = [];
   const cellUpdates = []; // { row(1-based), col, value }
   let updated = 0;
+  const changedAfterSend = []; // 工程図に登録した後で入力シートの内容が変わった行（Discord で確認を頼む）
   const seen = new Set();
   const waiting = new Set(sourceRows.waitingKeys || []);
 
@@ -350,12 +359,16 @@ function transfer_() {
       const fields = { code: s.code, cut: s.cut, pattern: s.pattern, request: s.request, deadline: s.deadline, white: s.white, color: s.color, other: s.other, item: s.item, note: s.note, srcRow: s.srcRow, link: s.link, split: s.split };
       if (s.name) fields.name = s.name; // スタッフシートに社外案件名があるときだけ追従（無ければ人が入れた値を保つ）
       let changed = false;
+      const diffs = [];
       Object.keys(fields).forEach(f => {
         if (fields[f] === undefined) return; // 入力シートに無い列（納期・制作項目など）は、人が『連携』に入れた値を保つ
         if (!sameCell_(cur[col[f] - 1], fields[f])) {
           cellUpdates.push({ row: r + 1, col: col[f], value: fields[f] });
           // 元シート行・サーバリンク・備考の変化は「内容の変更」とみなさない
-          if (f !== 'srcRow' && f !== 'link' && f !== 'note') changed = true;
+          if (f !== 'srcRow' && f !== 'link' && f !== 'note') {
+            changed = true;
+            diffs.push((CHANGE_LABEL[f] || f) + ' ' + (trimStr_(cur[col[f] - 1]) || '空') + '→' + (trimStr_(fields[f]) || '空'));
+          }
         }
       });
       const status = String(cur[col.status - 1] || '');
@@ -363,6 +376,9 @@ function transfer_() {
         updated++;
         cellUpdates.push({ row: r + 1, col: col.transferredAt, value: stamp });
         if (status === STATUS.SENT) cellUpdates.push({ row: r + 1, col: col.status, value: STATUS.UPDATED });
+        if (status === STATUS.SENT || status === STATUS.UPDATED) {
+          changedAfterSend.push(joinCode_(s.code, '') + ' ' + viewpointNameOf_(s.cut, s.pattern) + '（' + diffs.join('、') + '）');
+        }
       }
       // 一度消えた行がまた出てきたら「要確認」に戻す（自動登録の前に人が見る）
       if (status === STATUS.GONE) {
@@ -409,7 +425,7 @@ function transfer_() {
   const msg = `転記完了\n  入力シートの対象行: ${sourceRows.length}\n  新規追加: ${appends.length}（うち要確認 ${needCheck}）\n  内容更新: ${updated}` +
     (sourceRows.waiting ? `\n  記入途中で待っている行: ${sourceRows.waiting}（案件番号・新規or修正・時間がそろうと次の転記で追加）` : '');
   console.log(msg);
-  return { msg, added: appends.length, needCheck, updated, waitingKeys: sourceRows.waitingKeys || [] };
+  return { msg, added: appends.length, needCheck, updated, waitingKeys: sourceRows.waitingKeys || [], changedAfterSend };
 }
 
 /** スタッフシートを読み、必要な列だけ抜き出す。見出し名で列を探すので、新旧どのレイアウトでも読める。 */
@@ -1048,7 +1064,7 @@ function sendToKoutei() { return withLock_(() => runSend_(false)); }
 function previewSend() { return runSend_(true); }
 
 /**
- * 自動登録の対象か（30分ごとの自動実行で使う。純ロジック）。
+ * 自動登録の対象か（15分ごとの自動実行で使う。純ロジック）。
  * - 対象外・登録済み・元シートから消えた・エラーの行は送らない（エラーは人が直してからチェック）
  * - 「工程図へ」にチェックがある行は、人が確認済みとして送る（要確認・更新ありの行も）
  * - チェックが無くても「未送信」（自動判定がすべてできた行）は送る。ただし エンジニアが打ち直している最中の行（記入途中）と、
@@ -1175,12 +1191,12 @@ function runSend_(dryRun, opts) {
   return msg;
 }
 
-// ============ 自動実行（30分ごと） ============
+// ============ 自動実行（15分ごと） ============
 const AUTO_HANDLER = 'autoRun';
-const AUTO_EVERY_MINUTES = 30;
+const AUTO_EVERY_MINUTES = 15;
 
 /**
- * 30分ごとの自動実行（トリガーから呼ばれる）：転記 → 自動登録。
+ * 15分ごとの自動実行（トリガーから呼ばれる）：転記 → 自動登録。
  * 入力シートに変わりが無ければ何も書かず、自動登録の対象が無ければ工程図にもアクセスしない。
  * 結果は『設定』の「最後の自動実行」に1行で残す（エラーもここに出る）。
  */
@@ -1202,6 +1218,14 @@ function autoRun() {
       const t = transfer_();
       waitingKeys = t.waitingKeys;
       parts.push('転記 追加' + t.added + (t.needCheck ? '（要確認' + t.needCheck + '）' : '') + '・更新' + t.updated);
+      if (t.changedAfterSend && t.changedAfterSend.length) {
+        const url = PropertiesService.getScriptProperties().getProperty(PROP_DISCORD);
+        if (!url) parts.push('登録後の変更 ' + t.changedAfterSend.length + '件（Discord の Webhook が未設定のため、『連携』の「更新あり」を確認）');
+        else {
+          try { sendDiscord_(url, changedMessage_(t.changedAfterSend)); parts.push('登録後の変更 ' + t.changedAfterSend.length + '件を Discord で確認依頼'); }
+          catch (e) { parts.push('登録後の変更の Discord 送信エラー：' + String(e && e.message || e)); }
+        }
+      }
     } catch (e) {
       parts.push('転記エラー：' + String(e && e.message || e));
     }
@@ -1230,29 +1254,29 @@ function runAutoNow() {
   alertOrLog_('自動実行の結果\n\n' + autoRun());
 }
 
-/** 30分ごとの自動実行を設定する（既にあれば作り直す。何度実行しても1つだけ） */
+/** 15分ごとの自動実行を設定する（既にあれば作り直す。何度実行しても1つだけ） */
 function installAutoTrigger_() {
   ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === AUTO_HANDLER).forEach(t => ScriptApp.deleteTrigger(t));
   ScriptApp.newTrigger(AUTO_HANDLER).timeBased().everyMinutes(AUTO_EVERY_MINUTES).create();
-  // 入力シートの編集の瞬間に翻訳日時・時間入力日時を入れる（入力シートを開けないときは30分ごとの自動実行で入れる）
+  // 入力シートの編集の瞬間に翻訳日時・時間入力日時を入れる（入力シートを開けないときは15分ごとの自動実行で入れる）
   try { installStaffEditTrigger_(readSettings_().fileId); } catch (e) { console.log('編集トリガーを設定できませんでした: ' + (e && e.message || e)); }
   // 『案件登録』に書いたらすぐ入力シートへ写す
   try { installAdminEditTrigger_(SpreadsheetApp.getActiveSpreadsheet().getId()); } catch (e) { console.log('管理者シートの編集トリガーを設定できませんでした: ' + (e && e.message || e)); }
 }
 function startAutoRun() {
   installAutoTrigger_();
-  alertOrLog_('30分ごとの自動実行を始めました（転記＋「未送信」の行の自動登録）。\n止めるときはメニュー「自動実行を止める」。');
+  alertOrLog_('15分ごとの自動実行を始めました（転記＋「未送信」の行の自動登録）。\n止めるときはメニュー「自動実行を止める」。');
 }
 function stopAutoRun() {
   ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === STAFF_EDIT_HANDLER || t.getHandlerFunction() === ADMIN_EDIT_HANDLER).forEach(t => ScriptApp.deleteTrigger(t));
   const n = ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === AUTO_HANDLER).map(t => ScriptApp.deleteTrigger(t)).length;
-  alertOrLog_(n ? '30分ごとの自動実行を止めました。転記・送信はメニューから手で行えます。' : '自動実行は設定されていません。');
+  alertOrLog_(n ? '15分ごとの自動実行を止めました。転記・送信はメニューから手で行えます。' : '自動実行は設定されていません。');
 }
 
 // ============ 案件登録（管理者）→ エンジニア入力シート → 翻訳 → 時間計算の催促（Discord） ============
 // 流れ：
 //   ① 管理者が『案件登録』タブに1視点1行で登録（社外案件名・担当者・視点・パターン・サーバーリンク・納期・注文書…）
-//   ② 30分ごとの自動実行（またはメニュー）で、エンジニア入力シートへ必要な列だけ写す（注文書・管理者メモ・担当者・納期は写さない）
+//   ② 15分ごとの自動実行（またはメニュー）で、エンジニア入力シートへ必要な列だけ写す（注文書・管理者メモ・担当者・納期は写さない）
 //   ③ 通訳が入力シートの「翻訳済み」にチェック → エンジニアが White・Color・pts と作業の分け方を書く
 //   ④ 翻訳済み・時間・作業の分け方を『案件登録』に読み戻し、状態（翻訳待ち／時間計算待ち／時間入力済み）を付ける
 //   ⑤ 翻訳済みから2時間たっても時間が空なら Discord で催促（以降1時間ごと）
@@ -1268,6 +1292,15 @@ const REG_H = {
 };
 const REG_ORDER = ['no', 'state', 'manual', 'regDate', 'copy', 'code', 'number', 'name', 'internal', 'assignee', 'request', 'cut', 'pattern', 'link', 'deadline', 'order', 'memo', 'toInterp',
   'translated', 'translatedAt', 'transNote', 'white', 'color', 'other', 'total', 'split', 'estimator', 'estimatedAt', 'copiedAt', 'notifiedAt', 'notifyCount', 'delivery', 'message', 'interpMessage'];
+// 2026-11-03：管理者が書くのは『案件登録』（入力専用）。「登録」にチェックした行に登録No を付け、
+// エンジニア入力シートへ写して『登録一覧』へ移す（『案件登録』からは消える）。それまでの『案件登録』は『登録一覧』に名前を変える。
+const ENTRY_H = { submit: '登録', state: '状態' };
+const ENTRY_ORDER = ['submit', 'state', 'code', 'number', 'name', 'internal', 'assignee', 'request', 'cut', 'pattern', 'link', 'deadline', 'order', 'memo', 'toInterp'];
+const ENTRY_STATE = { DRAFT: '記入中', READY: '登録できます' };
+const ENTRY_NOTES = {
+  submit: '書き終えたらチェック。登録No が付いて『登録一覧』とエンジニア入力シートに載り、この行は消える（足りない項目があるとチェックが外れ、「状態」に足りない項目が出る）',
+  state: '自動：記入中（足りない項目）／登録できます（「登録」にチェックで送る）',
+};
 // 管理者が書く列（ほかの列は自動で入る）
 const REG_INPUT = ['code', 'number', 'name', 'assignee', 'request', 'cut', 'pattern', 'link', 'deadline', 'order', 'memo', 'toInterp'];
 // エンジニア入力シートへ写す列（案件登録 → 入力シート。担当者・納期・注文書・管理者メモは写さない）
@@ -1307,6 +1340,14 @@ function syncRegistrationsNow() {
 /** 『案件登録』タブを用意して見出し・注記・プルダウンを整える（何度実行しても安全） */
 function ensureRegSheet_(ss, masters) {
   let sheet = ss.getSheetByName(SHEET.REG);
+  if (!sheet) {
+    // 2026-11-03 より前の『案件登録』（登録No・状態…の列がある）は、そのまま『登録一覧』にする（行・列の並び・書式を保つ）
+    const old = ss.getSheetByName(SHEET.ENTRY);
+    if (old && old.getLastColumn() > 0 && old.getRange(1, 1, 1, old.getLastColumn()).getValues()[0].map(v => trimStr_(v)).indexOf(REG_H.no) >= 0) {
+      old.setName(SHEET.REG);
+      sheet = old;
+    }
+  }
   if (!sheet) sheet = ss.insertSheet(SHEET.REG, 0);
   const lastCol = sheet.getLastColumn();
   const first = lastCol ? sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(v => trimStr_(v)) : [];
@@ -1349,6 +1390,106 @@ function formatRegSheet_(sheet, masters, codes) {
   sheet.getRange(2, rc.pattern, n - 1, 1).setDataValidation(list(PATTERN_OPTIONS, true));
   sheet.getRange(2, rc.deadline, n - 1, 1).setNumberFormat('yyyy-mm-dd');
   ['translatedAt', 'estimatedAt', 'regDate', 'copiedAt', 'notifiedAt'].forEach(k => sheet.getRange(2, rc[k], n - 1, 1).setNumberFormat('yyyy-mm-dd hh:mm'));
+}
+/** 入力専用の『案件登録』タブを用意して見出し・注記・プルダウンを整える（何度実行しても安全。先頭に置く） */
+function ensureEntrySheet_(ss, masters) {
+  let sheet = ss.getSheetByName(SHEET.ENTRY);
+  if (!sheet) sheet = ss.insertSheet(SHEET.ENTRY, 0);
+  const lastCol = sheet.getLastColumn();
+  const first = lastCol ? sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(v => trimStr_(v)) : [];
+  const label = (k) => ENTRY_H[k] || REG_H[k];
+  if (first.filter(Boolean).length === 0) {
+    ensureSize_(sheet, 1, ENTRY_ORDER.length);
+    sheet.getRange(1, 1, 1, ENTRY_ORDER.length).setValues([ENTRY_ORDER.map(label)]);
+  } else {
+    const missing = ENTRY_ORDER.filter(k => first.indexOf(label(k)) < 0);
+    if (missing.length) {
+      ensureSize_(sheet, 1, lastCol + missing.length);
+      sheet.getRange(1, lastCol + 1, 1, missing.length).setValues([missing.map(label)]);
+    }
+  }
+  if (masters) {
+    const ec = entryHeaderMap_(sheet);
+    const n = Math.max(sheet.getMaxRows(), 1000);
+    ensureSize_(sheet, n, sheet.getLastColumn());
+    sheet.setFrozenRows(1);
+    const dv = () => SpreadsheetApp.newDataValidation();
+    const list = (values, allowInvalid) => dv().requireValueInList(values, true).setAllowInvalid(allowInvalid).build();
+    ENTRY_ORDER.forEach(k => {
+      sheet.getRange(1, ec[k]).setNote(ENTRY_NOTES[k] || REG_NOTES[k] || '').setFontWeight('bold')
+        .setBackground(REG_INPUT.indexOf(k) >= 0 || k === 'submit' ? '#fff2cc' : '#e6e6e6');
+    });
+    const C = (k) => 'RC' + ec[k];
+    sheet.getRange(2, ec.internal, n - 1, 1).setFormulaR1C1('=IF(' + C('code') + '="","",IF(OR(' + C('number') + '="",REGEXMATCH(' + C('code') + '&"","\\d")),' + C('code') + ',' + C('code') + '&"."&' + C('number') + '))');
+    sheet.getRange(2, ec.submit, n - 1, 1).setDataValidation(dv().requireCheckbox().build());
+    const codes = readCompanyCodes_(ss);
+    if (codes && codes.length) sheet.getRange(2, ec.code, n - 1, 1).setDataValidation(list(codes, true));
+    sheet.getRange(2, ec.number, n - 1, 1).setDataValidation(dv().requireNumberBetween(1, 99999).setAllowInvalid(false).build());
+    sheet.getRange(2, ec.request, n - 1, 1).setDataValidation(list(REQUEST_OPTIONS, false));
+    sheet.getRange(2, ec.cut, n - 1, 1).setDataValidation(list(viewCodeOptions_(masters.views), true));
+    sheet.getRange(2, ec.pattern, n - 1, 1).setDataValidation(list(PATTERN_OPTIONS, true));
+    sheet.getRange(2, ec.deadline, n - 1, 1).setNumberFormat('yyyy-mm-dd');
+  }
+  return sheet;
+}
+function entryHeaderMap_(sheet) {
+  const lastCol = sheet.getLastColumn();
+  const headers = lastCol ? sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(v => trimStr_(v)) : [];
+  const col = {};
+  ENTRY_ORDER.forEach(k => { const i = headers.indexOf(ENTRY_H[k] || REG_H[k]); if (i >= 0) col[k] = i + 1; });
+  const missing = ENTRY_ORDER.filter(k => !col[k]);
+  if (missing.length) throw new Error('『' + SHEET.ENTRY + '』タブの見出しが見つかりません: ' + missing.map(k => ENTRY_H[k] || REG_H[k]).join('、') + '（メニュー「0. かんたん初期設定」を実行してください）');
+  return col;
+}
+/** 入力中の行の「状態」（純ロジック）：足りない項目があれば「記入中（…が空）」 */
+function entryState_(row) {
+  const need = ['code', 'number', 'cut', 'request'].filter(k => !trimStr_(row[k]));
+  if (need.length) return ENTRY_STATE.DRAFT + '（' + need.map(k => REG_H[k]).join('・') + 'が空）';
+  return ENTRY_STATE.READY;
+}
+/**
+ * 『案件登録』で「登録」にチェックした行を『登録一覧』の末尾へ移す（登録No・入力シートへの書き込みは、このあと syncRegistrations_ が行う）。
+ * 残った行は上に詰め、「状態」を書き直す。足りない項目がある行はチェックを外す。
+ * 戻り値 { moved, rejected }
+ */
+function intakeEntries_(ss, list, rc) {
+  const ent = ss.getSheetByName(SHEET.ENTRY);
+  if (!ent || ent.getLastRow() < 2) return { moved: 0, rejected: 0 };
+  let ec;
+  try { ec = entryHeaderMap_(ent); } catch (e) { return { moved: 0, rejected: 0 }; }
+  const width = ent.getLastColumn();
+  const vals = ent.getRange(2, 1, ent.getLastRow() - 1, width).getValues();
+  let last = 0; // 中身がある最後の行（2行目＝0）
+  vals.forEach((v, i) => { if (REG_INPUT.some(k => trimStr_(v[ec[k] - 1]) !== '') || isChecked_(v[ec.submit - 1])) last = i + 1; });
+  if (!last) return { moved: 0, rejected: 0 };
+  const keep = [], move = [];
+  let rejected = 0;
+  vals.slice(0, last).forEach(v => {
+    const row = {};
+    REG_INPUT.forEach(k => { row[k] = v[ec[k] - 1]; });
+    if (REG_INPUT.every(k => trimStr_(row[k]) === '')) return; // 空の行（チェックだけ）は捨てる
+    const state = entryState_(row);
+    if (isChecked_(v[ec.submit - 1])) {
+      if (state === ENTRY_STATE.READY) { move.push(row); return; }
+      rejected++;
+    }
+    keep.push({ row, state });
+  });
+  // 『案件登録』を書き直す（移した行を詰める。式の列＝社内案件名には触らない）
+  const n = last;
+  const colValues = (fn) => { const out = []; for (let i = 0; i < n; i++) out.push([i < keep.length ? fn(keep[i]) : '']); return out; };
+  REG_INPUT.forEach(k => ent.getRange(2, ec[k], n, 1).setValues(colValues(x => x.row[k])));
+  ent.getRange(2, ec.state, n, 1).setValues(colValues(x => x.state));
+  const off = []; for (let i = 0; i < n; i++) off.push([false]);
+  ent.getRange(2, ec.submit, n, 1).setValues(off);
+  if (!move.length) return { moved: 0, rejected };
+  // 『登録一覧』の中身がある最後の行の下へ（チェックボックス・式だけの行は数えない）
+  const lv = list.getLastRow() >= 2 ? list.getRange(2, 1, list.getLastRow() - 1, list.getLastColumn()).getValues() : [];
+  let lastData = 1;
+  lv.forEach((v, i) => { if (trimStr_(v[rc.no - 1]) !== '' || REG_INPUT.some(k => trimStr_(v[rc[k] - 1]) !== '')) lastData = i + 2; });
+  ensureSize_(list, lastData + move.length, list.getLastColumn());
+  move.forEach((row, i) => REG_INPUT.forEach(k => { if (trimStr_(row[k]) !== '') list.getRange(lastData + 1 + i, rc[k]).setValue(row[k]); }));
+  return { moved: move.length, rejected };
 }
 function regHeaderMap_(sheet) {
   const lastCol = sheet.getLastColumn();
@@ -1416,8 +1557,10 @@ function syncRegistrations_(now) {
   const cfg = readSettings_();
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const reg = ss.getSheetByName(SHEET.REG);
-  if (!reg || reg.getLastRow() < 2) return { msg: '案件登録なし', copied: 0, updated: 0, estimate: 0, reminded: 0, missing: 0 };
+  if (!reg) return { msg: '案件登録なし', copied: 0, updated: 0, estimate: 0, reminded: 0, missing: 0 };
   const rc = regHeaderMap_(reg);
+  const intake = intakeEntries_(ss, reg, rc);
+  if (reg.getLastRow() < 2) return { msg: intake.rejected ? '登録できない行 ' + intake.rejected + '件（足りない項目あり）' : '案件登録なし', copied: 0, updated: 0, estimate: 0, reminded: 0, missing: 0 };
   const data = reg.getDataRange().getValues();
 
   const staffFile = SpreadsheetApp.openById(cfg.fileId);
@@ -1573,7 +1716,8 @@ function syncRegistrations_(now) {
   }
   regUpdates.forEach(u => reg.getRange(u.row, u.col).setValue(u.value));
 
-  const msg = '入力シートへ写した ' + copied + '件・直した ' + updated + '件・時間計算待ち ' + estimate + '件' +
+  const msg = (intake.moved ? '登録 ' + intake.moved + '件・' : '') + (intake.rejected ? '登録できない行 ' + intake.rejected + '件（足りない項目あり）・' : '') +
+    '入力シートへ写した ' + copied + '件・直した ' + updated + '件・時間計算待ち ' + estimate + '件' +
     (missing ? '・入力シートに無い ' + missing + '件' : '') + (remindNote ? '・' + remindNote : '');
   console.log(msg);
   return { msg, copied, updated, estimate, reminded, missing };
@@ -1775,7 +1919,7 @@ function sendTextToDiscord_(text) {
 /**
  * 管理者用シートを編集した瞬間に動く（「かんたん初期設定」「自動実行を始める」で設定するトリガー）。
  * 『案件登録』で会社コード・案件番号・視点・新規or修正がそろった行を書いたら、すぐ入力シートへ写す
- * （ほかの処理が動いていれば見送り、30分ごとの自動実行で写す）。
+ * （ほかの処理が動いていれば見送り、15分ごとの自動実行で写す）。
  */
 function onAdminEdit(e) {
   try {
@@ -1787,6 +1931,26 @@ function onAdminEdit(e) {
       const row = labels.indexOf(SETTING_KEYS.manualRun) + 1;
       if (!row || e.range.getRow() > row || e.range.getLastRow() < row || !isChecked_(sheet.getRange(row, 2).getValue())) return;
       try { autoRun(); } finally { sheet.getRange(row, 2).setValue(false); }
+      return;
+    }
+    // 『案件登録』（入力専用）：「登録」にチェック → 登録して『登録一覧』へ移す。それ以外は「状態」だけ直す
+    if (sheet.getName() === SHEET.ENTRY) {
+      if (e.range.getLastRow() < 2) return;
+      const ec = entryHeaderMap_(sheet);
+      const e1 = Math.max(2, e.range.getRow()), e2 = e.range.getLastRow();
+      const ev = sheet.getRange(e1, 1, e2 - e1 + 1, sheet.getLastColumn()).getValues();
+      if (ev.some(v => isChecked_(v[ec.submit - 1]))) {
+        const lock = LockService.getScriptLock();
+        if (!lock.tryLock(20000)) { toastOrLog_('ほかの処理が動いています。少し待ってから、もう一度チェックしてください'); sheet.getRange(e1, ec.submit, e2 - e1 + 1, 1).setValues(ev.map(() => [false])); return; }
+        try { toastOrLog_('登録：' + syncRegistrations_(new Date()).msg); } finally { lock.releaseLock(); }
+        return;
+      }
+      ev.forEach((v, i) => {
+        const row = {};
+        REG_INPUT.forEach(k => { row[k] = v[ec[k] - 1]; });
+        const st = REG_INPUT.every(k => trimStr_(row[k]) === '') ? '' : entryState_(row);
+        if (!sameCell_(v[ec.state - 1], st)) sheet.getRange(e1 + i, ec.state).setValue(st);
+      });
       return;
     }
     if (sheet.getName() !== SHEET.REG || e.range.getLastRow() < 2) return;
@@ -1909,7 +2073,7 @@ function testDiscord() {
 function withLock_(fn) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(30000)) {
-    const msg = 'ほかの処理（30分ごとの自動実行など）が動いています。少し待ってから、もう一度押してください。';
+    const msg = 'ほかの処理（15分ごとの自動実行など）が動いています。少し待ってから、もう一度押してください。';
     alertOrLog_(msg);
     return msg;
   }
@@ -2289,7 +2453,7 @@ function quickSetup() {
   const lines = [];
   let ok = true;
   setupSheet_(ss);
-  lines.push('✓ 管理者シート（案件登録・連携・案件マスタ・会社マスタ・視点マスタ・設定・使い方）を整えました。');
+  lines.push('✓ 管理者シート（案件登録・登録一覧・連携・案件マスタ・会社マスタ・視点マスタ・設定・使い方）を整えました。');
   const moved = migrateLegacyStaffSetting_(ss);
   if (moved) lines.push('✓ ' + moved);
   try {
@@ -2314,14 +2478,14 @@ function quickSetup() {
   if (ok) {
     try {
       installAutoTrigger_();
-      lines.push('✓ 30分ごとの自動実行を設定しました（入力シートに変わりがあれば転記し、' +
+      lines.push('✓ 15分ごとの自動実行を設定しました（入力シートに変わりがあれば転記し、' +
         (readSettings_().autoSend ? '状態が「未送信」の行は工程図に自動登録します。「要確認」の行は直して「工程図へ」にチェックすると次の自動実行で登録されます）。' : '自動登録は『設定』で「しない」になっているので転記だけです）。'));
     } catch (e) {
       ok = false;
-      lines.push('✗ 30分ごとの自動実行を設定できませんでした：' + String(e && e.message || e));
+      lines.push('✗ 15分ごとの自動実行を設定できませんでした：' + String(e && e.message || e));
     }
   } else {
-    lines.push('・30分ごとの自動実行は、✗ が無くなってから設定します。');
+    lines.push('・15分ごとの自動実行は、✗ が無くなってから設定します。');
   }
   lines.push(ok
     ? '準備ができました。「工程図 エンジニア入力シート」を制作メンバーに共有すれば使い始められます（このファイルは共有しない）。'
@@ -2400,6 +2564,7 @@ function setupSheet_(ss) {
   if (n > 0) applyValidations_(link, col, 2, n, masters);
   // 『案件登録』（管理者が案件を登録するタブ。会社コード・視点のプルダウンもマスタから作る）
   ensureRegSheet_(ss, masters);
+  ensureEntrySheet_(ss, masters);
 
   writeHowto_(ss);
 }
@@ -2611,18 +2776,18 @@ const HOWTO_LINES = [
   '同じファイルの中でタブを隠す方法は、編集できる人なら誰でも再表示できるため使いません。',
   '',
   '■ 案件の登録（管理者）→ 翻訳（通訳）→ 制作時間（エンジニア）',
-  '1. 管理者がこのファイルの『案件登録』タブに1視点1行で書く：会社コード・案件番号・社外案件名・担当者・新規or修正・視点・パターン・サーバーリンク・納期・注文書・管理者メモ（黄色い見出しの列）。',
-  '2. 会社コード・案件番号・視点・新規or修正がそろった時点ですぐ（うまくいかないときも30分ごとの自動実行か、メニュー「案件登録を入力シートへ写す」で）、エンジニア入力シートへ 会社コード・案件番号・社外案件名・サーバーリンク・新規or修正・視点・パターン と「登録No」だけを写します。担当者・納期・注文書・管理者メモは写しません。',
+  '1. 管理者がこのファイルの『案件登録』タブ（入力専用）に1視点1行で書く：会社コード・案件番号・社外案件名・担当者・新規or修正・視点・パターン・サーバーリンク・納期・注文書・管理者メモ（黄色い見出しの列）。「状態」に足りない項目が出ます。',
+  '2. 書き終えたら「登録」にチェックします。登録No（R0001…）が付き、エンジニア入力シートへ 会社コード・案件番号・社外案件名・サーバーリンク・新規or修正・視点・パターン と「登録No」だけを写し、行は『登録一覧』へ移ります（『案件登録』からは消え、次の案件を書ける）。担当者・納期・注文書・管理者メモは入力シートへ写しません。足りない項目があるとチェックが外れます。',
   '3. 通訳が入力シートの「翻訳済み」にチェック（訳は「翻訳メモ」へ。「翻訳日時」は自動）→ エンジニアが White・Color・pts と「作業の分け方」「時間入力者」を書く（「時間入力日時」「合計」は自動）。',
-  '4. 翻訳済み・時間・作業の分け方は『案件登録』の灰色の列に読み戻され、「状態」が 翻訳待ち → 時間計算待ち → 時間入力済み と進みます。',
+  '4. 翻訳済み・時間・作業の分け方は『登録一覧』の灰色の列に読み戻され、「状態」が 翻訳待ち → 時間計算待ち → 時間入力済み と進みます。',
   '5. 翻訳済みになってから2時間たっても時間が空なら Discord で催促し、以降1時間ごとにくり返します（『設定』で時間・時間帯を変えられます。Webhook はメニュー「Discord 通知の設定」）。',
-  '6. 時間が入った行は、いつもどおり『連携』へ転記され、工程図に登録されます。『案件登録』の担当者・納期が工程図に入ります。',
-  '7. 工程図で決まった納品名（ファイル名）は、『案件登録』と入力シートの「納品名」列に自動で表示されます（工程図で納品名を直すと、次の自動実行で追従）。',
+  '6. 時間が入った行は『連携』へ転記され、最後に変わってから15分たつと工程図に登録されます（新しい行だけ追加）。『登録一覧』の担当者・納期が工程図に入ります。登録した後でエンジニアが時間などを直したら、状態を「更新あり」にして Discord で確認を頼みます（自動では書き換えない。よければ『連携』の「工程図へ」にチェック）。',
+  '7. 工程図で決まった納品名（ファイル名）は、『登録一覧』と入力シートの「納品名」列に自動で表示されます（工程図で納品名を直すと、次の自動実行で追従）。',
   '・「連絡文」列に、エンジニア・通訳へ送る文が自動で入ります（同じ案件・同じ入力日の視点は1通）。行を選んでメニュー「連絡文をコピー」を押すと、コピーや Discord への送信ができます。文面は『設定』の「登録時の連絡文」で変えられます。',
-  '・手動連携：『案件登録』の「今すぐ連携」にチェックすると、その行をすぐ入力シートへ写します。『設定』の「今すぐ全部連携」にチェックすると、案件登録→入力シート・転記・工程図への登録をまとめてその場で動かします（どちらも終わるとチェックは外れます）。',
-  '・通訳へのメッセージ：『案件登録』の「通訳へのメッセージ」に書くと、入力シートの「管理者からの連絡」に写り、「通訳向け連絡文」（ひな形は『設定』の「通訳向けの連絡文」）にも入ります。メニュー「連絡文をコピー」では、エンジニア向けと通訳向けの2つを出します。',
+  '・手動連携：『登録一覧』の「今すぐ連携」にチェックすると、その行をすぐ入力シートへ写します。『設定』の「今すぐ全部連携」にチェックすると、案件登録→入力シート・転記・工程図への登録をまとめてその場で動かします（どちらも終わるとチェックは外れます）。',
+  '・通訳へのメッセージ：『登録一覧』（または登録前の『案件登録』）の「通訳へのメッセージ」に書くと、入力シートの「管理者からの連絡」に写り、「通訳向け連絡文」（ひな形は『設定』の「通訳向けの連絡文」）にも入ります。メニュー「連絡文をコピー」では、エンジニア向けと通訳向けの2つを出します。',
   '・「作業の分け方」（例 White＝躯体 3h／家具1 2h／家具2 1h）が書いてあると、工程図ではその作業ごとのステップ（ホワイト（躯体）…）に分けて登録します。分けた時間の合計が White などの時間と合わないときは分けずに登録し、「結果」に書きます。',
-  '・担当者：『案件登録』（『連携』）の担当者 → その視点の前回の担当者 → 『設定』の「既定の担当者（ホワイト／カラー／pts／写真合成・モデル・VR・動画）」→「既定の担当者」の順に決まります。',
+  '・担当者：『登録一覧』（『連携』）の担当者 → その視点の前回の担当者 → 『設定』の「既定の担当者（ホワイト／カラー／pts／写真合成・モデル・VR・動画）」→「既定の担当者」の順に決まります。',
   '・工程図で「サポート（分担）」した作業は、シートから送り直しても時間を戻しません。',
   '・『案件登録』で会社コード・視点などを直すと、入力シートの行も直ります。入力シートの行を消すと、状態が「入力シートに無い」になります（もう一度写したいときは登録Noを消す）。',
   '',
@@ -2632,7 +2797,7 @@ const HOWTO_LINES = [
   '1視点（パターン違いも別）1行。依頼のたびに行を足します。会社コード＋案件番号は「RIC.34」のように1つの社内案件名として扱います。',
   '会社コード・視点のプルダウンは『会社マスタ』『視点マスタ』から作ります。マスタを変えたらメニュー「エンジニア入力シートを整える」を押してください。',
   '',
-  '■ 自動で動くこと（30分ごと）',
+  '■ 自動で動くこと（15分ごと）',
   '1. 入力シートに新しい行・変わった行があれば『連携』タブに反映します（変わりが無ければ何もしません）。新しい行の「入力日」には転記した日が入ります。',
   '   会社コード・案件番号・新規or修正・視点・時間がそろっていない行は「記入途中」として待ちます。',
   '2. 状態が「未送信」（自動判定がすべてできた行）で、最後に変わってから『設定』の待ち時間（25分）がたった行を、工程図に自動登録します。',
@@ -2667,7 +2832,7 @@ const HOWTO_LINES = [
   '・工程図側で削除したタスクは、再送信しても復活しません。',
   '',
   '■ 初回だけ',
-  '・メニュー「0. かんたん初期設定」を押す（管理者シートの整備・読み込み先の切り替え・エンジニア入力シートの整備・接続テスト・顧客マスタへの会社の追加・30分ごとの自動実行の設定をまとめて行います）。',
+  '・メニュー「0. かんたん初期設定」を押す（管理者シートの整備・読み込み先の切り替え・エンジニア入力シートの整備・接続テスト・顧客マスタへの会社の追加・15分ごとの自動実行の設定をまとめて行います）。',
   '・「工程図 エンジニア入力シート」だけを制作メンバーに「編集者」で共有する（このファイルは共有しない）。',
   '・接続テストが失敗する場合は手順書（docs/08_スプレッドシート連携.md）の「秘密鍵を設定」を行う。',
   '・『案件マスタ』に、よく使う社内案件名 → 社外案件名・会社名・お客様担当者 を登録しておくと「要確認」が減ります。',
