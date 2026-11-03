@@ -1,7 +1,7 @@
 // 過去分の取り込み（旧「Project Schedule」→ 案件ごとに1件の完了済みタスク）を Node で検証する。
 // 実行: node test/legacyImport.test.mjs （データは架空。実データはリポジトリに入れない）
 import assert from 'node:assert/strict';
-import { parseTSV, readLegacyRows, estimateDateFromLink, summarizeLegacy, existingCodes, legacyTask, normCode, LEGACY_ASSIGNEE, LEGACY_SOURCE, lineKey, readAssigneeTable, applyAssignees, assigneePatchesForImported } from '../src/lib/legacyImport.js';
+import { parseTSV, readLegacyRows, estimateDateFromLink, summarizeLegacy, existingCodes, legacyTask, normCode, LEGACY_ASSIGNEE, LEGACY_SOURCE, lineKey, readAssigneeTable, applyAssignees, assigneePatchesForImported, lineOnlyProjects } from '../src/lib/legacyImport.js';
 
 let passed = 0;
 function test(name, fn) { fn(); passed++; console.log('  ok  ' + name); }
@@ -135,6 +135,31 @@ test('担当者の表を読み、過去分に担当者を付ける', () => {
   assert.equal(patches[0].id, 'a');
   assert.equal(patches[0].patch.assignee, 'Aさん');
   assert.ok(patches[0].patch.memo.startsWith('m\n担当'));
+});
+
+test('LINE にだけある案件は内容不明の過去分に・社内マニュアルは除く', () => {
+  const tab = [
+    ['社内案件名（LINEの書き方）', '照合キー', '担当者（一番多く出た人）', 'ほかに入った人', 'サポート', '最初に出た日', '最後に出た日', '一覧に出た日数', '状態', '古いシートの案件'],
+    ['REN.94', 'REN94', 'Aさん', '', '', '2026-10-02', '2026-10-10', '5', '完了（推定）', 'REN94 難波'],
+    ['SAN.26', 'SAN26', 'Bさん', '', '', '2026-10-10', '2026-10-13', '3', '完了（推定）', ''],
+    ['TANAKA_IN1~3', '', 'Cさん', '', '', '2026-10-13', '2026-10-13', '1', '完了（推定）', ''],
+    ['manual', '', 'Dさん', '', '', '2026-10-09', '2026-10-14', '5', '対象外（社内マニュアル）', ''],
+    ['CG.36', 'CG36', 'Eさん', '', '', '2026-10-21', '2026-11-03', '8', '制作中（11/3の一覧にある）', ''],
+  ].map(r => r.join('\t')).join('\n');
+  const { map } = readAssigneeTable(tab);
+  assert.equal(map.size, 4, 'manual は読まない');
+  const only = lineOnlyProjects(map, null);
+  assert.deepEqual(only.map(p => p.key).sort(), ['LINE:TANAKAIN1~3', 'SAN26']);
+  const legacy = summarizeLegacy(readLegacyRows(tsv([row('SAN.26', '三', 'LDK', L('2026-5', 'x'), 1, 1, true), row('REN.94', '難波', 'LDK', L('2026-5', 'x'), 1, 1, true)])).rows);
+  assert.deepEqual(lineOnlyProjects(map, legacy).map(p => p.key), ['LINE:TANAKAIN1~3'], '古いシートにあれば足さない');
+  const t = legacyTask(only.find(p => p.key === 'SAN26'), 't', Date.now());
+  assert.equal(t.status, 'done');
+  assert.equal(t.assignee, 'Bさん');
+  assert.equal(t.projectNameInternal, 'SAN.26');
+  assert.equal(t.hours, 0);
+  assert.equal(t.registeredDate, '2026-10-10');
+  assert.ok(t.memo.includes('内容は不明') || t.memo.includes('不明'));
+  assert.ok(existingCodes([t]).has('SAN26'), '2回目は工程図にある扱い');
 });
 
 console.log(`legacyImport: ${passed} tests passed`);

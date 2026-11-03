@@ -217,16 +217,22 @@ export function readAssigneeTable(text) {
     key: col(h => h === '照合キー'), code: col(h => h.startsWith('社内案件名')), who: col(h => h.startsWith('担当者')),
     others: col(h => h.startsWith('ほかに')), support: col(h => h.startsWith('サポート')),
     first: col(h => h.startsWith('最初')), last: col(h => h.startsWith('最後')), state: col(h => h.startsWith('状態')),
+    legacy: col(h => h.startsWith('古いシートの案件')),
   };
   const at = (r, i) => (i >= 0 ? clean(r[i]) : '');
   for (let r = hr + 1; r < grid.length; r++) {
     const v = grid[r];
-    const key = at(v, c.key) || lineKey(at(v, c.code));
+    const label = at(v, c.code);
+    const state = at(v, c.state);
     const who = at(v, c.who);
-    if (!key || !who) continue;
+    if (!who || state.startsWith('対象外')) continue; // 社内マニュアルなど案件でないもの
+    // 案件コードが無い行（'FRY'・'TANAKA_IN1~3' など）は 'LINE:書き方' で区別する
+    const key = at(v, c.key) || lineKey(label) || (label ? `LINE:${normCode(label)}` : '');
+    if (!key) continue;
     map.set(key.toUpperCase(), {
-      assignee: who, others: at(v, c.others), support: at(v, c.support),
-      first: at(v, c.first), last: at(v, c.last), active: at(v, c.state).startsWith('制作中'),
+      label, assignee: who, others: at(v, c.others), support: at(v, c.support),
+      first: at(v, c.first), last: at(v, c.last), active: state.startsWith('制作中'),
+      inLegacy: c.legacy >= 0 ? !!at(v, c.legacy) : null,
     });
   }
   return { map, error: map.size ? '' : '担当者の入った行がありません' };
@@ -242,6 +248,28 @@ export function applyAssignees(projects, map) {
     if (a.active) notes.push('LINEでは制作中（過去分にしない）');
     return { ...p, assigneeInfo: a, notes, lastDate: a.last && a.last > (p.lastDate || '') ? a.last : p.lastDate };
   });
+}
+/**
+ * 担当者の表にだけある案件（古いシートに無い・案件コードが無い）→ 「内容不明」の過去分（summarizeLegacy と同じ形）。
+ * legacyProjects を渡せばそれと照合し、渡さなければ表の「古いシートの案件」が空のものを使う。制作中は除く
+ */
+export function lineOnlyProjects(map, legacyProjects) {
+  if (!map || !map.size) return [];
+  const known = legacyProjects ? new Set(legacyProjects.map(p => lineKey(p.code)).filter(Boolean)) : null;
+  const out = [];
+  for (const [key, a] of map) {
+    if (a.active) continue;
+    if (known ? known.has(key) : a.inLegacy !== false) continue;
+    const coded = !key.startsWith('LINE:');
+    const notes = [coded ? '古いシートに無い（LINE だけ）・内容は不明' : '案件コードが無い（LINE の書き方のまま）・内容は不明'];
+    out.push({
+      key, code: a.label || key, name: '', company: '',
+      firstDate: a.first, lastDate: a.last, dateBasis: 'LINE の朝の一覧に出た日',
+      cutCount: 0, rowCount: 0, cuts: [], white: 0, color: 0, total: 0, link: '', srcRows: '',
+      doneCount: 0, isTest: false, notes, assigneeInfo: a, lineOnly: true,
+    });
+  }
+  return out;
 }
 /** 担当者の表の内容をメモの1行にする */
 function assigneeMemo(a) {
@@ -271,12 +299,14 @@ export function legacyTask(p, id, nowMs) {
   const created = ts(p.firstDate, 9);
   const completed = ts(p.lastDate || p.firstDate, 18);
   const memo = [
-    `旧「Project Schedule」から取り込んだ過去分（${p.cutCount}カット・${p.rowCount}行）`,
+    p.lineOnly
+      ? `LINE の朝の担当一覧にだけ出ていた過去分（旧「Project Schedule」に無い。案件名・会社・時間は不明）`
+      : `旧「Project Schedule」から取り込んだ過去分（${p.cutCount}カット・${p.rowCount}行）`,
     p.cuts.length ? `カット：${p.cuts.join('、')}` : '',
     `推定の登録日：${p.firstDate || '不明'}${p.lastDate && p.lastDate !== p.firstDate ? `〜${p.lastDate}` : ''}（${p.dateBasis}）`,
-    `White ${p.white}h ／ Color ${p.color}h`,
+    p.lineOnly ? '' : `White ${p.white}h ／ Color ${p.color}h`,
     p.link ? `サーバーリンク：${p.link}` : '',
-    `元シートの行：${p.srcRows}`,
+    p.srcRows ? `元シートの行：${p.srcRows}` : '',
     assigneeMemo(p.assigneeInfo),
   ].filter(Boolean).join('\n');
   const reg = p.firstDate || new Date(nowMs).toISOString().slice(0, 10);
@@ -284,8 +314,8 @@ export function legacyTask(p, id, nowMs) {
     id,
     projectName: p.name || p.code, projectNameInternal: p.code, companyName: p.company, customerContact: '',
     projectDeadline: null, projectRequestDate: reg,
-    viewpointName: `過去分（${p.cutCount}カット）`, viewpointNameExternal: '', viewpointCategory: '',
-    stepName: '過去分（Project Schedule）', stepOrder: 0,
+    viewpointName: p.lineOnly ? '過去分（内容不明）' : `過去分（${p.cutCount}カット）`, viewpointNameExternal: '', viewpointCategory: '',
+    stepName: p.lineOnly ? '過去分（LINE のみ）' : '過去分（Project Schedule）', stepOrder: 0,
     assignee: (p.assigneeInfo && p.assigneeInfo.assignee) || LEGACY_ASSIGNEE, priority: 9999,
     hours: p.total, completedHours: p.total,
     memo,

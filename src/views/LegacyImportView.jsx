@@ -4,7 +4,7 @@
 import { useMemo, useState } from 'react';
 import { useApp } from '../appContext.js';
 import { genId } from '../lib/utils.js';
-import { applyAssignees, assigneePatchesForImported, existingCodes, legacyTask, readAssigneeTable, readLegacyRows, summarizeLegacy } from '../lib/legacyImport.js';
+import { applyAssignees, assigneePatchesForImported, existingCodes, legacyTask, lineOnlyProjects, readAssigneeTable, readLegacyRows, summarizeLegacy } from '../lib/legacyImport.js';
 import { tabStyle } from '../components/common.jsx';
 
 const FILTERS = [
@@ -35,13 +35,16 @@ export default function LegacyImportView() {
     setAssigneeMap(map);
     if (!text.trim()) {
       // 担当者の表だけ：取り込み済みの過去分に担当者を反映する
-      setParsed({ projects: [], error: '', rowCount: 0, onlyAssignees: true });
+      setParsed({ projects: lineOnlyProjects(map, null), error: '', rowCount: 0, onlyAssignees: true });
+      setSkip(new Set());
       setAssigneeText('');
       return;
     }
     const r = readLegacyRows(text);
     if (r.error) { setParsed({ projects: [], error: r.error, rowCount: 0 }); return; }
-    const projects = applyAssignees(summarizeLegacy(r.rows), map);
+    const legacy = summarizeLegacy(r.rows);
+    // 古いシートの案件＋（表があれば）LINE にだけある案件を「内容不明」として末尾に足す
+    const projects = [...applyAssignees(legacy, map), ...lineOnlyProjects(map, legacy)];
     setParsed({ projects, error: '', rowCount: r.rows.length });
     // 最初から外すもの：テストらしい案件・LINE では制作中の案件（工程図にある案件は判定で外れる）
     setSkip(new Set(projects.filter(p => p.isTest || (p.assigneeInfo && p.assigneeInfo.active)).map(p => p.key)));
@@ -69,7 +72,7 @@ export default function LegacyImportView() {
     if (!targets.length) { notify('登録する案件がありません', { type: 'error' }); return; }
     const ok = await confirmDialog({
       title: '過去分の登録',
-      message: `${targets.length}件の案件を「完了済み・${'担当者不明（過去分）'}」として工程図に登録します。\n（工程図にすでにある ${counts.exists}件は登録しません。登録したあとも「元に戻す」で取り消せます）`,
+      message: `${targets.length}件の案件を「完了済み（過去分）」として工程図に登録します。担当者が分からないものは「担当者不明（過去分）」になります。\n（工程図にすでにある ${counts.exists}件は登録しません。登録したあとも「元に戻す」で取り消せます）`,
       confirmLabel: '登録する',
     });
     if (!ok) return;
@@ -139,11 +142,11 @@ export default function LegacyImportView() {
         </div>
       )}
 
-      {parsed && !parsed.error && !parsed.onlyAssignees && (
+      {parsed && !parsed.error && (!parsed.onlyAssignees || list.length > 0) && (
         <>
           <div style={{ fontSize: 13, fontWeight: 700, margin: '4px 0 6px' }}>② 内容を確かめる</div>
           <div style={{ fontSize: 12, color: colors.text, marginBottom: 8 }}>
-            {parsed.rowCount.toLocaleString('ja-JP')}行 → 案件 {counts.all}件 ／ 工程図にある {counts.exists}件（登録しない）／ <b>登録する {counts.take}件</b> ／ 注意あり {counts.notes}件
+            {parsed.onlyAssignees ? 'LINE にだけある案件（内容不明）' : `${parsed.rowCount.toLocaleString('ja-JP')}行`} → 案件 {counts.all}件 ／ 工程図にある {counts.exists}件（登録しない）／ <b>登録する {counts.take}件</b> ／ 注意あり {counts.notes}件
           </div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
             {FILTERS.map(f => (
