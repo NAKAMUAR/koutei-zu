@@ -28,6 +28,7 @@ class FakeRange {
   }
   setValues(vals) { vals.forEach((rv, i) => rv.forEach((v, j) => this.sheet.set(this.row + i, this.col + j, v))); return this; }
   setValue(v) { this.sheet.set(this.row, this.col, v); return this; }
+  getValue() { return this.getValues()[0][0]; }
   getSheet() { return this.sheet; }
   getRow() { return this.row; }
   getLastRow() { return this.row + this.nr - 1; }
@@ -646,7 +647,8 @@ test('案件登録 → 入力シートへ写す → 翻訳済み → 2時間で 
   // 社内案件名・合計は式（スクリプトは値を書かない）
   const fOf = (sheet, col) => sheet.formulas.filter(f => f.col === col).map(f => f.f).pop() || '';
   assert.ok(fOf(reg, rh.indexOf('社内案件名') + 1).indexOf('REGEXMATCH') >= 0);
-  assert.equal(fOf(reg, rh.indexOf('合計') + 1), '=IF(COUNT(RC19,RC20,RC21)=0,"",SUM(RC19,RC20,RC21))');
+  const cw = rh.indexOf('White') + 1;
+  assert.equal(fOf(reg, rh.indexOf('合計') + 1), `=IF(COUNT(RC${cw},RC${cw + 1},RC${cw + 2})=0,"",SUM(RC${cw},RC${cw + 1},RC${cw + 2}))`);
   assert.equal(R(3, '状態'), '記入中');
   assert.equal(R(3, '登録No'), '');
   assert.ok(isDate(R(2, '入力日')) && isDate(R(3, '入力日')), '書き始めた行には入力日が自動で入る');
@@ -789,6 +791,31 @@ test('連絡文：ひな形から作り、同じ案件・同じ入力日の視�
   assert.equal(R(3, '連絡文'), R(2, '連絡文'));
   // 『案件登録』以外のタブの編集では動かない
   env.g.onAdminEdit({ range: admin.getSheetByName('連携').getRange(1, 1) });
+
+  // 通訳へのメッセージ → 入力シートの「管理者からの連絡」と、通訳向け連絡文
+  setR(2, '通訳へのメッセージ', '昼景・植栽多めと指示あり');
+  setR(2, '今すぐ連携', true); // 手動連携のチェック
+  edit(2);
+  assert.equal(R(2, '今すぐ連携'), false, '終わるとチェックが外れる');
+  const tab = eng.getSheetByName('入力シート');
+  const sh = tab.header(2).map(h => h.split('\n')[0]);
+  assert.equal(tab.rows[2][sh.indexOf('管理者からの連絡')], '昼景・植栽多めと指示あり');
+  assert.ok(String(R(2, '通訳向け連絡文')).startsWith('REN.50（戸建て）の資料の翻訳をお願いします。'), R(2, '通訳向け連絡文'));
+  assert.ok(String(R(2, '通訳向け連絡文')).includes('視点：EX1・IN1'));
+  assert.ok(String(R(2, '通訳向け連絡文')).includes('昼景・植栽多めと指示あり'));
+  assert.ok(String(R(2, '通訳向け連絡文')).endsWith('「翻訳済み」にチェックしてください。'));
+  assert.ok(!String(R(2, '連絡文')).includes('昼景'), 'エンジニア向けの既定の文には入れない');
+
+  // 『設定』の「今すぐ全部連携」にチェック → 自動実行と同じ処理が動き、チェックが外れる
+  const st = admin.getSheetByName('設定');
+  const mr = st.rows.findIndex(x => x[0] === '今すぐ全部連携（チェックで実行）') + 1;
+  assert.ok(mr > 0, '『設定』に「今すぐ全部連携」がある');
+  assert.equal(ruleAt(st, mr, 2).type, 'checkbox');
+  const before = settingsOf(admin)['最後の自動実行'];
+  st.set(mr, 2, true);
+  env.g.onAdminEdit({ range: st.getRange(mr, 2) });
+  assert.equal(st.rows[mr - 1][1], false);
+  assert.notEqual(settingsOf(admin)['最後の自動実行'], before, '自動実行が動いた');
 });
 
 test('催促の時間帯と判定', () => {
