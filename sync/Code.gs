@@ -277,6 +277,8 @@ const PROJECT_MASTER_HEADERS = ['社内案件名', '社外案件名', '会社名
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('工程図連携')
+    .addItem('案件を登録（入力画面）', 'openEntryForm')
+    .addSeparator()
     .addItem('0. かんたん初期設定（最初に1回だけ）', 'quickSetup')
     .addSeparator()
     .addItem('案件登録を入力シートへ写す（翻訳・時間の読み戻しと催促も）', 'syncRegistrationsNow')
@@ -1483,13 +1485,131 @@ function intakeEntries_(ss, list, rc) {
   const off = []; for (let i = 0; i < n; i++) off.push([false]);
   ent.getRange(2, ec.submit, n, 1).setValues(off);
   if (!move.length) return { moved: 0, rejected };
-  // 『登録一覧』の中身がある最後の行の下へ（チェックボックス・式だけの行は数えない）
+  appendToRegList_(list, rc, move);
+  return { moved: move.length, rejected };
+}
+/** 『登録一覧』の中身がある最後の行の下へ、管理者が書く列だけを書き足す。書いた最初の行番号を返す（チェックボックス・式だけの行は数えない） */
+function appendToRegList_(list, rc, rows) {
   const lv = list.getLastRow() >= 2 ? list.getRange(2, 1, list.getLastRow() - 1, list.getLastColumn()).getValues() : [];
   let lastData = 1;
   lv.forEach((v, i) => { if (trimStr_(v[rc.no - 1]) !== '' || REG_INPUT.some(k => trimStr_(v[rc[k] - 1]) !== '')) lastData = i + 2; });
-  ensureSize_(list, lastData + move.length, list.getLastColumn());
-  move.forEach((row, i) => REG_INPUT.forEach(k => { if (trimStr_(row[k]) !== '') list.getRange(lastData + 1 + i, rc[k]).setValue(row[k]); }));
-  return { moved: move.length, rejected };
+  ensureSize_(list, lastData + rows.length, list.getLastColumn());
+  rows.forEach((row, i) => REG_INPUT.forEach(k => { if (row[k] !== undefined && trimStr_(row[k]) !== '') list.getRange(lastData + 1 + i, rc[k]).setValue(row[k]); }));
+  return lastData + 1;
+}
+
+// ============ 入力画面（メニュー「案件を登録（入力画面）」） ============
+// 2026-11-03：登録ページを縦型の入力画面にした。案件の項目を縦に並べ、視点は「＋ 視点を足す」で何行でも。
+// 「登録」で、視点ごとに1行ずつ『登録一覧』へ書き、すぐ登録No を付けてエンジニア入力シートへ写す（『案件登録』タブは通らない）。
+const ENTRY_FORM_FIELDS = ['code', 'number', 'name', 'assignee', 'link', 'deadline', 'order', 'memo', 'toInterp'];
+/**
+ * 入力画面の値 → 『登録一覧』に書く行の配列（純ロジック）。足りないときは { error } を返す。
+ * p = { code, number, name, assignee, link, deadline('YYYY-MM-DD'), order, memo, toInterp, views: [{ cut, pattern, request }] }
+ */
+function entryFormRows_(p) {
+  const need = [];
+  if (!trimStr_(p && p.code)) need.push(REG_H.code);
+  const num = String(p && p.number !== undefined ? p.number : '').trim();
+  if (!num) need.push(REG_H.number);
+  else if (!/^\d+$/.test(num)) return { error: '案件番号は数字だけで書いてください（例 50）' };
+  const views = ((p && p.views) || []).filter(v => trimStr_(v.cut) || trimStr_(v.pattern));
+  if (!views.length) need.push('視点（1つ以上）');
+  views.forEach((v, i) => {
+    if (!trimStr_(v.cut)) need.push((i + 1) + '行目の視点');
+    if (!trimStr_(v.request)) need.push((i + 1) + '行目の新規or修正');
+  });
+  if (need.length) return { error: '足りない項目があります：' + need.join('・') };
+  const keys = new Set();
+  for (const v of views) {
+    const k = normCut_(viewpointNameOf_(trimStr_(v.cut).toUpperCase(), normPattern_(v.pattern)));
+    if (keys.has(k)) return { error: '同じ視点が2回あります：' + viewpointNameOf_(trimStr_(v.cut).toUpperCase(), normPattern_(v.pattern)) };
+    keys.add(k);
+  }
+  const m = String(p.deadline || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const deadline = m ? new Date(+m[1], +m[2] - 1, +m[3]) : '';
+  const base = {
+    code: trimStr_(p.code).toUpperCase(), number: parseInt(num, 10), name: trimStr_(p.name), assignee: trimStr_(p.assignee),
+    link: trimStr_(p.link), deadline, order: trimStr_(p.order), memo: trimStr_(p.memo), toInterp: trimStr_(p.toInterp),
+  };
+  return { rows: views.map(v => Object.assign({}, base, { cut: trimStr_(v.cut).toUpperCase(), pattern: normPattern_(v.pattern), request: trimStr_(v.request) })) };
+}
+/** 入力画面から呼ぶ：登録して { ok, msg, nos } を返す（名前が _ で終わる関数は google.script.run から呼べない） */
+function submitEntryForm(p) {
+  const res = entryFormRows_(p);
+  if (res.error) return { ok: false, msg: res.error };
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(20000)) return { ok: false, msg: 'ほかの処理（15分ごとの自動実行など）が動いています。少し待ってから、もう一度「登録」を押してください' };
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const list = ensureRegSheet_(ss, null);
+    const rc = regHeaderMap_(list);
+    const start = appendToRegList_(list, rc, res.rows);
+    const r = syncRegistrations_(new Date());
+    const nos = list.getRange(start, rc.no, res.rows.length, 1).getValues().map(x => trimStr_(x[0]));
+    return { ok: true, nos, msg: '登録しました：' + nos.join('・') + '（' + joinCode_(res.rows[0].code, res.rows[0].number) + '）。『登録一覧』とエンジニア入力シートに載りました' + (r && r.msg ? '\n' + r.msg : '') };
+  } finally {
+    lock.releaseLock();
+  }
+}
+/** メニュー：縦型の入力画面を開く */
+function openEntryForm() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const masters = readMasters_(ss);
+  const opts = {
+    codes: readCompanyCodes_(ss), cuts: viewCodeOptions_(masters.views), patterns: PATTERN_OPTIONS, requests: REQUEST_OPTIONS,
+  };
+  const html = HtmlService.createHtmlOutput(entryFormHtml_(opts)).setWidth(460).setHeight(720);
+  SpreadsheetApp.getUi().showModalDialog(html, '案件を登録');
+}
+/** 入力画面の HTML（純ロジック）。ボタンは onclick 属性を使わず addEventListener で付ける（連絡文の画面と同じ理由） */
+function entryFormHtml_(o) {
+  const esc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const options = (list, blank) => (blank ? '<option value="">' + esc(blank) + '</option>' : '') + list.map(v => '<option value="' + esc(v) + '">' + esc(v) + '</option>').join('');
+  const field = (id, label, input, note) => '<div class="f"><label for="' + id + '">' + label + '</label>' + input + (note ? '<div class="n">' + note + '</div>' : '') + '</div>';
+  const text = (id, ph) => '<input id="' + id + '" type="text" placeholder="' + esc(ph || '') + '">';
+  const req = '<span class="r">必須</span>';
+  return '<!doctype html><html><head><meta charset="utf-8"><style>' +
+    'body{font-family:sans-serif;font-size:13px;margin:0;padding:12px 16px;background:#f6f6f6;color:#222}' +
+    '.f{margin-bottom:12px}label{display:block;font-weight:bold;margin-bottom:4px}' +
+    'input,select,textarea{box-sizing:border-box;width:100%;padding:8px;border:1px solid #ccc;border-radius:4px;font-size:13px;background:#fff}' +
+    'textarea{height:56px;resize:vertical}.r{color:#c62828;font-weight:normal;font-size:11px;margin-left:6px}.n{color:#666;font-size:11px;margin-top:3px}' +
+    'h3{margin:18px 0 8px;font-size:13px;border-top:1px solid #ddd;padding-top:12px}' +
+    '.v{display:flex;gap:6px;margin-bottom:6px;align-items:center}.v select{flex:1}.v .x{flex:0 0 32px;width:32px;padding:6px 0;background:#fff;border:1px solid #ccc;border-radius:4px;cursor:pointer}' +
+    '.add{background:none;border:none;color:#1a73e8;cursor:pointer;padding:4px 0;font-size:13px}' +
+    '.go{width:100%;margin-top:16px;padding:10px;background:#1a73e8;color:#fff;border:none;border-radius:4px;font-size:14px;font-weight:bold;cursor:pointer}.go:disabled{background:#9bbcf0}' +
+    '#msg{margin-top:10px;white-space:pre-wrap}.ok{color:#2e7d32}.ng{color:#c62828}' +
+    '</style></head><body>' +
+    field('code', '会社コード' + req, '<select id="code">' + options(o.codes, '選んでください') + '</select>') +
+    field('number', '案件番号' + req, '<input id="number" type="text" inputmode="numeric" placeholder="例 50">') +
+    field('name', '社外案件名', text('name', '例 マンション')) +
+    field('assignee', '担当者', text('assignee', '工程図の担当者（入力シートには写さない）')) +
+    field('link', 'サーバーリンク', text('link', '保存先フォルダのリンク')) +
+    field('deadline', '納期', '<input id="deadline" type="date">', '入力シートには写さない（工程図の納期に入る）') +
+    field('order', '注文書', text('order', '注文書のファイルのリンクなど')) +
+    field('memo', '管理者メモ', '<textarea id="memo"></textarea>', '管理者だけのメモ（入力シートには写さない）') +
+    field('toInterp', '通訳へのメッセージ', '<textarea id="toInterp"></textarea>', '入力シートの「管理者からの連絡」に写る') +
+    '<h3>視点' + req + '</h3>' +
+    '<div id="views"></div><button type="button" class="add" id="addView">＋ 視点を足す</button>' +
+    '<button type="button" class="go" id="go">登録</button><div id="msg"></div>' +
+    '<script>' +
+    'var CUTS=' + JSON.stringify(o.cuts) + ',PATS=' + JSON.stringify(o.patterns) + ',REQS=' + JSON.stringify(o.requests) + ';' +
+    'function opt(list,blank){var h=blank?"<option value=\\"\\">"+blank+"</option>":"";for(var i=0;i<list.length;i++){h+="<option>"+list[i]+"</option>";}return h;}' +
+    'function addView(){var d=document.createElement("div");d.className="v";' +
+    'd.innerHTML="<select class=\\"cut\\">"+opt(CUTS,"視点")+"</select><select class=\\"pat\\">"+opt(PATS,"パターンなし")+"</select><select class=\\"req\\">"+opt(REQS,"")+"</select><button type=\\"button\\" class=\\"x\\" title=\\"この視点を消す\\">×</button>";' +
+    'd.querySelector(".x").addEventListener("click",function(){d.parentNode.removeChild(d);});document.getElementById("views").appendChild(d);}' +
+    'function val(id){return document.getElementById(id).value;}' +
+    'function show(t,ok){var m=document.getElementById("msg");m.textContent=t;m.className=ok?"ok":"ng";}' +
+    'function reset(){["number","name","link","deadline","order","memo","toInterp"].forEach(function(id){document.getElementById(id).value="";});' +
+    'document.getElementById("views").innerHTML="";addView();}' +
+    'document.getElementById("addView").addEventListener("click",addView);' +
+    'document.getElementById("go").addEventListener("click",function(){var b=this;' +
+    'var views=[];var rows=document.querySelectorAll("#views .v");for(var i=0;i<rows.length;i++){views.push({cut:rows[i].querySelector(".cut").value,pattern:rows[i].querySelector(".pat").value,request:rows[i].querySelector(".req").value});}' +
+    'var p={code:val("code"),number:val("number"),name:val("name"),assignee:val("assignee"),link:val("link"),deadline:val("deadline"),order:val("order"),memo:val("memo"),toInterp:val("toInterp"),views:views};' +
+    'b.disabled=true;show("登録しています…",true);' +
+    'google.script.run.withSuccessHandler(function(r){b.disabled=false;show(r.msg,r.ok);if(r.ok)reset();})' +
+    '.withFailureHandler(function(e){b.disabled=false;show(e&&e.message||String(e),false);}).submitEntryForm(p);});' +
+    'addView();' +
+    '</script></body></html>';
 }
 function regHeaderMap_(sheet) {
   const lastCol = sheet.getLastColumn();
@@ -2776,6 +2896,7 @@ const HOWTO_LINES = [
   '同じファイルの中でタブを隠す方法は、編集できる人なら誰でも再表示できるため使いません。',
   '',
   '■ 案件の登録（管理者）→ 翻訳（通訳）→ 制作時間（エンジニア）',
+  '0. いちばん手軽なのは、メニュー「工程図連携 → 案件を登録（入力画面）」。縦に並んだ入力画面に案件の項目を書き、視点は「＋ 視点を足す」で何行でも。「登録」を押すと、すぐ登録No が付いて『登録一覧』とエンジニア入力シートに載ります（下の 1・2 を1回で行う）。',
   '1. 管理者がこのファイルの『案件登録』タブ（入力専用）に1視点1行で書く：会社コード・案件番号・社外案件名・担当者・新規or修正・視点・パターン・サーバーリンク・納期・注文書・管理者メモ（黄色い見出しの列）。「状態」に足りない項目が出ます。',
   '2. 書き終えたら「登録」にチェックします。登録No（R0001…）が付き、エンジニア入力シートへ 会社コード・案件番号・社外案件名・サーバーリンク・新規or修正・視点・パターン と「登録No」だけを写し、行は『登録一覧』へ移ります（『案件登録』からは消え、次の案件を書ける）。担当者・納期・注文書・管理者メモは入力シートへ写しません。足りない項目があるとチェックが外れます。',
   '3. 通訳が入力シートの「翻訳済み」にチェック（訳は「翻訳メモ」へ。「翻訳日時」は自動）→ エンジニアが White・Color・pts と「作業の分け方」「時間入力者」を書く（「時間入力日時」「合計」は自動）。',

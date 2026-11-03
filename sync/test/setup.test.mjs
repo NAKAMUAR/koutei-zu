@@ -247,7 +247,7 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
   };
   vm.createContext(ctx);
   const names = ['onAdminEdit', 'renderRegMessage_', 'onStaffEdit', 'syncRegistrationsNow', 'saveDiscordWebhook_', 'inNotifyHours_', 'isReminderDue_', 'regState_', 'REG_STATE', 'quickSetup', 'createStaffInputTab', 'transferFromStaffSheet', 'autoRun', 'readSettings_', 'readStaffRows_', 'collectSourceRows_', 'findStaffHeaderRow_',
-    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_'];
+    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_'];
   env.g = vm.runInContext(src + '\n;({' + names.join(',') + '})', ctx);
   return env;
 }
@@ -1015,6 +1015,71 @@ test('移行：前の『案件登録』（登録No の列あり）はそのま�
   const ent = admin.getSheetByName('案件登録');
   assert.equal(ent.header()[0], '登録', '新しい『案件登録』は入力専用');
   assert.equal(admin.getSheets()[0].getName(), '案件登録');
+});
+
+test('入力画面（縦型）：足りない項目を知らせ、「登録」で視点ごとに『登録一覧』へ書いてすぐ登録No を付け、入力シートへ写す', () => {
+  const admin = adminSheet();
+  const eng = engineerFile();
+  const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
+  env.g.quickSetup();
+  const base = { code: 'REN', number: '50', name: 'マンション', assignee: '武田', link: LINK, deadline: '2030-11-10', order: '', memo: '', toInterp: '昼景で' };
+  // 足りない・おかしい入力
+  assert.ok(env.g.entryFormRows_({ ...base, code: '', views: [] }).error.includes('会社コード・視点（1つ以上）'));
+  assert.ok(env.g.entryFormRows_({ ...base, number: '5a', views: [{ cut: 'EX1', request: '新規 / Mới' }] }).error.includes('数字だけ'));
+  assert.ok(env.g.entryFormRows_({ ...base, views: [{ cut: 'EX1', pattern: '', request: '' }] }).error.includes('1行目の新規or修正'));
+  assert.ok(env.g.entryFormRows_({ ...base, views: [{ cut: 'EX1', pattern: 'A', request: '新規 / Mới' }, { cut: 'ex1', pattern: 'a', request: '新規 / Mới' }] }).error.includes('同じ視点が2回'));
+  const ok = env.g.entryFormRows_({ ...base, views: [{ cut: 'EX1', pattern: 'A', request: '新規 / Mới' }, { cut: '', pattern: '', request: '新規 / Mới' }] });
+  assert.equal(ok.rows.length, 1, '視点もパターンも空の行は無視');
+  assert.equal(ok.rows[0].number, 50);
+  assert.ok(ok.rows[0].deadline instanceof Date || Object.prototype.toString.call(ok.rows[0].deadline) === '[object Date]');
+  // 登録
+  const staffRows = () => eng.getSheetByName('入力シート').rows.slice(2).filter(r => r.some(v => v !== '' && v !== false && v !== undefined)).length;
+  const before = staffRows();
+  const res = env.g.submitEntryForm({ ...base, views: [{ cut: 'EX1', pattern: 'A', request: '新規 / Mới' }, { cut: 'EX2', pattern: 'B', request: '新規 / Mới' }] });
+  assert.equal(res.ok, true, res.msg);
+  same(res.nos, ['R0001', 'R0002']);
+  assert.ok(res.msg.startsWith('登録しました：R0001・R0002（REN.50）'), res.msg);
+  const reg = admin.getSheetByName('登録一覧');
+  const rh = reg.header();
+  const R = (row, name) => reg.rows[row - 1][rh.indexOf(name)];
+  same([R(2, '視点'), R(2, 'パターン'), R(2, '担当者'), R(2, '通訳へのメッセージ'), R(2, '状態')], ['EX1', 'A', '武田', '昼景で', '翻訳待ち']);
+  same([R(3, '視点'), R(3, 'パターン')], ['EX2', 'B']);
+  assert.equal(staffRows(), before + 2, '入力シートに2行');
+  assert.ok(String(R(2, '通訳向け連絡文')).includes('視点：EX1-A・EX2-B'));
+  // 次の登録は続きの番号
+  const res2 = env.g.submitEntryForm({ ...base, number: '51', views: [{ cut: 'IN1', pattern: '', request: '新規 / Mới' }] });
+  same(res2.nos, ['R0003']);
+  // 足りないときは書かない
+  const res3 = env.g.submitEntryForm({ ...base, views: [] });
+  assert.equal(res3.ok, false);
+  assert.equal(staffRows(), before + 3);
+  // 画面の HTML：ボタンは onclick を使わず、中のスクリプトは文法エラーなし
+  const html = env.g.entryFormHtml_({ codes: ['REN', 'RIC'], cuts: ['EX1', 'EX2'], patterns: ['A', 'B'], requests: ['新規 / Mới', '修正 / Sửa'] });
+  assert.ok(!html.includes('onclick='), 'onclick 属性を使わない');
+  assert.ok(html.indexOf('<label for="code">会社コード') < html.indexOf('<label for="number">案件番号'), '項目は縦に並ぶ');
+  const script = html.split('<script>')[1].split('</script>')[0];
+  new vm.Script(script); // 文法エラーなら例外
+  // 偽のブラウザで「＋ 視点を足す」と「登録」を押す
+  const made = []; const listeners = {}; let sent = null;
+  const el = (id) => ({ id, value: id === 'code' ? 'REN' : id === 'number' ? '52' : '', className: '', textContent: '', innerHTML: '', disabled: false,
+    appendChild(d) { made.push(d); }, addEventListener(ev, fn) { listeners[id] = fn; } });
+  const els = {}; ['code', 'number', 'name', 'assignee', 'link', 'deadline', 'order', 'memo', 'toInterp', 'views', 'addView', 'go', 'msg'].forEach(id => { els[id] = el(id); });
+  const doc = {
+    getElementById: (id) => els[id],
+    createElement: () => { const sel = (c) => ({ value: c === 'cut' ? 'EX3' : c === 'req' ? '新規 / Mới' : '' }); const d = { className: '', set innerHTML(v) { this._h = v; }, get innerHTML() { return this._h; },
+      parts: { cut: sel('cut'), pat: sel('pat'), req: sel('req'), x: { addEventListener() {} } }, querySelector(q) { return this.parts[q.slice(1)]; } }; return d; },
+    querySelectorAll: () => made,
+  };
+  const gsr = { withSuccessHandler(f) { this.ok = f; return this; }, withFailureHandler(f) { this.ng = f; return this; }, submitEntryForm(p) { sent = p; this.ok({ ok: true, msg: '登録しました' }); } };
+  vm.runInContext(script, vm.createContext({ document: doc, google: { script: { run: gsr } } }));
+  assert.equal(made.length, 1, '開いた時点で視点の行が1つ');
+  assert.ok(made[0].innerHTML.includes('<option value="">視点</option>'), made[0].innerHTML.slice(0, 80));
+  listeners.addView();
+  assert.equal(made.length, 2, '「＋ 視点を足す」で行が増える');
+  listeners.go.call(els.go);
+  assert.equal(sent.code, 'REN'); assert.equal(sent.number, '52');
+  same(sent.views.map(v => v.cut), ['EX3', 'EX3']);
+  assert.equal(els.msg.textContent, '登録しました');
 });
 
 console.log(`\n${passed} tests passed`);
