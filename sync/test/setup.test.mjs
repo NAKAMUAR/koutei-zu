@@ -374,7 +374,7 @@ test('かんたん初期設定：管理者シート・入力シート（2か国�
   assert.equal(env.alerts.length, 1);
   const msg = env.alerts[0];
   assert.ok(msg.indexOf('✗') < 0, msg);
-  ['接続OK', '顧客マスタに 10 社を追加', '株式会社サンゲツ → 工程図では「サンゲツ」', '15分ごとの自動実行を設定しました', '準備ができました'].forEach(w => assert.ok(msg.indexOf(w) >= 0, w + '\n' + msg));
+  ['接続OK', '顧客マスタに 10 社を追加', '株式会社サンゲツ → 「サンゲツ」', '15分ごとの自動実行を設定しました', '準備ができました'].forEach(w => assert.ok(msg.indexOf(w) >= 0, w + '\n' + msg));
 
   // 転記の読み取り：見出し（2行目）より下だけを読む。会社コード＋案件番号 → RIC.34
   assert.equal(env.g.readStaffRows_(env.g.readSettings_()).length, 0);

@@ -1159,6 +1159,7 @@ function runSend_(dryRun, opts) {
   if (!dryRun) {
     const add = ensureKouteiCompanies_(auth, cfg, customerMaster, companyMasterNames_(ss).filter(n => targets.some(t => trimStr_(t.row.company) === n)));
     customerMaster = add.master;
+    if (add.similar.length) fixCompanyMasterNames_(ss, add.similar); // 工程図を正として『会社マスタ』の表記も直す
   }
   const companies = new Set(customerMaster.map(c => trimStr_(c && c.company)).filter(Boolean));
   const stepTypes = normalizeStepTypes_(parseJsonArray_(fsGetValueString_(auth, cfg, 'stepTypeMaster')));
@@ -1182,6 +1183,10 @@ function runSend_(dryRun, opts) {
     const row = t.row;
     const label = (row.code + ' ' + viewpointNameOf_(row.cut, row.pattern) + (row.round > 1 ? '（' + row.round + '回目）' : '')).trim();
     ctx.now = Date.now();
+    // 会社名は工程図の顧客マスタの表記に合わせる（「株式会社」・空白・記号・少しの打ち間違いの違いは同じ会社とみなす）
+    const orig = trimStr_(row.company);
+    const canon = resolveCompanyName_(orig, customerMaster);
+    if (canon && canon !== orig) row.company = canon;
     const built = buildTaskRecords_(row, ctx);
     if (built.errors.length) {
       errored++;
@@ -1193,6 +1198,7 @@ function runSend_(dryRun, opts) {
       return;
     }
     const warns = (built.notes || []).slice();
+    if (canon && canon !== orig) warns.push('会社名「' + orig + '」は工程図の「' + canon + '」として登録');
     if (companies.size && !companies.has(trimStr_(row.company))) warns.push('会社名「' + row.company + '」は工程図の顧客マスタに未登録');
     let c = 0, u = 0, s = 0;
     built.records.forEach(rec => {
@@ -2921,6 +2927,48 @@ function companyMasterNames_(ss) {
 function companyKey_(name) {
   return String(name || '').normalize('NFKC').replace(/株式会社|有限会社|合同会社|\(株\)|\(有\)/g, '').replace(/\s+/g, '').toLowerCase();
 }
+/** 近さを比べる用のキー：companyKey_ に加えて「様」「御中」・記号（・.,、。-_ など）も無視する */
+function companyLooseKey_(name) {
+  return companyKey_(name).replace(/\(株\)|\(有\)|様$|御中$/g, '').replace(/[・.,、。\-_'"()\[\]（）「」]/g, '');
+}
+/** 文字の違いの数（編集距離） */
+function editDistance_(a, b) {
+  const m = a.length, n = b.length;
+  let prev = [];
+  for (let j = 0; j <= n; j++) prev[j] = j;
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[n];
+}
+/**
+ * 会社名 → 工程図の顧客マスタの表記（純ロジック。工程図を正とする）。
+ * ① そのまま一致 ② 「株式会社」・全角半角・空白などの違いだけ ③ 記号・「様」の違い
+ * ④ 片方がもう片方を含む（3文字以上）⑤ 1〜2文字の打ち間違い（8割以上同じ）。
+ * ③〜⑤ は候補が1社に決まるときだけ使う。見つからなければ null
+ */
+function resolveCompanyName_(name, master) {
+  const n = trimStr_(name);
+  if (!n) return null;
+  const list = (master || []).map(c => trimStr_(c && c.company)).filter(Boolean);
+  if (list.indexOf(n) >= 0) return n;
+  const k = companyKey_(n);
+  const strict = list.filter(x => companyKey_(x) === k);
+  if (strict.length) return strict[0];
+  const lk = companyLooseKey_(n);
+  if (!lk) return null;
+  const one = (arr) => (arr.length === 1 ? arr[0] : null);
+  const loose = one(list.filter(x => companyLooseKey_(x) === lk));
+  if (loose) return loose;
+  const contains = one(list.filter(x => { const y = companyLooseKey_(x); return Math.min(y.length, lk.length) >= 3 && (y.indexOf(lk) >= 0 || lk.indexOf(y) >= 0); }));
+  if (contains) return contains;
+  if (lk.length < 4) return null;
+  const close = list.map(x => { const y = companyLooseKey_(x); return { x, r: 1 - editDistance_(lk, y) / Math.max(lk.length, y.length) }; })
+    .filter(o => o.r >= 0.8).sort((a, b) => b.r - a.r);
+  return close.length && (close.length === 1 || close[0].r > close[1].r) ? close[0].x : null;
+}
 /**
  * names のうち、工程図の顧客マスタ（customerMaster）に無い会社を追加して保存する。
  * 表記だけ違う会社（「株式会社サンゲツ」と「サンゲツ」など）は二重に作らず、similar に入れて返す。
@@ -2940,14 +2988,12 @@ function ensureKouteiCompanies_(auth, cfg, master, names) {
 /** 顧客マスタに足す会社を決める（純ロジック） */
 function planCompanyAdditions_(master, names) {
   const exact = new Set((master || []).map(c => trimStr_(c && c.company)).filter(Boolean));
-  const byKey = {};
-  (master || []).forEach(c => { const n = trimStr_(c && c.company); if (n) byKey[companyKey_(n)] = n; });
   const added = [];
   const similar = [];
   (names || []).forEach(n => {
     const name = trimStr_(n);
     if (!name || exact.has(name) || added.indexOf(name) >= 0) return;
-    const hit = byKey[companyKey_(name)];
+    const hit = resolveCompanyName_(name, master);
     if (hit) { if (!similar.some(x => x.name === name)) similar.push({ name, existing: hit }); return; }
     added.push(name);
   });
@@ -2965,10 +3011,28 @@ function syncCompaniesToKoutei_(ss) {
   const lines = [];
   lines.push(res.added.length ? '工程図の顧客マスタに ' + res.added.length + ' 社を追加しました：' + res.added.join('、') : '『会社マスタ』の会社は、すべて工程図の顧客マスタにあります。');
   if (res.similar.length) {
-    lines.push('表記が少し違う会社があります（二重登録を避けるため追加していません。『会社マスタ』B列を工程図の表記に合わせてください）：');
-    res.similar.forEach(x => lines.push('   ' + x.name + ' → 工程図では「' + x.existing + '」'));
+    // 工程図を正とし、『会社マスタ』の「工程図の会社名」を工程図の表記に書き換える
+    const fixed = fixCompanyMasterNames_(ss, res.similar);
+    lines.push('表記が少し違う会社は、工程図の表記に合わせました（『会社マスタ』を ' + fixed + ' か所直しました）：');
+    res.similar.forEach(x => lines.push('   ' + x.name + ' → 「' + x.existing + '」'));
   }
   return { ok: true, added: res.added, similar: res.similar, text: lines.join('\n') };
+}
+
+/** 『会社マスタ』の「工程図の会社名」列で、similar（[{ name, existing }]）の name を existing に書き換える。直した数を返す */
+function fixCompanyMasterNames_(ss, similar) {
+  const sheet = ss.getSheetByName(SHEET.COMPANY);
+  if (!sheet || sheet.getLastRow() < 2) return 0;
+  const head = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(v => trimStr_(v));
+  const c = head.indexOf('工程図の会社名') + 1;
+  if (!c) return 0;
+  const vals = sheet.getRange(2, c, sheet.getLastRow() - 1, 1).getValues();
+  let n = 0;
+  vals.forEach((v, i) => {
+    const hit = similar.find(x => x.name === trimStr_(v[0]));
+    if (hit) { sheet.getRange(i + 2, c).setValue(hit.existing); n++; }
+  });
+  return n;
 }
 
 // ============ 補助メニュー ============
@@ -3314,7 +3378,7 @@ function quickSetup() {
   if (conn.ok) {
     try {
       const co = syncCompaniesToKoutei_(ss);
-      lines.push((co.similar.length ? '△ ' : '✓ ') + co.text);
+      lines.push('✓ ' + co.text);
     } catch (e) {
       ok = false;
       lines.push('✗ 工程図の顧客マスタに会社を追加できませんでした：' + String(e && e.message || e));

@@ -18,7 +18,7 @@ const exportsList = ['normCode_', 'codePrefix_', 'normCut_', 'normPattern_', 'vi
   'resolveDeliverySuffix_', 'normalizeStepTypes_', 'staffHeaderMap_', 'staffWhite_', 'staffDoneKeys_', 'deliveryNameOf_', 'mapStaffColumns_', 'joinCode_', 'fsEncodeFields_', 'fsDecodeDoc_', 'rowObjToArray_', 'arrayToRowObj_',
   'STATUS', 'KIND', 'STEP_KIND', 'DEFAULT_STEP_TYPES', 'H', 'STAFF_INPUT_HEADERS', 'STAFF_INPUT_COLUMNS', 'INITIAL_VIEW_MASTER',
   'HOUR_OPTIONS', 'REQUEST_OPTIONS', 'deriveExternal_', 'viewCodeOptions_', 'viewCodeLines_', 'linkChoiceLists_',
-  'isAutoSendTarget_', 'planCompanyAdditions_', 'companyKey_', 'parseDateTime_'];
+  'isAutoSendTarget_', 'planCompanyAdditions_', 'companyKey_', 'resolveCompanyName_', 'parseDateTime_'];
 const g = vm.runInContext(src + '\n;({' + exportsList.join(',') + '})', ctx);
 
 let passed = 0;
@@ -519,6 +519,23 @@ test('工程図の顧客マスタに足す会社：無い会社だけ足し、�
   eq(plan.added, ['ソーシャルインテリア', 'FRYGALLERY']);
   eq(plan.similar, [{ name: '株式会社サンゲツ', existing: 'サンゲツ' }, { name: 'SUMUS', existing: 'ＳＵＭＵＳ' }]);
   assert.equal(g.companyKey_('株式会社 リック デザイン'), g.companyKey_('リックデザイン'));
+});
+
+test('会社名の近いものを工程図の表記に合わせる（工程図を正）', () => {
+  const master = [{ company: 'SUMUS' }, { company: 'グレイ美術' }, { company: 'エサキホーム' }, { company: 'ALEG' }, { company: 'リックデザイン' }, { company: 'オフィスコム' }, { company: 'CG工房' }, { company: 'CONTE' }];
+  const r = (n) => g.resolveCompanyName_(n, master);
+  assert.equal(r('株式会社SUMUS'), 'SUMUS');
+  assert.equal(r('株式会社　グレイ美術'), 'グレイ美術');
+  assert.equal(r('㈱エサキホーム様'), 'エサキホーム');
+  assert.equal(r('株式会社ALEG'), 'ALEG');
+  assert.equal(r('リック・デザイン'), 'リックデザイン', '記号の違い');
+  assert.equal(r('オフィスコム株式会社 大阪支店'), 'オフィスコム', '片方がもう片方を含む');
+  assert.equal(r('オフイスコム'), 'オフィスコム', '1文字の打ち間違い');
+  assert.equal(r('CG'), null, '短すぎる名前は推測しない');
+  assert.equal(r('まったく別の会社'), null);
+  assert.equal(r(''), null);
+  // 足す会社の判定でも同じ見方をする（近い会社は足さない）
+  eq(g.planCompanyAdditions_(master, ['株式会社エサキホーム', '新しい会社']).added, ['新しい会社']);
 });
 
 test('Firestore の値エンコード／デコードが往復する', () => {
