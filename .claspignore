@@ -1,4 +1,7 @@
 # clasp push で Apps Script に送るのは Code.gs と appsscript.json だけ（テスト等は送らない）
+# 帳票の雛形用スクリプト（sync/billing/）は別のスプレッドシートに貼るので送らない
 **/**
 !**/Code.gs
 !**/appsscript.json
+billing/**
+**/billing/**

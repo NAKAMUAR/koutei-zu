@@ -255,6 +255,10 @@ export default function BillingView({ customerMaster, tasks, now, colors, fontJP
                     {INVOICE_STATUSES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
                   </select>
                 )}
+                {d.pdfUrl && (
+                  <a href={d.pdfUrl} target="_blank" rel="noreferrer" title="スプレッドシートの雛形で発行した PDF（Drive）"
+                    style={{ fontSize: 11, fontWeight: 600, color: dt.accent, border: `1px solid ${dt.accent}`, borderRadius: 4, padding: '3px 8px', textDecoration: 'none', flex: 'none' }}>PDF</a>
+                )}
                 <div style={{ fontSize: 14, fontWeight: 700, marginRight: 8 }}>{formatYen(t.total)}</div>
                 <button onClick={() => setEditing(d)} title="編集" style={iconBtn(colors)}><Edit2 size={15} /></button>
                 <button onClick={() => duplicateDoc(d)} title="複製" style={iconBtn(colors)}><Copy size={15} /></button>
