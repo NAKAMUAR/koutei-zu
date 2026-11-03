@@ -1,7 +1,7 @@
 // 過去分の取り込み（旧「Project Schedule」→ 案件ごとに1件の完了済みタスク）を Node で検証する。
 // 実行: node test/legacyImport.test.mjs （データは架空。実データはリポジトリに入れない）
 import assert from 'node:assert/strict';
-import { parseTSV, readLegacyRows, estimateDateFromLink, summarizeLegacy, existingCodes, legacyTask, normCode, LEGACY_ASSIGNEE } from '../src/lib/legacyImport.js';
+import { parseTSV, readLegacyRows, estimateDateFromLink, summarizeLegacy, existingCodes, legacyTask, normCode, LEGACY_ASSIGNEE, LEGACY_SOURCE, lineKey, readAssigneeTable, applyAssignees, assigneePatchesForImported } from '../src/lib/legacyImport.js';
 
 let passed = 0;
 function test(name, fn) { fn(); passed++; console.log('  ok  ' + name); }
@@ -89,6 +89,52 @@ test('工程図にある案件の判定と、登録するタスクの中身', ()
   assert.ok(t.invoiceCheckedAt > 0, '請求済み扱い');
   assert.equal(t.legacyKey, 'REN94');
   assert.ok(t.memo.includes('カット：LDK'));
+});
+
+test('LINE の書き方から照合キーを作る', () => {
+  assert.equal(lineKey('REN.050'), 'REN50');
+  assert.equal(lineKey('REN,100 3F'), 'REN100');
+  assert.equal(lineKey('office.153'), 'OFFICE153');
+  assert.equal(lineKey('IN1'), null);
+  assert.equal(lineKey('TEST3'), null);
+  assert.equal(lineKey('フェンスの作成'), null);
+});
+
+test('担当者の表を読み、過去分に担当者を付ける', () => {
+  const tab = [
+    ['社内案件名（LINEの書き方）', '照合キー', '担当者（一番多く出た人）', 'ほかに入った人', 'サポート', '最初に出た日', '最後に出た日', '一覧に出た日数', '状態'],
+    ['REN.94', 'REN94', 'Aさん', 'Bさん', '', '2026-10-02', '2026-10-10', '5', '完了'],
+    ['KYOWA.5', 'KYOWA5', 'Cさん', '', 'Dさん', '2026-10-20', '2026-11-03', '9', '制作中'],
+    ['X.1', 'X1', '', '', '', '', '', '', ''],
+  ].map(r => r.join('\t')).join('\n');
+  const { map, error } = readAssigneeTable(tab);
+  assert.equal(error, '');
+  assert.equal(map.size, 2);
+  assert.equal(readAssigneeTable('a\tb').error.includes('照合キー'), true);
+  const ps = applyAssignees(summarizeLegacy(readLegacyRows(tsv([
+    row('REN.94', '難波改修', 'LDK', L('2026-5', 'x\\0522'), 3, 2, true),
+    row('KYOWA05', '共和', 'LDK', L('2026-5', 'x'), 1, 1, true),
+    row('SAN.1', '三', 'LDK', L('2026-5', 'x'), 1, 1, true),
+  ])).rows), map);
+  const ren = ps.find(p => p.key === 'REN94');
+  assert.equal(ren.assigneeInfo.assignee, 'Aさん');
+  assert.equal(ren.lastDate, '2026-10-10');
+  const t = legacyTask(ren, 't1', Date.now());
+  assert.equal(t.assignee, 'Aさん');
+  assert.ok(t.memo.includes('担当（LINEの朝の一覧より）：Aさん（ほかに Bさん）'));
+  assert.ok(ps.find(p => p.key === 'KYOWA05').notes.includes('LINEでは制作中（過去分にしない）'));
+  assert.equal(ps.find(p => p.key === 'SAN1').assigneeInfo, undefined);
+  // 取り込み済みの過去分を直す（担当者不明のものだけ）
+  const tasks = [
+    { id: 'a', legacySource: LEGACY_SOURCE, assignee: LEGACY_ASSIGNEE, projectNameInternal: 'REN.94', memo: 'm' },
+    { id: 'b', legacySource: LEGACY_SOURCE, assignee: '直した人', projectNameInternal: 'REN.94', memo: '' },
+    { id: 'c', assignee: LEGACY_ASSIGNEE, projectNameInternal: 'REN.94' },
+  ];
+  const patches = assigneePatchesForImported(tasks, map);
+  assert.equal(patches.length, 1);
+  assert.equal(patches[0].id, 'a');
+  assert.equal(patches[0].patch.assignee, 'Aさん');
+  assert.ok(patches[0].patch.memo.startsWith('m\n担当'));
 });
 
 console.log(`legacyImport: ${passed} tests passed`);

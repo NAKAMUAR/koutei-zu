@@ -602,6 +602,11 @@ export default function App() {
 
   // 過去分の取り込み：まとめて登録／まとめて取り消し（450件ずつ Firestore へ）
   const importLegacyTasks = (list) => saveTasks(prev => [...prev, ...(list || [])]);
+  // 作業ごとに違う内容をまとめて直す（[{ id, patch }]）。過去分に担当者を反映するときに使う
+  const patchTasksEach = (patches) => {
+    const m = new Map((patches || []).map(x => [x.id, x.patch]));
+    if (m.size) saveTasks(prev => prev.map(t => (m.has(t.id) ? { ...t, ...m.get(t.id) } : t)));
+  };
   const removeTasksByIds = async (ids) => {
     const set = new Set(ids || []);
     const filtered = tasksRef.current.filter(t => !set.has(t.id));
@@ -2296,7 +2301,7 @@ export default function App() {
     handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject,
     handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority,
     addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd,
-    setTaskAssignee, splitTaskForSupport, importLegacyTasks, removeTasksByIds, completeProject, cancelProject, suspendProject, completeViewpoint,
+    setTaskAssignee, splitTaskForSupport, importLegacyTasks, removeTasksByIds, patchTasksEach, completeProject, cancelProject, suspendProject, completeViewpoint,
     handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, setViewpointMeta,
     setStepMeta, patchTasksByIds, addProjectFromSheet, createBillingFromViewpoint, saveProjectInfo, setProjectDeadline,
     finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, resumeProject,
