@@ -1,6 +1,7 @@
 // 過去分の取り込み（旧「Project Schedule」→ 案件ごとに1件の完了済みタスク）を Node で検証する。
 // 実行: node test/legacyImport.test.mjs （データは架空。実データはリポジトリに入れない）
 import assert from 'node:assert/strict';
+import { compactTask, archiveMonth, flattenArchive, planArchiveWrite, applyPatchesToArchive, archiveToRows, rowsToTSV, rowsToCSV, searchArchive } from '../src/lib/legacyArchive.js';
 import { parseTSV, readLegacyRows, estimateDateFromLink, summarizeLegacy, existingCodes, legacyTask, normCode, LEGACY_ASSIGNEE, LEGACY_SOURCE, lineKey, readAssigneeTable, applyAssignees, assigneePatchesForImported, lineOnlyProjects } from '../src/lib/legacyImport.js';
 
 let passed = 0;
@@ -160,6 +161,45 @@ test('LINE にだけある案件は内容不明の過去分に・社内マニュ
   assert.equal(t.registeredDate, '2026-10-10');
   assert.ok(t.memo.includes('内容は不明') || t.memo.includes('不明'));
   assert.ok(existingCodes([t]).has('SAN26'), '2回目は工程図にある扱い');
+});
+
+test('保管庫：月ごとに分け、id で上書き・元に戻す用の前の値を返す', () => {
+  assert.deepEqual(compactTask({ a: 1, b: '', c: null, d: false, e: 0, f: 'x' }), { a: 1, e: 0, f: 'x' });
+  assert.equal(archiveMonth({ registeredDate: '2026-05-22' }), '2026-05');
+  assert.equal(archiveMonth({}), 'unknown');
+  const cur = { '2026-05': [{ id: 'a', registeredDate: '2026-05-01', assignee: LEGACY_ASSIGNEE }] };
+  const { changed, before } = planArchiveWrite(cur, [
+    { id: 'a', registeredDate: '2026-05-01', assignee: 'Aさん' },
+    { id: 'b', registeredDate: '2026-06-03', memo: '' },
+  ]);
+  assert.deepEqual(Object.keys(changed).sort(), ['2026-05', '2026-06']);
+  assert.equal(changed['2026-05'].length, 1);
+  assert.equal(changed['2026-05'][0].assignee, 'Aさん');
+  assert.equal(before['2026-05'], cur['2026-05']);
+  assert.equal(before['2026-06'], null, '新しい月は元に戻すと消す');
+  assert.equal(cur['2026-05'][0].assignee, LEGACY_ASSIGNEE, '元の保管庫は書き換えない');
+  const flat = flattenArchive({ ...cur, ...changed });
+  assert.deepEqual(flat.map(t => t.id), ['b', 'a'], '新しい順');
+  assert.deepEqual(applyPatchesToArchive(flat, [{ id: 'b', patch: { assignee: 'Cさん' } }]), [{ id: 'b', registeredDate: '2026-06-03', assignee: 'Cさん' }]);
+});
+
+test('保管庫：検索と書き出し', () => {
+  const list = [
+    { id: '1', projectNameInternal: 'REN.94', projectName: '難波, 改修', companyName: 'リノべる', assignee: 'Aさん', registeredDate: '2026-05-22', hours: 5, viewpointName: '過去分（1カット）', memo: '1行目\n2行目' },
+    { id: '2', projectNameInternal: 'SAN.26', projectName: 'SAN.26', assignee: LEGACY_ASSIGNEE, registeredDate: '2026-10-10', hours: 0 },
+  ];
+  assert.equal(searchArchive(list, 'りのべ').length, 0);
+  assert.equal(searchArchive(list, 'リノべる').length, 1);
+  assert.equal(searchArchive(list, 'san').length, 1);
+  assert.equal(searchArchive(list, '').length, 2);
+  const rows = archiveToRows(list);
+  assert.equal(rows[0][0], '社内案件名');
+  assert.equal(rows[2][1], '', '社外案件名が社内案件名と同じなら空');
+  assert.equal(rows[2][3], '不明');
+  assert.ok(rowsToTSV(rows).includes('"1行目\n2行目"'));
+  const csv = rowsToCSV(rows);
+  assert.ok(csv.startsWith('\ufeff社内案件名,'), 'Excel で文字化けしない印');
+  assert.ok(csv.includes('"難波, 改修"'));
 });
 
 console.log(`legacyImport: ${passed} tests passed`);

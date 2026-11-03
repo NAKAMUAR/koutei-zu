@@ -1,15 +1,18 @@
 // 過去分の取り込み（集計・帳票グループ）：旧「Project Schedule」の『案件シート(一覧)』を貼り付けて、
-// 社内案件名ごとに1件の「完了済み・担当者不明（過去分）」として工程図に登録する。
-// 工程図にすでにある案件（社内案件名が同じ）は自動で外す。登録は元に戻せる。
-import { useMemo, useState } from 'react';
+// 社内案件名ごとに1件の「完了済み（過去分）」として、毎回読み込む作業とは別の「保管庫」（data/legacy_YYYY-MM）に入れる。
+// 工程図・保管庫にすでにある案件（社内案件名が同じ）は自動で外す。登録は元に戻せる。
+import { useEffect, useMemo, useState } from 'react';
 import { useApp } from '../appContext.js';
 import { genId } from '../lib/utils.js';
+import { legacyStore } from '../firebase.js';
+import { applyPatchesToArchive, flattenArchive, planArchiveWrite } from '../lib/legacyArchive.js';
+import LegacyArchivePanel from './LegacyArchivePanel.jsx';
 import { applyAssignees, assigneePatchesForImported, existingCodes, legacyTask, lineOnlyProjects, readAssigneeTable, readLegacyRows, summarizeLegacy } from '../lib/legacyImport.js';
 import { tabStyle } from '../components/common.jsx';
 
 const FILTERS = [
   { id: 'take', label: '登録する' },
-  { id: 'exists', label: '工程図にある（外す）' },
+  { id: 'exists', label: '工程図・保管庫にある（外す）' },
   { id: 'notes', label: '注意あり' },
   { id: 'all', label: 'すべて' },
 ];
@@ -23,7 +26,40 @@ export default function LegacyImportView() {
   const [skip, setSkip] = useState(() => new Set());
   const [filter, setFilter] = useState('take');
 
-  const existing = useMemo(() => existingCodes(tasks), [tasks]);
+  // 保管庫（開いたときに1回だけ読む）
+  const [archive, setArchive] = useState(null); // { 'YYYY-MM': [過去分] }
+  const [archiveError, setArchiveError] = useState('');
+  useEffect(() => {
+    let alive = true;
+    legacyStore.listAll().then(v => { if (alive) setArchive(v || {}); }).catch(e => { if (alive) { setArchive({}); setArchiveError(String(e && e.message || e)); } });
+    return () => { alive = false; };
+  }, []);
+  const archiveList = useMemo(() => flattenArchive(archive), [archive]);
+  // 保管庫へ書く（changed：{ 月: 新しい配列 }）。before の値（null は消す）で元に戻せる
+  const writeArchive = async (changed) => {
+    await legacyStore.setMany(Object.entries(changed));
+    setArchive(prev => ({ ...(prev || {}), ...changed }));
+  };
+  const restoreArchive = async (before) => {
+    for (const [m, v] of Object.entries(before)) {
+      if (v) await legacyStore.set(m, v); else await legacyStore.remove(m);
+    }
+    setArchive(prev => { const n = { ...(prev || {}) }; for (const [m, v] of Object.entries(before)) { if (v) n[m] = v; else delete n[m]; } return n; });
+  };
+  // 毎回読み込む作業（tasks）に残っている過去分（以前の取り込み）→ 保管庫へ移せる
+  const legacyInTasks = useMemo(() => tasks.filter(t => t.legacySource), [tasks]);
+  const moveToArchive = async () => {
+    const items = legacyInTasks;
+    const { changed, before } = planArchiveWrite(archive, items);
+    await writeArchive(changed);
+    await removeTasksByIds(items.map(t => t.id));
+    notify(`過去分 ${items.length}件を保管庫へ移しました`, {
+      type: 'success',
+      undo: async () => { await importLegacyTasks(items); await restoreArchive(before); },
+    });
+  };
+
+  const existing = useMemo(() => existingCodes([...tasks, ...archiveList]), [tasks, archiveList]);
   const read = () => {
     // 担当者の表（任意）
     let map = null;
@@ -50,11 +86,19 @@ export default function LegacyImportView() {
     setSkip(new Set(projects.filter(p => p.isTest || (p.assigneeInfo && p.assigneeInfo.active)).map(p => p.key)));
     setText(''); setAssigneeText(''); // 大きな文字は残さない
   };
-  const importedPatches = useMemo(() => assigneePatchesForImported(tasks, assigneeMap), [tasks, assigneeMap]);
-  const applyImported = () => {
-    const before = importedPatches.map(x => { const t = tasks.find(y => y.id === x.id); return { id: x.id, patch: { assignee: t.assignee, memo: t.memo } }; });
-    patchTasksEach(importedPatches);
-    notify(`取り込み済みの過去分 ${importedPatches.length}件に担当者を反映しました`, { type: 'success', undo: () => patchTasksEach(before) });
+  const importedPatches = useMemo(() => assigneePatchesForImported([...tasks, ...archiveList], assigneeMap), [tasks, archiveList, assigneeMap]);
+  const applyImported = async () => {
+    const taskIds = new Set(tasks.map(t => t.id));
+    const inTasks = importedPatches.filter(x => taskIds.has(x.id));
+    const inArchive = importedPatches.filter(x => !taskIds.has(x.id));
+    const beforeTasks = inTasks.map(x => { const t = tasks.find(y => y.id === x.id); return { id: x.id, patch: { assignee: t.assignee, memo: t.memo } }; });
+    if (inTasks.length) patchTasksEach(inTasks);
+    const { changed, before } = planArchiveWrite(archive, applyPatchesToArchive(archiveList, inArchive));
+    if (inArchive.length) await writeArchive(changed);
+    notify(`取り込み済みの過去分 ${importedPatches.length}件に担当者を反映しました`, {
+      type: 'success',
+      undo: async () => { if (inTasks.length) patchTasksEach(beforeTasks); if (inArchive.length) await restoreArchive(before); },
+    });
   };
   const list = (parsed && parsed.projects) || [];
   const isExisting = (p) => existing.has(p.key);
@@ -72,16 +116,22 @@ export default function LegacyImportView() {
     if (!targets.length) { notify('登録する案件がありません', { type: 'error' }); return; }
     const ok = await confirmDialog({
       title: '過去分の登録',
-      message: `${targets.length}件の案件を「完了済み（過去分）」として工程図に登録します。担当者が分からないものは「担当者不明（過去分）」になります。\n（工程図にすでにある ${counts.exists}件は登録しません。登録したあとも「元に戻す」で取り消せます）`,
+      message: `${targets.length}件の案件を「完了済み（過去分）」として保管庫に登録します。担当者が分からないものは「担当者不明（過去分）」になります。\n（工程図にすでにある ${counts.exists}件は登録しません。登録したあとも「元に戻す」で取り消せます）`,
       confirmLabel: '登録する',
     });
     if (!ok) return;
     const now = Date.now();
     const newTasks = targets.map(p => legacyTask(p, genId('task'), now));
-    await importLegacyTasks(newTasks);
-    notify(`${newTasks.length}件の過去分を登録しました（完了タブ・案件整理に出ます）`, {
+    const { changed, before } = planArchiveWrite(archive, newTasks);
+    try {
+      await writeArchive(changed);
+    } catch (e) {
+      notify(`保管庫に書き込めませんでした：${e && e.message || e}`, { type: 'error' });
+      return;
+    }
+    notify(`${newTasks.length}件の過去分を保管庫に登録しました（この画面の下の「保管している過去分」で見られます）`, {
       type: 'success',
-      undo: () => removeTasksByIds(newTasks.map(t => t.id)),
+      undo: () => restoreArchive(before),
     });
     setParsed(null);
   };
@@ -93,11 +143,25 @@ export default function LegacyImportView() {
     <section style={{ fontFamily: fontJP }}>
       <h2 style={{ fontFamily: fontDisplay, fontSize: 20, margin: '0 0 6px 0', fontWeight: 500 }}>過去分の取り込み</h2>
       <p style={{ fontSize: 12, color: colors.textMute, margin: '0 0 14px 0', lineHeight: 1.7 }}>
-        旧「Project Schedule」の『案件シート(一覧)』を、<b>社内案件名ごとに1件</b>の「完了済み」として工程図に登録します。<br />
+        旧「Project Schedule」の『案件シート(一覧)』を、<b>社内案件名ごとに1件</b>の「完了済み」として登録します。<br />
+        ・過去分は、毎回読み込む作業とは別の<b>保管庫</b>（月ごとにまとめて保存）に入れます。この画面を開いたときだけ読むので、アプリが重くならず、Firebase の無料枠も減りません。案件・完了タブなどには出ず、この画面の下で検索・書き出しができます。<br />
         ・旧シートには担当者・作成日時が無いため、担当者は「担当者不明（過去分）」、登録日はサーバリンクのフォルダ名（…\2026-5\…\0522 など）から推定します。担当者の表（LINE の朝の担当一覧から作ったもの）を一緒に貼ると、一致した案件に担当者が付きます。<br />
         ・LINE で「制作中」の案件は、最初からチェックを外してあります（今の作業なので過去分にしない）。<br />
         ・工程図にすでにある案件（社内案件名が同じ）と、テストらしい案件は登録しません。請求は済んだものとして扱います（進行状況の「請求待ち」には出ません）。
       </p>
+
+      {archiveError && (
+        <div style={{ padding: 10, background: colors.accentSoft, color: colors.accent, borderRadius: 4, fontSize: 12, margin: '0 0 10px' }}>保管庫を読めませんでした：{archiveError}</div>
+      )}
+      {legacyInTasks.length > 0 && archive && (
+        <div style={{ margin: '0 0 14px', padding: '10px 12px', border: `1px solid ${colors.border}`, borderRadius: 4, background: '#fff8ec', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', fontSize: 12 }}>
+          <span>以前に取り込んだ過去分 <b>{legacyInTasks.length}件</b> が、毎回読み込む作業の中に残っています。保管庫へ移すと、アプリを開いたときの読み込みが減ります。</span>
+          <button type="button" onClick={moveToArchive}
+            style={{ marginLeft: 'auto', padding: '6px 14px', background: colors.text, color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, fontWeight: 600 }}>
+            保管庫へ移す
+          </button>
+        </div>
+      )}
 
       {!parsed && (
         <>
@@ -146,7 +210,7 @@ export default function LegacyImportView() {
         <>
           <div style={{ fontSize: 13, fontWeight: 700, margin: '4px 0 6px' }}>② 内容を確かめる</div>
           <div style={{ fontSize: 12, color: colors.text, marginBottom: 8 }}>
-            {parsed.onlyAssignees ? 'LINE にだけある案件（内容不明）' : `${parsed.rowCount.toLocaleString('ja-JP')}行`} → 案件 {counts.all}件 ／ 工程図にある {counts.exists}件（登録しない）／ <b>登録する {counts.take}件</b> ／ 注意あり {counts.notes}件
+            {parsed.onlyAssignees ? 'LINE にだけある案件（内容不明）' : `${parsed.rowCount.toLocaleString('ja-JP')}行`} → 案件 {counts.all}件 ／ 工程図・保管庫にある {counts.exists}件（登録しない）／ <b>登録する {counts.take}件</b> ／ 注意あり {counts.notes}件
           </div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
             {FILTERS.map(f => (
@@ -190,7 +254,7 @@ export default function LegacyImportView() {
                       <td style={{ ...td, whiteSpace: 'nowrap' }} title={p.cuts.join('、')}>{p.cutCount}／{p.rowCount}</td>
                       <td style={{ ...td, whiteSpace: 'nowrap', textAlign: 'right' }}>{p.total}h</td>
                       <td style={{ ...td, fontSize: 11 }}>
-                        {ex && <div style={{ color: colors.progress, fontWeight: 600 }}>工程図にあり（登録しない）</div>}
+                        {ex && <div style={{ color: colors.progress, fontWeight: 600 }}>工程図・保管庫にあり（登録しない）</div>}
                         {p.notes.map(n => <div key={n} style={{ color: '#b07d3c' }}>{n}</div>)}
                       </td>
                     </tr>
@@ -202,13 +266,15 @@ export default function LegacyImportView() {
           <div style={{ fontSize: 13, fontWeight: 700, margin: '14px 0 6px' }}>③ 登録する</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <span style={{ fontSize: 12, color: colors.textMute }}>「表記ゆれの可能性」は会社名を決めるためだけに使い、社内案件名は旧シートのまま登録します。</span>
-            <button type="button" onClick={doImport} disabled={counts.take === 0}
-              style={{ marginLeft: 'auto', padding: '9px 18px', background: counts.take ? colors.text : colors.textMute, color: '#fff', border: 'none', borderRadius: 4, cursor: counts.take ? 'pointer' : 'default', fontFamily: fontJP, fontSize: 13, fontWeight: 600 }}>
-              {counts.take}件を完了済みで登録
+            <button type="button" onClick={doImport} disabled={counts.take === 0 || !archive}
+              style={{ marginLeft: 'auto', padding: '9px 18px', background: counts.take && archive ? colors.text : colors.textMute, color: '#fff', border: 'none', borderRadius: 4, cursor: counts.take && archive ? 'pointer' : 'default', fontFamily: fontJP, fontSize: 13, fontWeight: 600 }}>
+              {archive ? `${counts.take}件を完了済みで登録` : '保管庫を読み込み中…'}
             </button>
           </div>
         </>
       )}
+
+      {!parsed && <LegacyArchivePanel list={archive ? archiveList : null} />}
     </section>
   );
 }

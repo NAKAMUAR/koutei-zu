@@ -247,3 +247,6 @@ function prefixStore(prefix) {
 export const billingStore = prefixStore('bill_');
 // 売上登録表：1か月 = 1ドキュメント（キー = 'YYYY-MM'）
 export const salesStore = prefixStore('sales_');
+// 過去分の保管庫：1か月 = 1ドキュメント（キー = 'YYYY-MM'、値 = 過去分の配列）。
+// 毎回読み込む tasks とは別に置き、「過去分の取り込み」を開いたときだけ読む（読み込み回数を増やさないため）
+export const legacyStore = prefixStore('legacy_');
