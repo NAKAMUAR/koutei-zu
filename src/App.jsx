@@ -10,6 +10,7 @@ import { computeDeadlineReorder, computeProjectOrder, deadlineInsertPriority, de
 import { collectDeliveryNames, collectSalesSyncRows, reconcileLedger } from './viewpoint/salesSync.js';
 import { blankDoc, blankItem, issuerFromDocs } from './billing/billingUtils.js';
 import { isReviewDue, normalizePricing } from './lib/stage.js';
+import { splitForSupport } from './lib/support.js';
 import { CheckCircle2, ClipboardList, FileText, Folder, MessageSquare, Plus, RotateCcw, Settings as SettingsIcon, StickyNote, Table, TrendingUp } from 'lucide-react';
 import { CompleteDialog, ConfirmModal, DeadlineConfirmModal, NavButton, NavGroup, PromptModal, TimeSelect, ToastStack } from './components/common.jsx';
 import { MemberSettings } from './components/MemberSettings.jsx';
@@ -70,6 +71,8 @@ export default function App() {
   const [pricing, setPricing] = useState(() => normalizePricing(null));
   // 連携シートに見せる納品名（data/deliveryNames に保存済みの JSON 文字列）。読み込み前は null
   const deliveryNamesRef = useRef(null);
+  // 納品前チェックの項目（data/deliveryChecklist。未保存なら既定の4項目）
+  const [deliveryChecklist, setDeliveryChecklist] = useState(null);
   const [deliveryNamesLoaded, setDeliveryNamesLoaded] = useState(false);
   // メンバー許可リスト（オーナー以外にアクセスを許可する Gmail。設定画面から編集）
   const [memberEmails, setMemberEmails] = useState([]);
@@ -297,6 +300,10 @@ export default function App() {
       deliveryNamesRef.current = val || '';
       setDeliveryNamesLoaded(true);
     });
+    const unsubChecklist = storage.subscribe('deliveryChecklist', (val) => {
+      try { const arr = val ? JSON.parse(val) : null; setDeliveryChecklist(Array.isArray(arr) ? arr : null); }
+      catch (e) { setDeliveryChecklist(null); }
+    });
     const unsubPricing = storage.subscribe('pricing', (val) => {
       try { setPricing(normalizePricing(val ? JSON.parse(val) : null)); }
       catch (e) { setPricing(normalizePricing(null)); }
@@ -375,6 +382,7 @@ export default function App() {
       unsubStepTypes();
       unsubPricing();
       unsubDeliveryNames();
+      unsubChecklist();
       unsubMemos();
       unsubSalesLedger();
       unsubMembers();
@@ -782,6 +790,11 @@ export default function App() {
     setPricing(norm);
     try { await storage.set('pricing', JSON.stringify(norm)); }
     catch (e) { console.error('単価設定の保存エラー:', e); }
+  };
+  const saveDeliveryChecklist = async (arr) => {
+    setDeliveryChecklist(arr);
+    try { await storage.set('deliveryChecklist', JSON.stringify(arr)); }
+    catch (e) { console.error('納品前チェックの保存エラー:', e); }
   };
   const saveStepTypeMaster = async (arr) => {
     const norm = normalizeStepTypes(arr);
@@ -1888,6 +1901,21 @@ export default function App() {
     saveTasks(prev => normalizePriorities(prev.map(t => t.id === id ? { ...t, assignee: na } : t)));
   };
 
+  // サポート（分担）：ステップの残り時間の一部を別の担当者へ渡す（元に戻す付き）
+  const splitTaskForSupport = (id, helper, hours) => {
+    const t = tasksRef.current.find(x => x.id === id);
+    const res = t ? splitForSupport(t, helper, hours, genId('task'), Date.now()) : null;
+    if (!res) { notify('分担できませんでした（渡す時間は残り時間より少なくしてください）', { type: 'error' }); return; }
+    saveTasks(prev => normalizePriorities([...prev.map(x => x.id === id ? res.original : x), res.support]));
+    notify(`${res.support.assignee} さんに ${fmtHM(res.support.hours)} を分担しました`, {
+      type: 'success',
+      undo: async () => {
+        await removeTask(res.support.id);
+        saveTasks(prev => prev.map(x => x.id === id ? { ...x, hours: t.hours, hoursLocked: t.hoursLocked || null } : x));
+      },
+    });
+  };
+
   // 完了タブで終了時間（実績）を後から編集
   const setActualEnd = (id, value) => {
     const ae = value || null;
@@ -2247,7 +2275,7 @@ export default function App() {
     projectOrder, projectList, projectInternalList, viewpointList,
     assigneeList, assigneeOrder, isShownAssignee, companyList, customerMaster, employeeMaster,
     stepTypeMaster, vpDeliveryCount, offshoreCompanies,
-    salesLedger: salesLedgerSync || {}, pricing, savePricing,
+    salesLedger: salesLedgerSync || {}, pricing, savePricing, deliveryChecklist, saveDeliveryChecklist,
     companyOrder: settings.companyOrder || [],
     usedCompanies: [...new Set(tasks.map(t => (t.companyName || '').trim()).filter(Boolean))],
     dragTaskId,
@@ -2256,7 +2284,7 @@ export default function App() {
     handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject,
     handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority,
     addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd,
-    setTaskAssignee, completeProject, cancelProject, suspendProject, completeViewpoint,
+    setTaskAssignee, splitTaskForSupport, completeProject, cancelProject, suspendProject, completeViewpoint,
     handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, setViewpointMeta,
     setStepMeta, patchTasksByIds, addProjectFromSheet, createBillingFromViewpoint, saveProjectInfo, setProjectDeadline,
     finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, resumeProject,

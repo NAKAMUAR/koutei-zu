@@ -184,7 +184,7 @@ function StageRow({ e, now, patch, notify, colors, fontJP }) {
       <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, cursor: 'pointer', fontFamily: fontJP, color: colors.text }}>
         <input type="checkbox" checked={!!e.translatedAt}
           onChange={(ev) => patch(e.zeroIds, { translatedAt: ev.target.checked ? Date.now() : null })} />
-        翻訳済み（エンジニアへ依頼した）
+        翻訳済み（工程図で直接登録した視点用）
       </label>
     );
   } else if (e.stage === 'scheduled' || e.stage === 'producing' || e.stage === 'fixing') {
@@ -197,7 +197,15 @@ function StageRow({ e, now, patch, notify, colors, fontJP }) {
       </span>
     );
   } else if (e.stage === 'delivered') {
-    info = <span style={small}>納品 {fmtMDHM(e.deliveredAt)}</span>;
+    const okBy = e.deliveryCheckedAt && e.deliveryCheckedBy;
+    const nChecked = Object.values(e.deliveryChecks || {}).filter(Boolean).length;
+    info = (
+      <span style={small}>
+        納品 {fmtMDHM(e.deliveredAt)} ・ <span style={{ color: okBy ? colors.progress : colors.accent, fontWeight: 600 }}>
+          {okBy ? `納品前チェックOK（${e.deliveryCheckedBy}）` : `納品前チェック ${nChecked}項目済み（「進行中一覧」の確認待ちで入力）`}
+        </span>
+      </span>
+    );
     actions = (
       <>
         <label style={{ display: 'flex', alignItems: 'center', gap: 4, ...small }}>

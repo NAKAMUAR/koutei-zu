@@ -14,7 +14,7 @@ vm.createContext(ctx);
 // スクリプト末尾で必要な名前をまとめて返す。
 const exportsList = ['normCode_', 'codePrefix_', 'normCut_', 'normPattern_', 'viewpointNameOf_', 'cutTokens_', 'cutNumber_', 'circled_',
   'externalViewpointName_', 'guessCompanyFromLink_', 'findProject_', 'judgeCompany_', 'judgeViewpoint_',
-  'judgeStepKind_', 'requestStepKind_', 'judgeRow_', 'parseDeadline_', 'toHours_', 'collectSourceRows_', 'buildTaskRecords_', 'resolveStepLabel_',
+  'judgeStepKind_', 'requestStepKind_', 'judgeRow_', 'parseDeadline_', 'toHours_', 'collectSourceRows_', 'buildTaskRecords_', 'parseSplit_', 'resolveStepLabel_',
   'resolveDeliverySuffix_', 'normalizeStepTypes_', 'staffHeaderMap_', 'mapStaffColumns_', 'joinCode_', 'fsEncodeFields_', 'fsDecodeDoc_', 'rowObjToArray_', 'arrayToRowObj_',
   'STATUS', 'KIND', 'STEP_KIND', 'DEFAULT_STEP_TYPES', 'H', 'STAFF_INPUT_HEADERS', 'STAFF_INPUT_COLUMNS', 'INITIAL_VIEW_MASTER',
   'HOUR_OPTIONS', 'REQUEST_OPTIONS', 'deriveExternal_', 'viewCodeOptions_', 'viewCodeLines_', 'linkChoiceLists_',
@@ -341,6 +341,55 @@ test('レコード生成：パース新規 → ホワイト＋カラー＋人物
   assert.equal(w.externalId, 'RIC34::EX1-A::1::white'); assert.equal(c.externalId, 'RIC34::EX1-A::1::color'); assert.equal(o.externalId, 'RIC34::EX1-A::1::person_scene');
   assert.ok(w.id.startsWith('task-'));
   assert.equal(w.memo, 'm');
+});
+
+test('作業の分け方の読み取り（種類の書き方・区切り・全角数字）', () => {
+  eq(g.parseSplit_('White＝躯体 3h／家具1 2h／家具2 1h'), { white: [{ label: '躯体', hours: 3 }, { label: '家具1', hours: 2 }, { label: '家具2', hours: 1 }], color: [], other: [] });
+  eq(g.parseSplit_('躯体 3h、家具 1.5h\nColor：外壁 2時間 / 植栽 １h'), {
+    white: [{ label: '躯体', hours: 3 }, { label: '家具', hours: 1.5 }], color: [{ label: '外壁', hours: 2 }, { label: '植栽', hours: 1 }], other: [] });
+  eq(g.parseSplit_('White＝躯体 3h Color＝外壁 2h pts=人物 1h'), {
+    white: [{ label: '躯体', hours: 3 }], color: [{ label: '外壁', hours: 2 }], other: [{ label: '人物', hours: 1 }] });
+  eq(g.parseSplit_(''), { white: [], color: [], other: [] });
+  eq(g.parseSplit_('メモだけ'), { white: [], color: [], other: [] });
+});
+
+test('レコード生成：作業の分け方があれば分けたステップにする（納品は1回・種類ごとの既定担当者）', () => {
+  const row = { key: 'RIC34::EX1::1', code: 'RIC.34', name: 'X', cut: 'EX1', pattern: '', extName: '', round: 1, deadline: '', white: 6, color: 2, other: 0,
+    company: 'X', contact: '', category: '外観', kind: 'パース', stepKind: '新規', assignee: '', memo: '', split: 'White＝躯体 3h／家具1 2h／家具2 1h' };
+  const ctx = { ...baseCtx(), kindAssignees: { white: 'Quynh', color: 'Tú Mĩ' } };
+  const r = g.buildTaskRecords_(row, ctx);
+  eq(r.errors, []);
+  eq(r.notes, []);
+  const docs = r.records.map(x => x.doc);
+  eq(docs.map(d => [d.stepName, d.hours, d.assignee]), [
+    ['ホワイト（躯体）', 3, 'Quynh'], ['ホワイト（家具1）', 2, 'Quynh'], ['ホワイト（家具2）', 1, 'Quynh'], ['カラー', 2, 'Tú Mĩ']]);
+  eq(docs.map(d => d.externalId), ['RIC34::EX1::1::white#1', 'RIC34::EX1::1::white#2', 'RIC34::EX1::1::white#3', 'RIC34::EX1::1::color']);
+  eq(docs.map(d => d.stepRoundType), ['initial', '', '', 'initial'], '分けた2つ目以降は納品に数えない');
+  eq(docs.map(d => d.stepDeliverySuffix), ['白色', '白色', '白色', '色付'], '納品名は同じ');
+  eq(docs.map(d => d.stepOrder), [0, 1, 2, 3]);
+  // シートの担当者があればそちらが優先
+  const r2 = g.buildTaskRecords_({ ...row, assignee: '中村' }, ctx);
+  assert.ok(r2.records.every(x => x.doc.assignee === '中村'));
+  // 合計が合わないときは分けずに登録して知らせる
+  const r3 = g.buildTaskRecords_({ ...row, split: 'White＝躯体 3h／家具 2h' }, baseCtx());
+  eq(r3.records.map(x => x.doc.stepName), ['ホワイト', 'カラー']);
+  assert.ok(r3.notes[0].indexOf('合わない') >= 0);
+  // 分けずに登録済みの視点に後から分け方を書いても、二重にしない
+  const ctx4 = baseCtx();
+  ctx4.byExt.set('RIC34::EX1::1::white', { id: 't1', status: 'pending', hours: 6, projectName: 'X', projectNameInternal: 'RIC.34', companyName: 'X', viewpointCategory: '外観', deadline: null });
+  const r4 = g.buildTaskRecords_(row, ctx4);
+  assert.equal(r4.records.filter(x => !x.update).length, 1, 'カラーだけ新規');
+  assert.ok(r4.notes[0].indexOf('登録済み') >= 0);
+});
+
+test('レコード生成：工程図で分担（サポート）した作業の時間はシートから戻さない', () => {
+  const row = { key: 'RIC34::EX1::1', code: 'RIC.34', name: 'X', cut: 'EX1', pattern: '', extName: '', round: 1, deadline: '', white: 6, color: 0, other: 0,
+    company: 'X', contact: '', category: '外観', kind: 'パース', stepKind: '新規', assignee: '', memo: '' };
+  const ctx = baseCtx();
+  ctx.byExt.set('RIC34::EX1::1::white', { id: 't1', status: 'pending', hours: 4, hoursLocked: true, stepName: 'ホワイト', projectName: 'X', projectNameInternal: 'RIC.34', companyName: 'X', viewpointCategory: '外観', deadline: null });
+  const r = g.buildTaskRecords_(row, ctx);
+  assert.equal(r.records[0].changes, null);
+  assert.ok(r.notes[0].indexOf('分担済み') >= 0);
 });
 
 test('レコード生成：追加 → 通常ステップ＋納品種類は追加', () => {

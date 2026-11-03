@@ -16,8 +16,8 @@
 //   請求済み      … 請求書を発行した（チェック、または売上登録表の請求書送付日）
 export const STAGES = [
   { id: 'tentative', label: '仮登録', color: '#8a7a5c', hint: '管理者のところで止まっています（仮案件のチェックを外すと次へ）' },
-  { id: 'translate', label: '翻訳待ち', color: '#b07d3c', hint: '資料を翻訳してエンジニアへ依頼したら「翻訳済み」にチェック' },
-  { id: 'estimate', label: '時間計算待ち', color: '#c1272d', hint: 'エンジニアが制作時間を出すのを待っています（依頼から2時間でアラーム）' },
+  { id: 'translate', label: '翻訳待ち', color: '#b07d3c', hint: '工程図で直接（時間0で）登録した視点です。連携シートの『案件登録』から始めた案件は、入力シートの「翻訳済み」で管理します' },
+  { id: 'estimate', label: '時間計算待ち', color: '#c1272d', hint: '工程図で直接登録した視点で、制作時間を待っています（連携シートの案件は、翻訳済みから2時間で Discord に催促が届きます）' },
   { id: 'scheduled', label: '制作待ち', color: '#3a7bd5', hint: 'スケジュールに載りました（開始前）' },
   { id: 'producing', label: '制作中', color: '#3a5a40', hint: '制作が始まっています' },
   { id: 'fixing', label: '修正中', color: '#7a4fa0', hint: '修正の時間が登録され、制作しています' },
@@ -131,6 +131,10 @@ export function computeViewpointStages(tasks, scheduledActive, now, salesLedger,
         e.stage = 'delivered';
         e.reviewAt = Math.min(...rv.map(t => n(t.reviewAt) || nowTs));
         e.reviewDueDate = (rv.find(t => t.reviewDueDate) || {}).reviewDueDate || '';
+        // 納品前チェック（確認待ちのカードで入れる）
+        e.deliveryChecks = (rv.find(t => t.deliveryChecks) || {}).deliveryChecks || {};
+        e.deliveryCheckedBy = (rv.find(t => t.deliveryCheckedBy) || {}).deliveryCheckedBy || '';
+        e.deliveryCheckedAt = (rv.find(t => t.deliveryCheckedAt) || {}).deliveryCheckedAt || null;
         e.since = e.deliveredAt || e.reviewAt;
       } else {
         // 請求済み：まだチェックしていないステップが無い、または、その中の金額ありのステップが

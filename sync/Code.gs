@@ -46,12 +46,13 @@ const H = {
   company: '会社名', contact: 'お客様担当者', category: '区分', kind: '種類', stepKind: 'ステップ種類',
   assignee: '担当者', memo: 'メモ', exclude: '対象外',
   transferredAt: '転記日時', sentAt: '送信日時', result: '結果', srcRow: '元シート行', link: 'サーバリンク',
+  split: '作業の分け方',
 };
 // 旧バージョンの見出し（そのまま使えるように別名として受け付ける）
 const H_ALIASES = { cut: ['カット名'], white: ['White時間'], color: ['Color時間'] };
 const LINK_HEADER_ORDER = ['key', 'status', 'send', 'inputDate', 'code', 'name', 'cut', 'pattern', 'extName', 'round', 'request', 'deadline',
   'white', 'color', 'other', 'item', 'note', 'company', 'contact', 'category', 'kind', 'stepKind', 'assignee', 'memo', 'exclude',
-  'transferredAt', 'sentAt', 'result', 'srcRow', 'link'];
+  'transferredAt', 'sentAt', 'result', 'srcRow', 'link', 'split'];
 
 const STATUS = { NEW: '未送信', CHECK: '要確認', UPDATED: '更新あり', SENT: '登録済み', ERROR: 'エラー', GONE: '元シートから消えた' };
 const KIND = { PERS: 'パース', PHOTO: '写真合成', MODEL: 'モデル', VR: 'VR', VIDEO: '動画' };
@@ -80,6 +81,10 @@ const SETTING_KEYS = {
   tabName: 'スタッフシートのタブ名',
   startRow: '取込開始行',
   defaultAssignee: '既定の担当者',
+  assigneeWhite: '既定の担当者（ホワイト）',
+  assigneeColor: '既定の担当者（カラー）',
+  assigneeOther: '既定の担当者（pts）',
+  assigneeSingle: '既定の担当者（写真合成・モデル・VR・動画）',
   projectId: 'FirebaseプロジェクトID',
   workspaceId: 'ワークスペースID',
   autoSend: '自動登録',
@@ -95,6 +100,10 @@ const SETTING_DEFAULTS = {
   tabName: STAFF_TAB_DEFAULT,
   startRow: 2,
   defaultAssignee: '未割当',
+  assigneeWhite: '',
+  assigneeColor: '',
+  assigneeOther: '',
+  assigneeSingle: '',
   projectId: 'koutei-zu',
   workspaceId: 'liebe-asia-team',
   autoSend: 'する',
@@ -110,6 +119,10 @@ const SETTING_NOTES = {
   tabName: 'エンジニアが書くタブの名前（見出し「会社コード」「案件番号」の行より下を読みます）',
   startRow: 'この行より上は取り込みません。旧レイアウト『案件シート(一覧)』を読むときは 4800 などにする',
   defaultAssignee: '『連携』の担当者が空のときに使う名前。工程図で後から変更できます',
+  assigneeWhite: '『連携』（『案件登録』）の担当者が空で、その視点が初めてのとき、ホワイトの作業に付ける担当者（空なら「既定の担当者」）',
+  assigneeColor: 'カラーの作業に付ける担当者（同上）',
+  assigneeOther: 'pts（人物＋添景合成）の作業に付ける担当者（同上）',
+  assigneeSingle: '写真合成・モデル作成・VR制作・動画制作の作業に付ける担当者（同上）',
   projectId: '通常は変更不要',
   workspaceId: '通常は変更不要',
   autoSend: '「する」：30分ごとの自動実行で、状態が「未送信」の行と「工程図へ」にチェックした行を工程図に登録（「要確認」「更新あり」はチェックするまで待つ）。「しない」：転記だけ自動',
@@ -308,7 +321,7 @@ function transfer_() {
     if (byKey.has(s.key)) {
       const r = byKey.get(s.key);
       const cur = data[r];
-      const fields = { code: s.code, cut: s.cut, pattern: s.pattern, request: s.request, deadline: s.deadline, white: s.white, color: s.color, other: s.other, item: s.item, note: s.note, srcRow: s.srcRow, link: s.link };
+      const fields = { code: s.code, cut: s.cut, pattern: s.pattern, request: s.request, deadline: s.deadline, white: s.white, color: s.color, other: s.other, item: s.item, note: s.note, srcRow: s.srcRow, link: s.link, split: s.split };
       if (s.name) fields.name = s.name; // スタッフシートに社外案件名があるときだけ追従（無ければ人が入れた値を保つ）
       let changed = false;
       Object.keys(fields).forEach(f => {
@@ -341,7 +354,7 @@ function transfer_() {
       white: s.white, color: s.color, other: s.other, item: s.item, note: s.note,
       company: j.company, contact: j.contact, category: j.category, kind: j.kind, stepKind: j.stepKind,
       assignee: (ri && ri.assignee) || '', memo: '', exclude: false,
-      transferredAt: stamp, sentAt: '', result: j.note, srcRow: s.srcRow, link: s.link,
+      transferredAt: stamp, sentAt: '', result: j.note, srcRow: s.srcRow, link: s.link, split: s.split,
     };
     appends.push(rowObjToArray_(rowObj, col));
   });
@@ -418,6 +431,7 @@ function readStaffRows_(cfg) {
       other: toHours_(at(v, sc.other)),
       done: isChecked_(at(v, sc.done)),
       regNo: opt(v, sc.regNo, trimStr_),
+      split: opt(v, sc.split, trimStr_),
     });
   }
   return rows;
@@ -528,6 +542,7 @@ function collectSourceRows_(staffRows, today) {
       deadline: r.deadlineRaw === undefined ? undefined : parseDeadline_(r.deadlineRaw, today || new Date()),
       white: r.white, color: r.color, other: r.other,
       regNo: r.regNo || '',
+      split: r.split,
     });
   });
   out.waiting = waiting;
@@ -834,13 +849,15 @@ function buildTaskRecords_(row, ctx) {
 
   const key = vpKey_(projectName, viewpointName);
   const vpTasks = (ctx.byVp && ctx.byVp.get(key)) || [];
-  // 担当者：シート → 既存視点の担当者（最新） → 既定
-  let assignee = trimStr_(row.assignee);
-  if (!assignee && vpTasks.length) {
+  // 担当者：シート → 既存視点の担当者（最新） → 作業の種類ごとの既定（『設定』） → 既定
+  let baseAssignee = trimStr_(row.assignee);
+  if (!baseAssignee && vpTasks.length) {
     const latest = vpTasks.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0];
-    assignee = trimStr_(latest.assignee);
+    baseAssignee = trimStr_(latest.assignee);
   }
-  if (!assignee) assignee = ctx.defaultAssignee || '未割当';
+  const kindAssignees = ctx.kindAssignees || {};
+  const assigneeFor = (kindKey) => baseAssignee || trimStr_(kindAssignees[kindKey]) || ctx.defaultAssignee || '未割当';
+  const notes = [];
 
   let order = vpTasks.reduce((m, t) => Math.max(m, typeof t.stepOrder === 'number' ? t.stepOrder : -1), -1) + 1;
   const typeCounts = {};
@@ -858,22 +875,44 @@ function buildTaskRecords_(row, ctx) {
     // パース以外（写真合成・モデル・VR・動画など）は1ステップ（時間は合計）。修正・変更の回は名前に付ける
     const single = SINGLE_STEP[kind] || [kind, 'single'];
     const suffix = stepKind === STEP_KIND.FIX ? '（修正）' : stepKind === STEP_KIND.CHANGE ? '（変更）' : '';
-    wants.push({ typeId: '', name: single[0] + suffix, tag: single[1], hours: Math.round((white + color + other) * 100) / 100 });
+    wants.push({ typeId: '', name: single[0] + suffix, tag: single[1], hours: Math.round((white + color + other) * 100) / 100, kindKey: 'single' });
   } else {
-    if (white > 0) wants.push({ typeId: stepTypeIdFor_('white', stepKind), hours: white });
-    if (color > 0) wants.push({ typeId: stepTypeIdFor_('color', stepKind), hours: color });
-    if (other > 0) wants.push({ typeId: 'person_scene', hours: other }); // 人物・点景・色分 → 人物＋添景合成
+    // 「作業の分け方」（White＝躯体 3h／家具1 2h …）があれば、その種類は分けた作業ごとのステップにする
+    const split = parseSplit_(row.split);
+    const pushKind = (kindKey, typeId, hours, kindLabel) => {
+      if (hours <= 0) return;
+      const parts = split[kindKey] || [];
+      if (parts.length >= 2) {
+        const sum = Math.round(parts.reduce((a, p) => a + p.hours, 0) * 100) / 100;
+        const single = String(row.key) + '::' + typeId;
+        if (ctx.byExt && ctx.byExt.get(single)) {
+          notes.push(kindLabel + 'は分けずに登録済みのため「作業の分け方」は反映しません（必要なら工程図で分けてください）');
+        } else if (Math.abs(sum - hours) > 0.01) {
+          notes.push(kindLabel + 'の「作業の分け方」の合計（' + sum + 'h）が ' + kindLabel + ' の時間（' + hours + 'h）と合わないので、分けずに登録しました');
+        } else {
+          parts.forEach((p, i) => wants.push({ typeId, hours: p.hours, kindKey, part: { label: p.label, index: i + 1 } }));
+          return;
+        }
+      }
+      wants.push({ typeId, hours, kindKey });
+    };
+    pushKind('white', stepTypeIdFor_('white', stepKind), white, 'White');
+    pushKind('color', stepTypeIdFor_('color', stepKind), color, 'Color');
+    pushKind('other', 'person_scene', other, 'pts'); // 人物・点景・色分 → 人物＋添景合成
   }
 
   const records = [];
   let seq = 0;
+  const partFirst = {}; // 分けた作業の1つ目のステップ名・納品名の接尾語（2つ目以降は同じ納品にする）
   wants.forEach(w => {
-    const externalId = String(row.key) + '::' + (w.typeId || w.tag);
+    const externalId = String(row.key) + '::' + (w.typeId || w.tag) + (w.part ? '#' + w.part.index : '');
     if (ctx.deleted && ctx.deleted.has(externalId)) { records.push({ externalId, skippedDeleted: true }); return; }
     const existing = ctx.byExt && ctx.byExt.get(externalId);
     if (existing) {
       const changes = {};
-      if (existing.status !== 'done' && Number(existing.hours) !== w.hours) changes.hours = w.hours;
+      // 工程図で「サポート（分担）」した作業（hoursLocked）は、シートの時間で戻さない
+      if (existing.status !== 'done' && !existing.hoursLocked && Number(existing.hours) !== w.hours) changes.hours = w.hours;
+      if (existing.hoursLocked && Number(existing.hours) !== w.hours) notes.push((existing.stepName || '作業') + 'は工程図で分担済みのため、時間はシートから更新しません');
       if ((existing.projectName || '') !== projectName) changes.projectName = projectName;
       if ((existing.projectNameInternal || '') !== projectNameInternal) changes.projectNameInternal = projectNameInternal;
       if ((existing.companyName || '') !== company) changes.companyName = company;
@@ -887,19 +926,25 @@ function buildTaskRecords_(row, ctx) {
     const ty = w.typeId ? typeById.get(w.typeId) : null;
     let label = w.name || w.typeId;
     let deliverySuffix = '';
-    if (ty) {
+    const firstPart = w.part && w.part.index > 1 ? partFirst[w.typeId] : null;
+    if (firstPart) {
+      label = firstPart.label;
+      deliverySuffix = firstPart.deliverySuffix;
+    } else if (ty) {
       let n = 1;
       if (ty.numbered) { typeCounts[ty.id] = (typeCounts[ty.id] || 0) + 1; n = typeCounts[ty.id]; }
       label = resolveStepLabel_(ty.label, ty.numbered, n);
       if (ty.deliveryBase) { baseCounts[ty.deliveryBase] = (baseCounts[ty.deliveryBase] || 0) + 1; deliverySuffix = resolveDeliverySuffix_(ty.deliveryBase, baseCounts[ty.deliveryBase]); }
     }
+    if (w.part && w.part.index === 1) partFirst[w.typeId] = { label, deliverySuffix };
+    const stepLabel = w.part ? label + '（' + w.part.label + '）' : label;
     const createdAt = ctx.now + seq;
     const id = 'task-' + ctx.now + '-' + seq + '-' + Math.random().toString(36).slice(2, 7);
     const doc = {
       id,
       projectName, projectNameInternal, companyName: company, customerContact,
       viewpointName, viewpointNameExternal, viewpointCategory: category,
-      stepName: label, stepOrder: order, assignee,
+      stepName: stepLabel, stepOrder: order, assignee: assigneeFor(w.kindKey),
       priority: 99, hours: w.hours, completedHours: 0,
       memo, tentative: false, tentativeStart: null, tentativeEnd: null,
       deadline, projectDeadline: null, projectRequestDate: null,
@@ -908,13 +953,52 @@ function buildTaskRecords_(row, ctx) {
       stepTypeId: ty ? ty.id : '', stepDeliverySuffix: deliverySuffix,
       stepAmount: '', stepRequestDate: ctx.today, stepCompletedDate: '', stepDeliveryNameOverride: '',
       // 納品種類（売上・帳票の「初回/追加/修正」）。金額は工程図の請求パネルで入力する
-      stepRoundType: roundType, stepOutInHouse: '', stepOutExternal: '', stepOutVND: '',
+      // 分けた作業の2つ目以降は納品に数えない（納品はその種類で1回）
+      stepRoundType: w.part && w.part.index > 1 ? '' : roundType, stepOutInHouse: '', stepOutExternal: '', stepOutVND: '',
       externalId,
     };
     records.push({ id, externalId, update: false, doc });
     order++; seq++;
   });
-  return { records, errors };
+  return { records, errors, notes };
+}
+
+/**
+ * 「作業の分け方」の文字 → 種類ごとの作業（純ロジック）。
+ * 'White＝躯体 3h／家具1 2h／家具2 1h　Color＝外壁 2h／植栽 1h' → { white: [{label:'躯体',hours:3}, …], color: [...], other: [] }
+ * 種類の書き方：White/W/ホワイト/白、Color/C/カラー/色、pts/P/人物/合成（＝ か : のあと）。種類を書かない作業は直前の種類（最初は White）
+ */
+function parseSplit_(text) {
+  const out = { white: [], color: [], other: [] };
+  const src = String(text || '').trim();
+  if (!src) return out;
+  const kindOf = (t) => {
+    const k = t.toLowerCase();
+    if (/^(white|w|ホワイト|白|trắng)$/.test(k)) return 'white';
+    if (/^(color|colour|c|カラー|色|màu)$/.test(k)) return 'color';
+    if (/^(pts|p|人物|合成|ghép ảnh|ghép)$/.test(k)) return 'other';
+    return '';
+  };
+  let cur = 'white';
+  src.split(/[／\/;；\n、,，|｜]+/).forEach(seg0 => {
+    let seg = seg0.trim();
+    if (!seg) return;
+    const m = seg.match(/^([^=＝:：\s]+)\s*[=＝:：]\s*(.*)$/);
+    if (m && kindOf(m[1])) { cur = kindOf(m[1]); seg = m[2].trim(); }
+    // 1つの区切りに「種類＝」が2つ続く（'White＝躯体 3h Color＝外壁 2h'）ときも分ける
+    seg.split(/\s+(?=(?:white|w|color|c|pts|p|ホワイト|カラー|白|色|人物|合成)\s*[=＝:：])/i).forEach(part0 => {
+      let part = part0.trim();
+      const m2 = part.match(/^([^=＝:：\s]+)\s*[=＝:：]\s*(.*)$/);
+      if (m2 && kindOf(m2[1])) { cur = kindOf(m2[1]); part = m2[2].trim(); }
+      const mm = part.replace(/[０-９．]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+        .match(/^(.*?)\s*(\d+(?:\.\d+)?)\s*(?:h|hr|時間|giờ)?$/i);
+      if (!mm) return;
+      const label = mm[1].trim();
+      const hours = Math.round(parseFloat(mm[2]) * 100) / 100;
+      if (label && hours > 0) out[cur].push({ label, hours });
+    });
+  });
+  return out;
 }
 
 // ============ 2. 送信 ============
@@ -991,7 +1075,8 @@ function runSend_(dryRun, opts) {
     byVp.get(k).push(t);
   });
 
-  const ctx = { now: nowDate.getTime(), today: fmtYMD_(nowDate), defaultAssignee: cfg.defaultAssignee, stepTypes, byVp, byExt, deleted };
+  const ctx = { now: nowDate.getTime(), today: fmtYMD_(nowDate), defaultAssignee: cfg.defaultAssignee, stepTypes, byVp, byExt, deleted,
+    kindAssignees: { white: cfg.assigneeWhite, color: cfg.assigneeColor, other: cfg.assigneeOther, single: cfg.assigneeSingle } };
   const stamp = nowDate;
   const lines = [];
   let created = 0, updated = 0, errored = 0;
@@ -1010,7 +1095,7 @@ function runSend_(dryRun, opts) {
       lines.push('✕ ' + label + ': ' + built.errors.join(' / '));
       return;
     }
-    const warns = [];
+    const warns = (built.notes || []).slice();
     if (companies.size && !companies.has(trimStr_(row.company))) warns.push('会社名「' + row.company + '」は工程図の顧客マスタに未登録');
     let c = 0, u = 0, s = 0;
     built.records.forEach(rec => {
@@ -1853,7 +1938,8 @@ const STAFF_RULES_LINES = [
   ['', 'メモ：制作上の注意点など（自由記入）', 'Ghi chú: lưu ý khi thực hiện (nhập tự do)'],
   ['', '翻訳済み：通訳が資料を翻訳してエンジニアに伝えたらチェック（翻訳日時は自動で入ります）', 'Đã dịch: phiên dịch đánh dấu khi đã dịch tài liệu và truyền đạt cho kỹ sư (thời gian tự động ghi)'],
   ['', '翻訳メモ：通訳がお客様の指示の訳・注意点を書く', 'Ghi chú dịch: phiên dịch ghi nội dung dịch yêu cầu của khách, lưu ý'],
-  ['', '作業の分け方：分けて作業できるときに書く（例 White＝躯体 3h／家具1 2h／家具2 1h）', 'Cách chia công việc: ghi khi có thể chia việc (VD: White = khung 3h / nội thất 1 2h / nội thất 2 1h)'],
+  ['', '作業の分け方：分けて作業できるときに書く（例 White＝躯体 3h／家具1 2h／家具2 1h）。工程図ではこの作業ごとに分かれます。分けた時間の合計は White などの時間と同じにしてください',
+    'Cách chia công việc: ghi khi có thể chia việc (VD: White = khung 3h / nội thất 1 2h / nội thất 2 1h). 工程図 sẽ chia theo từng việc. Tổng giờ phải bằng giờ White…'],
   ['', '時間入力者：制作時間を決めた人の名前（時間入力日時・合計は自動で入ります）', 'Người nhập giờ: tên người quyết định số giờ (thời gian nhập và tổng tự động ghi)'],
   ['', '登録No：管理者が登録した行に自動で入ります。変えないでください', 'Mã đăng ký: tự động có ở dòng do quản lý đăng ký. Không sửa'],
   ['', '納品名：工程図に登録されると、納品するファイルの名前が自動で入ります。納品のときはこの名前を使ってください', 'Tên file giao: tự động có sau khi đăng ký vào 工程図. Khi giao hàng, hãy dùng tên này'],
@@ -2168,6 +2254,7 @@ function readSettings_() {
   cfg.tabName = trimStr_(cfg.tabName);
   cfg.startRow = parseInt(cfg.startRow, 10) || 0;
   cfg.defaultAssignee = trimStr_(cfg.defaultAssignee) || '未割当';
+  ['assigneeWhite', 'assigneeColor', 'assigneeOther', 'assigneeSingle'].forEach(k => { cfg[k] = trimStr_(cfg[k]); });
   cfg.projectId = trimStr_(cfg.projectId);
   cfg.workspaceId = trimStr_(cfg.workspaceId);
   cfg.autoSend = !/^(しない|いいえ|off|no|false)$/i.test(trimStr_(cfg.autoSend));
@@ -2253,6 +2340,9 @@ const HOWTO_LINES = [
   '5. 翻訳済みになってから2時間たっても時間が空なら Discord で催促し、以降1時間ごとにくり返します（『設定』で時間・時間帯を変えられます。Webhook はメニュー「Discord 通知の設定」）。',
   '6. 時間が入った行は、いつもどおり『連携』へ転記され、工程図に登録されます。『案件登録』の担当者・納期が工程図に入ります。',
   '7. 工程図で決まった納品名（ファイル名）は、『案件登録』と入力シートの「納品名」列に自動で表示されます（工程図で納品名を直すと、次の自動実行で追従）。',
+  '・「作業の分け方」（例 White＝躯体 3h／家具1 2h／家具2 1h）が書いてあると、工程図ではその作業ごとのステップ（ホワイト（躯体）…）に分けて登録します。分けた時間の合計が White などの時間と合わないときは分けずに登録し、「結果」に書きます。',
+  '・担当者：『案件登録』（『連携』）の担当者 → その視点の前回の担当者 → 『設定』の「既定の担当者（ホワイト／カラー／pts／写真合成・モデル・VR・動画）」→「既定の担当者」の順に決まります。',
+  '・工程図で「サポート（分担）」した作業は、シートから送り直しても時間を戻しません。',
   '・『案件登録』で会社コード・視点などを直すと、入力シートの行も直ります。入力シートの行を消すと、状態が「入力シートに無い」になります（もう一度写したいときは登録Noを消す）。',
   '',
   '■ エンジニアが書く場所',

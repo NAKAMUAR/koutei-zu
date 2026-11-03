@@ -5,6 +5,7 @@ import { addDays, dayName, fmtHM, fmtMD, fmtYMD, getProjectColor, minToTime } fr
 import { Check, ChevronDown, ChevronUp, PauseCircle, PlayCircle, User } from 'lucide-react';
 import { groupByViewpoint, sortAssigneesByMaster } from '../../lib/schedule.js';
 import { DateTimeField } from '../../components/common.jsx';
+import { DeliveryChecklist } from '../../components/DeliveryChecklist.jsx';
 
 // ============ 制作中断セクション ============
 // 納品後の確認待ちなどで進行できない案件を、一旦スケジュールから外して表示する。
@@ -293,6 +294,8 @@ function ReviewCard({ g }) {
           style={{ padding: '4px 8px', border: `1px solid ${colors.border}`, borderRadius: 3, fontFamily: fontJP, fontSize: 12 }} />
         <span style={{ fontSize: 10, color: colors.textMute }}>この日になったら自動で納品完了（空欄なら、最後の更新から{REVIEW_AUTO_DONE_DAYS}日）</span>
       </div>
+
+      <DeliveryChecklist tasks={g.tasks} />
 
       <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
         <textarea

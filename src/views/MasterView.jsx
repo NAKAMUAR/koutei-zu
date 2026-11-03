@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useApp } from '../appContext.js';
 import { PricingEditor } from '../components/PricingEditor.jsx';
+import { ChecklistEditor } from '../components/DeliveryChecklist.jsx';
 import { ChevronDown, ChevronUp, GripVertical, Plus, Search, Trash2, X } from 'lucide-react';
 import { VN_LUNAR_HOLIDAYS, dayName, expandHolidayDates, fmtMD, fmtYMD, getProjectColor, isValidWorkHours, minToTime, timeToMin, vietnamHolidayCandidates } from '../lib/utils.js';
 import { TimeSelect } from '../components/common.jsx';
@@ -564,6 +565,11 @@ function MasterView() {
       {/* 目安金額の単価（視点・パターンごとの時間単価） */}
       <section style={cardStyle}>
         <PricingEditor />
+      </section>
+
+      {/* 納品前チェックの項目（確認待ちのカードに出る） */}
+      <section style={cardStyle}>
+        <ChecklistEditor />
       </section>
 
       </>)}

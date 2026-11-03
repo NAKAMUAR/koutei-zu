@@ -4,6 +4,7 @@ import { useApp } from '../appContext.js';
 import { addDays, dayName, fmtMD, fmtYMD, fmtYMDJP, getProjectColor, isSameDay, minToTime, priorityColor, sheetsLabel, startOfDay } from '../lib/utils.js';
 import { buildDoneSlots, companySequence, groupByViewpoint, sortAssigneesByMaster } from '../lib/schedule.js';
 import { Check, MessageSquare, TrendingUp } from 'lucide-react';
+import { AssigneeScheduleText } from './AssigneeScheduleText.jsx';
 
 
 // 案件が無くても会社別連絡文に常に表示する会社
@@ -381,6 +382,10 @@ function MessageView() {
           <div style={{ fontSize: 10, color: colors.textMute, marginTop: 6 }}>
             ※ 進行中案件から自動生成。案件識別子は「社内案件名」を優先（無ければ社外案件名）。表示順は登録順。
           </div>
+        </Section>
+
+        <Section icon="🇻🇳" title="担当者別スケジュール（ベトナム語・コピー用）">
+          <AssigneeScheduleText />
         </Section>
 
         <Section icon="📅" title="本日のタスク">

@@ -7,6 +7,7 @@ import { Check, CheckCircle2, ChevronDown, ChevronUp, Clock, Copy, Edit2, FileTe
 import { ROUND_TYPES, deliveryBaseName, num as vpNum, roundTypeOf, stepDeliveryName } from '../../viewpoint/viewpointUtils.js';
 import { DateTimeField, iconBtnStyle, miniBtnStyle, progressBtnStyle } from '../../components/common.jsx';
 import { estimateForSteps } from '../../lib/stage.js';
+import { SupportDialog } from '../../components/SupportDialog.jsx';
 
 // 登録日時（createdAt）の表示用フォーマット：M/D HH:MM（年が違う場合のみ YYYY/ を前置）
 function fmtRegDateTime(ts) {
@@ -969,6 +970,7 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
   const [editingPriority, setEditingPriority] = useState(false);
   const [priorityInput, setPriorityInput] = useState(String(task.priority));
   const [dragHover, setDragHover] = useState(false);
+  const [supportOpen, setSupportOpen] = useState(false); // サポート（分担）の画面
   const [editingStart, setEditingStart] = useState(false);
   const [startInput, setStartInput] = useState('');
   const [editingEnd, setEditingEnd] = useState(false);
@@ -1229,6 +1231,14 @@ function StepRow({ task, now, showStepLabel, onEdit, onDelete, onToggle, onMoveU
                 {(assigneeList || []).filter(a => a && a !== task.assignee).map(a => <option key={a} value={a}>{a}</option>)}
                 <option value="__new__">＋ 新しい担当者…</option>
               </select>
+              {task.status !== 'done' && (Number(task.hours) || 0) - (Number(task.completedHours) || 0) > 0.5 && (
+                <button type="button" onClick={() => setSupportOpen(true)}
+                  title="この作業の残り時間の一部を、別の担当者に分担する"
+                  style={{ marginLeft: 4, padding: '1px 6px', border: `1px solid ${colors.border}`, borderRadius: 3, background: '#fff', color: colors.textMute, fontFamily: fontJP, fontSize: 10.5, cursor: 'pointer' }}>
+                  サポート
+                </button>
+              )}
+              {supportOpen && <SupportDialog task={task} onClose={() => setSupportOpen(false)} />}
             </span>
           )}
           <span style={{ display: 'flex', alignItems: 'center', gap: 2 }}>

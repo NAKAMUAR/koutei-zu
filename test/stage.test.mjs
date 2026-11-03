@@ -5,6 +5,8 @@ import {
   computeViewpointStages, isReviewDue, calcYen, calcVND, estimateForSteps, normalizePricing,
   progressCodes, buildProgressPrompt, parseProgressReport, parseHoursText, progressTarget, invoicedTaskIds,
 } from '../src/lib/stage.js';
+import { splitForSupport } from '../src/lib/support.js';
+import { buildAssigneeSchedule, viStepName } from '../src/lib/viSchedule.js';
 
 let passed = 0;
 function test(name, fn) { fn(); passed++; console.log('  ok  ' + name); }
@@ -55,6 +57,10 @@ test('納品済み（確認待ち）→ 請求待ち → 請求済み', () => {
   const r = computeViewpointStages([rv], [], NOW, {})[0];
   assert.equal(r.stage, 'delivered');
   assert.equal(r.reviewDueDate, '2030-01-10');
+  const rc = computeViewpointStages([{ ...rv, deliveryChecks: { a: true }, deliveryCheckedBy: '中村', deliveryCheckedAt: 9 }], [], NOW, {})[0];
+  assert.deepEqual(rc.deliveryChecks, { a: true });
+  assert.equal(rc.deliveryCheckedBy, '中村');
+  assert.equal(rc.deliveryCheckedAt, 9);
   const fin = step({ hours: 2, completedHours: 2, status: 'done', viewpointName: 'IN3' });
   assert.deepEqual(stageOf([fin]), ['billing']);
   assert.deepEqual(stageOf([{ ...fin, invoiceCheckedAt: 1 }]), ['billed']);
@@ -152,3 +158,49 @@ test('番号が重なったら長くする', () => {
 });
 
 console.log(`stage: ${passed} tests passed`);
+
+// ---- サポート（分担） ----
+{
+  const t = { id: 't1', assignee: 'Quynh', hours: 6, completedHours: 1, stepName: 'ホワイト', stepOrder: 0, externalId: 'RIC34::EX1::1::white', stepRoundType: 'initial', stepAmount: '15000', projectName: 'X', viewpointName: 'EX1', status: 'pending' };
+  const r = splitForSupport(t, 'Tú Mĩ', 2, 't2', 5);
+  assert.equal(r.original.hours, 4);
+  assert.equal(r.original.hoursLocked, true);
+  assert.equal(r.support.assignee, 'Tú Mĩ');
+  assert.equal(r.support.hours, 2);
+  assert.equal(r.support.completedHours, 0);
+  assert.equal(r.support.stepName, 'ホワイト（サポート）');
+  assert.equal(r.support.stepOrder, 0.5);
+  assert.equal(r.support.externalId, null, 'シートの行とは結び付けない');
+  assert.equal(r.support.stepRoundType, '', '納品に数えない');
+  assert.equal(r.support.stepAmount, '', '売上に出さない');
+  assert.equal(r.support.supportOf, 't1');
+  assert.equal(splitForSupport(t, 'Tú Mĩ', 5, 't2', 5), null, '残り（5h）以上は渡せない');
+  assert.equal(splitForSupport(t, '', 1, 't2', 5), null);
+  assert.equal(splitForSupport(t, 'A', 0, 't2', 5), null);
+  console.log('  ok  サポート（分担）');
+}
+
+// ---- 担当者別スケジュール文（ベトナム語） ----
+{
+  assert.equal(viStepName('ホワイト'), 'Trắng / ホワイト');
+  assert.equal(viStepName('カラー修正2回目（無料）'), 'Màu (sửa) / カラー修正2回目（無料）');
+  assert.equal(viStepName('ホワイト（サポート）'), 'Trắng – hỗ trợ / ホワイト（サポート）');
+  assert.equal(viStepName('打合せ'), '打合せ');
+  const d = (s) => new Date(s + 'T00:00:00');
+  const active = [
+    { id: 'a', assignee: 'Quynh', projectNameInternal: 'RIC.34', projectName: 'マンション', viewpointName: 'EX1-A', stepName: 'ホワイト', deadline: '2030-01-09',
+      slots: [{ date: d('2030-01-07'), startMin: 480, endMin: 720 }, { date: d('2030-01-08'), startMin: 780, endMin: 900 }] },
+    { id: 'b', assignee: 'Quynh', projectName: '戸建て', viewpointName: 'IN1', stepName: 'カラー', slots: [{ date: d('2030-01-07'), startMin: 780, endMin: 840 }] },
+    { id: 'c', assignee: '他の人', projectName: 'X', viewpointName: 'EX1', stepName: 'ホワイト', slots: [{ date: d('2030-01-07'), startMin: 480, endMin: 600 }] },
+  ];
+  const text = buildAssigneeSchedule(active, 'Quynh', d('2030-01-07'), 1);
+  assert.ok(text.startsWith('📅 Lịch làm việc / 作業予定 – Quynh'));
+  assert.ok(text.includes('【07/01 (T2) / 1/7(月)】'));
+  assert.ok(text.includes('08:00–12:00  RIC.34 マンション ／ EX1-A ／ Trắng / ホワイト  4h ⏰ hạn/納期 09/01'));
+  assert.ok(text.includes('13:00–14:00  戸建て ／ IN1 ／ Màu / カラー  1h'));
+  assert.ok(!text.includes('他の人') && !text.includes('1/8'), '1日分・本人だけ');
+  assert.ok(text.endsWith('Tổng / 合計: 5h'));
+  assert.ok(buildAssigneeSchedule(active, 'Quynh', d('2030-01-07'), 7).includes('1/8(火)'));
+  assert.equal(buildAssigneeSchedule(active, 'だれも', d('2030-01-07'), 7), '');
+  console.log('  ok  担当者別スケジュール文（ベトナム語）');
+}
