@@ -27,6 +27,7 @@ const SalesView = lazy(() => import('./sales/SalesView.jsx'));
 const ProjectSheetView = lazy(() => import('./project/ProjectSheetView.jsx'));
 const CompanySummaryView = lazy(() => import('./sales/CompanySummaryView.jsx'));
 const SheetExportView = lazy(() => import('./views/SheetExportView.jsx'));
+const LegacyImportView = lazy(() => import('./views/LegacyImportView.jsx'));
 export default function App() {
   const [tasks, setTasks] = useState([]);
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
@@ -597,6 +598,17 @@ export default function App() {
     if (upserts.length === 0) return;
     try { await tasksStore.batch(upserts, []); }
     catch (e) { console.error('タスク保存エラー:', e); }
+  };
+
+  // 過去分の取り込み：まとめて登録／まとめて取り消し（450件ずつ Firestore へ）
+  const importLegacyTasks = (list) => saveTasks(prev => [...prev, ...(list || [])]);
+  const removeTasksByIds = async (ids) => {
+    const set = new Set(ids || []);
+    const filtered = tasksRef.current.filter(t => !set.has(t.id));
+    setTasks(filtered);
+    tasksRef.current = filtered;
+    try { await tasksStore.batch([], [...set]); }
+    catch (e) { console.error('タスク一括削除エラー:', e); }
   };
 
   const removeTask = async (id) => {
@@ -2284,7 +2296,7 @@ export default function App() {
     handleEdit, handleEditProject, handleEditViewpoint, handleAddViewpointToProject,
     handleDeleteViewpoint, handleDelete, toggleStatus, moveUp, moveDown, changePriority,
     addProgress, setTaskHours, setTaskCompletedHours, setTaskManualStart, setTaskManualEnd,
-    setTaskAssignee, splitTaskForSupport, completeProject, cancelProject, suspendProject, completeViewpoint,
+    setTaskAssignee, splitTaskForSupport, importLegacyTasks, removeTasksByIds, completeProject, cancelProject, suspendProject, completeViewpoint,
     handleAddStepToViewpoint, reassignViewpoint, setViewpointDeadline, setViewpointMeta,
     setStepMeta, patchTasksByIds, addProjectFromSheet, createBillingFromViewpoint, saveProjectInfo, setProjectDeadline,
     finalizeReview, reopenReview, setReviewNote, setReviewActualEnd, resumeProject,
@@ -2319,6 +2331,7 @@ export default function App() {
     { id: 'projectSheet', icon: <ClipboardList size={15} />, label: '案件整理' },
     { id: 'companySummary', icon: <TrendingUp size={15} />, label: '会社別集計' },
     { id: 'sheetExport', icon: <Table size={15} />, label: 'シート貼り付け用' },
+    { id: 'legacyImport', icon: <ClipboardList size={15} />, label: '過去分の取り込み' },
   ];
 
   return (
@@ -2431,6 +2444,7 @@ export default function App() {
             colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
         )}
         {view === 'sheetExport' && <SheetExportView />}
+        {view === 'legacyImport' && <LegacyImportView />}
         {view === 'companySummary' && (
           <CompanySummaryView tasks={tasks} now={now}
             colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
