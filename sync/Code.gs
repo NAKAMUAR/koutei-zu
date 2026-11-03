@@ -1709,65 +1709,118 @@ function entryFormHtml_(o) {
 }
 // ============ 『案件入力』タブ（シートの中の縦型フォーム。1案件ずつ） ============
 // 2026-11-04：メニューを開かなくても使えるよう、縦型の入力フォームをタブにした。
-//   ① 視点の番号にチェック → ② まとめてパターン（全部の視点に付く）→ ③「登録する行」が自動でできる（パターン・社外視点名は行ごとに直せる）
-//   「前回の視点を呼び出す」にチェックすると、同じ会社コード・案件番号で前回登録した視点（社外視点名も）が入る。
-//   「登録」にチェック → 『登録一覧』に視点ごとの行を書き、すぐ登録No を付けてエンジニア入力シートへ写す。フォームは空に戻る。
+//   ① 視点を選ぶ（日本語の区分ごとに番号のチェックボックス）→ ② 登録する視点（1行ずつ：部屋名・パターン・＋・外す・社外視点名）
+//   パターンは視点ごとに「＋」で足す（＋にチェック：パターンなし → A・B、A があれば次の文字）。
+//   部屋名（2F など）を書くと、社外視点名の頭に付き（2F外観目線視点①）、エンジニア入力シートの視点は EXE1_2F になる。
+//   部屋名に「2F,3F」と書くと、部屋ごとの行に分かれる。
+//   「前回の視点を呼び出す」にチェックすると、同じ会社コード・案件番号で前回登録した視点（部屋名・パターン・社外視点名も）が入る。
+//   「登録」にチェック → 通訳へのメッセージを書く小さな画面が出る →「登録する」で『登録一覧』とエンジニア入力シートへ。フォームは空に戻る。
 const FORM_TITLE = '案件入力（1案件ずつ登録）';
-const FORM_FIELDS = ['code', 'number', 'name', 'assignee', 'request', 'link', 'deadline', 'order', 'memo', 'toInterp'];
+const FORM_FIELDS = ['code', 'number', 'name', 'assignee', 'request', 'link', 'deadline', 'order', 'memo'];
 const FORM_L = {
-  prev: '前回の視点を呼び出す', pick: '① 視点を選ぶ', pat: '② まとめてパターン', patBox: '（パターンにチェック）',
-  sum: '登録する視点', submit: '登録', result: '結果', list: '③ 視点',
+  prev: '前回の視点を呼び出す', pick: '① 視点を選ぶ', sum: '登録する視点', submit: '登録', result: '結果', list: '② 視点',
 };
 const FORM_COLS = 21; // A＝項目名、B〜U＝入力（視点の番号は 1〜20）
+const FORM_KEY_COL = 22; // V（隠し列）：視点コード（EXE・EXE1 など）
 const FORM_LIST_ROWS = 40;
+// ② の列：A 視点（日本語）、B:D 部屋名、E:F パターン、G ＋、H 外す、I:U 社外視点名、V 視点コード
+const FORM_LC = { label: 1, room: 2, pattern: 5, plus: 7, del: 8, ext: 9 };
 const FORM_FIELD_NOTES = {
   code: '必須。REN・RIC など', number: '必須。数字だけ（例 50）', assignee: '工程図の担当者（入力シートには写さない）',
   request: '必須。この案件の視点すべてに同じものが入る', deadline: '入力シートには写さない（工程図の納期に入る）',
-  memo: '管理者だけのメモ（入力シートには写さない）', toInterp: '入力シートの「管理者からの連絡」に写る',
+  memo: '管理者だけのメモ（入力シートには写さない）',
 };
-/** 社外視点名の自動の値（'EX1', 'A' → 外観目線視点①_パターンA） */
-function formAutoExt_(cut, pattern, views) {
-  const c = trimStr_(cut).toUpperCase();
+/** 視点コード＋部屋名 → 視点（工程図・入力シートで使う名前）：'EXE1', '2F' → 'EXE1_2F' */
+function formCut_(code, room) {
+  const c = trimStr_(code).toUpperCase(), r = formRoom_(room);
+  return r ? c + '_' + r : c;
+}
+function formRoom_(room) { return trimStr_(room).replace(/\s+/g, '').replace(/_/g, '-').toUpperCase(); }
+/** 視点 → { code, room }（'EXE1_2F' → EXE1 と 2F） */
+function formSplitCut_(cut) {
+  const s = trimStr_(cut).toUpperCase();
+  const m = s.match(/^([A-Z]+\d+)(?:_(.+))?$/);
+  return m ? { code: m[1], room: m[2] || '' } : { code: s, room: '' };
+}
+/** 視点コードの日本語（'EXE1' → 外観目線①。区分が無ければコードのまま） */
+function formViewLabel_(code, views) {
+  const c = trimStr_(code).toUpperCase();
+  const v = judgeViewpoint_(c, '', viewsOrDefault_(views));
+  return v.category ? v.category + circled_(cutNumber_(c)) : c;
+}
+/** 社外視点名の自動の値（'EXE1', '2F', 'A' → 2F外観目線視点①_パターンA） */
+function formAutoExt_(code, room, pattern, views) {
+  const c = trimStr_(code).toUpperCase();
   if (!c) return '';
   const v = judgeViewpoint_(c, '', viewsOrDefault_(views));
-  return externalViewpointName_(v.external, cutNumber_(c), pattern);
+  const base = externalViewpointName_(v.external, cutNumber_(c), pattern);
+  return base ? formRoom_(room) + base : '';
 }
-/** 社外視点名が自動の値のままか（パターンだけ違うものも自動とみなす。人が書き換えた名前は残す） */
-function formIsAutoExt_(ext, cut, views) {
-  const e = trimStr_(ext);
+/** 社外視点名が自動の値のままか（部屋名・パターンだけ違うものも自動とみなす。人が書き換えた名前は残す） */
+function formIsAutoExt_(ext, code, views) {
+  const e = trimStr_(ext).replace(/_パターン[A-Z]+$/, '');
   if (!e) return true;
-  const base = formAutoExt_(cut, '', views);
-  return !!base && (e === base || e.indexOf(base + '_パターン') === 0);
+  const base = formAutoExt_(code, '', '', views);
+  return !!base && e.slice(-base.length) === base;
 }
-/**
- * ③ の行を作り直す（純ロジック）。
- * cuts＝①でチェックした視点（並び順）、pats＝②でチェックしたパターン、current＝今の③の行 [{cut, pattern, ext}]、
- * bulk＝②を変えたときは true（全部の視点のパターンを付け直す。人が書き換えた社外視点名は同じ視点・パターンなら残す）。
- * ①だけ変えたときは、チェックが残っている視点の行はそのまま（行ごとに直したパターン・社外視点名を保つ）
- */
-function formListMerge_(cuts, pats, current, bulk, views) {
-  const patterns = pats && pats.length ? pats : [''];
-  const keyOf = (c, p) => normCut_(viewpointNameOf_(c, p));
-  const keptExt = {};
-  (current || []).forEach(r => { if (!formIsAutoExt_(r.ext, r.cut, views)) keptExt[keyOf(r.cut, r.pattern)] = trimStr_(r.ext); });
-  const out = [];
-  cuts.forEach(c => {
-    const mine = (current || []).filter(r => normCut_(r.cut) === normCut_(c));
-    if (!bulk && mine.length) { mine.forEach(r => out.push({ cut: c, pattern: normPattern_(r.pattern), ext: trimStr_(r.ext) || formAutoExt_(c, r.pattern, views) })); return; }
-    patterns.forEach(p => out.push({ cut: c, pattern: p, ext: keptExt[keyOf(c, p)] || formAutoExt_(c, p, views) }));
+/** ② の行をそろえる（純ロジック）：部屋名「2F,3F」を行に分け、自動の社外視点名を付け直し、同じ視点・部屋・パターンの重複を消す */
+function formNormalizeRows_(rows, views) {
+  const out = [], seen = new Set();
+  (rows || []).forEach(r => {
+    const rooms = String(r.room || '').split(/[,、，\/／]+/).map(formRoom_);
+    const list = rooms.filter(Boolean).length ? rooms.filter(Boolean) : [''];
+    list.forEach(room => {
+      const code = trimStr_(r.code).toUpperCase();
+      const pattern = normPattern_(r.pattern);
+      const key = code + '|' + room + '|' + pattern;
+      if (!code || seen.has(key)) return;
+      seen.add(key);
+      const ext = formIsAutoExt_(r.ext, code, views) ? formAutoExt_(code, room, pattern, views) : trimStr_(r.ext);
+      out.push({ code, room, pattern, ext });
+    });
   });
   return out;
 }
-/** 『案件入力』タブの各行の場所を A列の文字から探す */
+/**
+ * ① のチェックから ② の行を作り直す（純ロジック）。チェックが残っている視点の行はそのまま（部屋名・パターン・社外視点名を保つ）、
+ * 新しくチェックした視点は1行足し、チェックを外した視点の行は消す。並びは①の順
+ */
+function formListMerge_(codes, current, views) {
+  const out = [];
+  codes.forEach(c => {
+    const mine = (current || []).filter(r => trimStr_(r.code).toUpperCase() === c);
+    if (mine.length) mine.forEach(r => out.push(r));
+    else out.push({ code: c, room: '', pattern: '', ext: '' });
+  });
+  return formNormalizeRows_(out, views);
+}
+/** 「＋」：その視点（同じ部屋）にパターンを1つ足す（純ロジック）。パターンなしなら A・B にする */
+function formAddPattern_(rows, i) {
+  const r = rows[i];
+  const same = rows.filter(x => x.code === r.code && x.room === r.room);
+  const used = same.map(x => x.pattern).filter(Boolean);
+  const nextFree = () => PATTERN_OPTIONS.find(p => used.indexOf(p) < 0);
+  if (!r.pattern) { const p = nextFree(); if (!p) return rows; r.pattern = p; used.push(p); }
+  const p = nextFree();
+  if (!p) return rows;
+  let last = i;
+  rows.forEach((x, j) => { if (x.code === r.code && x.room === r.room) last = j; });
+  rows.splice(last + 1, 0, { code: r.code, room: r.room, pattern: p, ext: '' });
+  return rows;
+}
+/** 『案件入力』タブの各行の場所を A列（項目名）と V列（視点コード）から探す */
 function formMap_(sheet) {
   const n = Math.min(sheet.getMaxRows(), 300);
-  const a = sheet.getRange(1, 1, n, 1).getValues().map(r => trimStr_(r[0]));
+  const width = Math.min(sheet.getMaxColumns(), FORM_KEY_COL);
+  const vals = sheet.getRange(1, 1, n, width).getValues();
+  const a = vals.map(r => trimStr_(r[0]));
+  const key = vals.map(r => trimStr_(r[FORM_KEY_COL - 1]));
   const at = (label) => a.indexOf(label) + 1;
   const m = { fields: {}, grid: [] };
   FORM_FIELDS.forEach(k => { m.fields[k] = at(REG_H[k]); });
   Object.keys(FORM_L).forEach(k => { m[k] = at(FORM_L[k]); });
-  if (!m.pick || !m.pat || !m.list || !m.submit) throw new Error('『' + SHEET.FORM + '』タブの形が崩れています。メニュー「『案件入力』タブを作り直す」を実行してください');
-  for (let r = m.pick + 1; r < m.pat; r++) if (a[r - 1]) m.grid.push({ row: r, keyword: a[r - 1] });
+  if (!m.pick || !m.sum || !m.list || !m.submit || width < FORM_KEY_COL) throw new Error('『' + SHEET.FORM + '』タブの形が崩れています。メニュー「『案件入力』タブを作り直す」を実行してください');
+  for (let r = m.pick + 1; r < m.sum; r++) if (key[r - 1]) m.grid.push({ row: r, keyword: key[r - 1] });
   m.list1 = m.list + 1;
   m.list2 = Math.min(m.list + FORM_LIST_ROWS, n);
   return m;
@@ -1777,20 +1830,22 @@ function ensureFormSheet_(ss, masters, rebuild) {
   let sheet = ss.getSheetByName(SHEET.FORM);
   if (sheet && !rebuild && trimStr_(sheet.getRange(1, 1).getValue()) === FORM_TITLE) return sheet;
   if (!sheet) sheet = ss.insertSheet(SHEET.FORM, 0);
+  const views = viewsOrDefault_(masters.views);
   const keywords = viewKeywords_(masters.views);
-  const total = 2 + FORM_FIELDS.length + 2 + 1 + keywords.length + 2 + 1 + 3 + 1 + 1 + FORM_LIST_ROWS;
-  ensureSize_(sheet, total, FORM_COLS);
+  const total = 2 + FORM_FIELDS.length + 2 + 1 + keywords.length + 1 + 3 + 1 + 1 + FORM_LIST_ROWS;
+  ensureSize_(sheet, total, FORM_KEY_COL);
   const all = sheet.getRange(1, 1, sheet.getMaxRows(), sheet.getMaxColumns());
   all.breakApart(); all.clearDataValidations(); sheet.clear();
   const dv = () => SpreadsheetApp.newDataValidation();
   const box = () => dv().requireCheckbox().build();
   const list = (values, allowInvalid) => dv().requireValueInList(values, true).setAllowInvalid(allowInvalid).build();
-  const wide = (r, c) => sheet.getRange(r, c, 1, FORM_COLS - c + 1).merge();
+  const span = (r, c1, c2) => sheet.getRange(r, c1, 1, c2 - c1 + 1).merge();
+  const wide = (r, c) => span(r, c, FORM_COLS);
   const label = (r, text, bg) => sheet.getRange(r, 1).setValue(text).setFontWeight('bold').setBackground(bg || '#f3f3f3');
   sheet.setColumnWidth(1, 150);
   for (let c = 2; c <= FORM_COLS; c++) sheet.setColumnWidth(c, 34);
   sheet.getRange(1, 1).setValue(FORM_TITLE).setFontWeight('bold').setFontSize(14);
-  sheet.getRange(2, 1).setValue('上から書いて、①で視点の番号にチェック、②でパターンにチェック（全部の視点に付きます）。③の行は1行ずつ直せます。最後に「登録」にチェック。')
+  sheet.getRange(2, 1).setValue('上から書いて、①で視点の番号にチェック。②で視点ごとに部屋名・パターン（＋で足す）を直し、最後に「登録」にチェック（通訳へのメッセージはそのとき書きます）。')
     .setFontColor('#666666');
   wide(2, 1);
   let r = 3;
@@ -1808,82 +1863,104 @@ function ensureFormSheet_(ss, masters, rebuild) {
   sheet.getRange(F('deadline'), 2).setNumberFormat('yyyy-mm-dd');
   label(r, FORM_L.prev);
   sheet.getRange(r, 2).setDataValidation(box()).setValue(false);
-  sheet.getRange(r, 3).setValue('← チェックすると、同じ会社コード・案件番号で前回登録した視点（社外視点名も）が入り、新規or修正は「修正」になる').setFontColor('#666666');
+  sheet.getRange(r, 3).setValue('← チェックすると、同じ会社コード・案件番号で前回登録した視点（部屋名・パターン・社外視点名も）が入り、新規or修正は「修正」になる').setFontColor('#666666');
   wide(r, 3);
   r += 2;
-  // ① 視点を選ぶ：見出しの行に番号、キーワードごとにチェックボックス
+  // ① 視点を選ぶ：見出しの行に番号、区分（日本語）ごとにチェックボックス。V列に視点コード（隠し列）
   label(r, FORM_L.pick, '#d9ead3');
   const nums = []; for (let i = 1; i < FORM_COLS; i++) nums.push(i);
   sheet.getRange(r, 2, 1, FORM_COLS - 1).setValues([nums]).setFontWeight('bold').setHorizontalAlignment('center').setBackground('#d9ead3');
+  sheet.getRange(r, 1).setNote('番号にチェックすると②に1行できる。外すと②の行も消える');
   r++;
   keywords.forEach(k => {
-    label(r, k);
+    const v = views.find(x => x.keyword === k) || {};
+    label(r, v.category || k);
+    sheet.getRange(r, FORM_KEY_COL).setValue(k);
     const n = Math.min(VIEW_OPTION_COUNT[k] || VIEW_OPTION_COUNT_DEFAULT, FORM_COLS - 1);
     sheet.getRange(r, 2, 1, n).setDataValidation(box()).setValues([new Array(n).fill(false)]);
     if (n < FORM_COLS - 1) sheet.getRange(r, n + 2, 1, FORM_COLS - 1 - n).setBackground('#eeeeee');
     r++;
   });
-  // ② まとめてパターン：文字の行とチェックの行
-  label(r, FORM_L.pat, '#d9ead3');
-  sheet.getRange(r, 2, 1, PATTERN_OPTIONS.length).setValues([PATTERN_OPTIONS]).setFontWeight('bold').setHorizontalAlignment('center').setBackground('#d9ead3');
-  sheet.getRange(r, 1).setNote('チェックしたパターンが①の視点すべてに付く（何もチェックしなければパターンなし）。視点ごとに違うときは③の行で直す。②を変えると③のパターンは付け直しになる');
   r++;
-  label(r, FORM_L.patBox);
-  sheet.getRange(r, 2, 1, PATTERN_OPTIONS.length).setDataValidation(box()).setValues([new Array(PATTERN_OPTIONS.length).fill(false)]);
-  r += 2;
   const sumRow = r, submitRow = r + 1, resultRow = r + 2, listRow = r + 4;
-  const l1 = listRow + 1, l2 = listRow + FORM_LIST_ROWS;
   label(sumRow, FORM_L.sum, '#cfe2f3');
   wide(sumRow, 2);
-  const A = 'A' + l1 + ':A' + l2, B = 'B' + l1 + ':B' + l2;
-  sheet.getRange(sumRow, 2).setFormula('=IF(COUNTA(' + A + ')=0,"（①で視点を選ぶと、ここに出ます）",TEXTJOIN("・",TRUE,ARRAYFORMULA(IF(' + A + '="","",' + A + '&IF(' + B + '="","","-"&' + B + '))))&"（"&COUNTA(' + A + ')&"件）")')
-    .setFontWeight('bold');
+  sheet.getRange(sumRow, 2).setValue('（①で視点を選ぶと、ここに出ます）').setFontWeight('bold');
   label(submitRow, FORM_L.submit, '#cfe2f3');
   sheet.getRange(submitRow, 2).setDataValidation(box()).setValue(false);
-  sheet.getRange(submitRow, 3).setValue('← 確かめたらチェック。『登録一覧』とエンジニア入力シートに載り、このフォームは空に戻る').setFontColor('#666666');
+  sheet.getRange(submitRow, 3).setValue('← 確かめたらチェック。通訳へのメッセージを書く画面が出て、「登録する」で『登録一覧』とエンジニア入力シートに載る').setFontColor('#666666');
   wide(submitRow, 3);
   label(resultRow, FORM_L.result);
   wide(resultRow, 2);
   sheet.getRange(resultRow, 2).setWrap(true);
+  // ② 視点（1行ずつ）
   label(listRow, FORM_L.list, '#d9ead3');
-  sheet.getRange(listRow, 2).setValue('パターン').setFontWeight('bold').setBackground('#d9ead3');
-  sheet.getRange(listRow, 3).setValue('社外視点名（自動。お客様の呼び方が違うときだけ書き換える）').setFontWeight('bold').setBackground('#d9ead3');
-  wide(listRow, 3);
-  sheet.getRange(listRow, 1).setNote('①②から自動でできる。パターン・社外視点名は直してよい。視点を足すときは①でチェック。行を消すときは視点・パターンを消す');
-  sheet.getRange(l1, 1, FORM_LIST_ROWS, 1).setDataValidation(list(viewCodeOptions_(masters.views), true));
-  sheet.getRange(l1, 2, FORM_LIST_ROWS, 1).setDataValidation(list(PATTERN_OPTIONS, true));
-  for (let i = l1; i <= l2; i++) wide(i, 3);
-  sheet.setFrozenRows(0);
+  const head = (c, t) => sheet.getRange(listRow, c).setValue(t).setFontWeight('bold').setBackground('#d9ead3');
+  head(FORM_LC.room, '部屋名'); span(listRow, FORM_LC.room, FORM_LC.pattern - 1);
+  head(FORM_LC.pattern, 'パターン'); span(listRow, FORM_LC.pattern, FORM_LC.plus - 1);
+  head(FORM_LC.plus, '＋'); head(FORM_LC.del, '外す');
+  head(FORM_LC.ext, '社外視点名（自動。お客様の呼び方が違うときだけ書き換える）'); wide(listRow, FORM_LC.ext);
+  sheet.getRange(listRow, 1).setNote('①から自動でできる。部屋名（2F など）は社外視点名の頭に付き、入力シートの視点は EXE1_2F になる。「2F,3F」と書くと部屋ごとの行に分かれる。' +
+    '＋にチェックでその視点にパターンを足す（なし → A・B）。外すにチェックでその行を消す');
+  sheet.getRange(listRow, FORM_LC.plus).setNote('チェックすると、その視点（同じ部屋）にパターンを1つ足す。パターンなしなら A と B の2行になる');
+  for (let i = listRow + 1; i <= listRow + FORM_LIST_ROWS; i++) {
+    span(i, FORM_LC.room, FORM_LC.pattern - 1);
+    span(i, FORM_LC.pattern, FORM_LC.plus - 1);
+    wide(i, FORM_LC.ext);
+  }
+  sheet.getRange(listRow + 1, FORM_LC.pattern, FORM_LIST_ROWS, 1).setDataValidation(list(PATTERN_OPTIONS, true));
+  sheet.getRange(1, FORM_KEY_COL).setValue('視点コード（隠し列）');
+  sheet.hideColumns(FORM_KEY_COL);
   return sheet;
 }
-/** 『案件入力』の①②③を読む */
+/** 『案件入力』の項目・①・② を読む */
 function formRead_(sheet, m) {
-  const width = FORM_COLS;
-  const top = sheet.getRange(1, 1, m.list2, width).getValues();
+  const top = sheet.getRange(1, 1, m.list2, FORM_KEY_COL).getValues();
   const cell = (r, c) => top[r - 1][c - 1];
   const fields = {};
   FORM_FIELDS.forEach(k => { fields[k] = m.fields[k] ? cell(m.fields[k], 2) : ''; });
-  const cuts = [];
-  m.grid.forEach(g => { for (let c = 2; c <= width; c++) if (isChecked_(cell(g.row, c))) cuts.push(g.keyword + (c - 1)); });
-  const pats = [];
-  PATTERN_OPTIONS.forEach((p, i) => { if (isChecked_(cell(m.patBox, 2 + i))) pats.push(p); });
+  const codes = [];
+  m.grid.forEach(g => { for (let c = 2; c <= FORM_COLS; c++) if (isChecked_(cell(g.row, c))) codes.push(g.keyword + (c - 1)); });
   const rows = [];
   for (let r = m.list1; r <= m.list2; r++) {
-    const cut = trimStr_(cell(r, 1)).toUpperCase();
-    if (cut) rows.push({ cut, pattern: normPattern_(cell(r, 2)), ext: trimStr_(cell(r, 3)) });
+    const code = trimStr_(cell(r, FORM_KEY_COL)).toUpperCase();
+    if (!code) continue;
+    rows.push({ code, room: trimStr_(cell(r, FORM_LC.room)), pattern: normPattern_(cell(r, FORM_LC.pattern)), ext: trimStr_(cell(r, FORM_LC.ext)),
+      plus: isChecked_(cell(r, FORM_LC.plus)), del: isChecked_(cell(r, FORM_LC.del)) });
   }
-  return { fields, cuts, pats, rows };
+  return { fields, codes, rows };
 }
-function formWriteList_(sheet, m, rows) {
-  const out = [];
-  for (let i = 0; i < m.list2 - m.list1 + 1; i++) {
+/** ② の表示用の名前（2F 外観目線①-A） */
+function formRowLabel_(r, views) {
+  return (r.room ? r.room + ' ' : '') + formViewLabel_(r.code, views) + (r.pattern ? '-' + r.pattern : '');
+}
+function formWriteList_(sheet, m, rows, views) {
+  const n = m.list2 - m.list1 + 1;
+  const out = [], keys = [];
+  for (let i = 0; i < n; i++) {
     const v = rows[i];
-    out.push(v ? [v.cut, v.pattern, v.ext] : ['', '', '']);
+    const line = new Array(FORM_COLS).fill('');
+    if (v) {
+      line[FORM_LC.label - 1] = formViewLabel_(v.code, views);
+      line[FORM_LC.room - 1] = v.room;
+      line[FORM_LC.pattern - 1] = v.pattern;
+      line[FORM_LC.plus - 1] = false;
+      line[FORM_LC.del - 1] = false;
+      line[FORM_LC.ext - 1] = v.ext;
+    }
+    out.push(line);
+    keys.push([v ? v.code : '']);
   }
-  sheet.getRange(m.list1, 1, out.length, 3).setValues(out);
+  const k = Math.min(rows.length, n);
+  const boxes = sheet.getRange(m.list1, FORM_LC.plus, n, 2);
+  boxes.clearDataValidations();
+  if (k) sheet.getRange(m.list1, FORM_LC.plus, k, 2).setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build());
+  sheet.getRange(m.list1, 1, n, FORM_COLS).setValues(out);
+  sheet.getRange(m.list1, FORM_KEY_COL, n, 1).setValues(keys);
+  sheet.getRange(m.sum, 2).setValue(rows.length ? rows.map(r => formRowLabel_(r, views)).join('・') + '（' + rows.length + '件）' : '（①で視点を選ぶと、ここに出ます）');
 }
-function formSetGrid_(sheet, m, cuts) {
-  const want = new Set((cuts || []).map(c => normCut_(c)));
+function formSetGrid_(sheet, m, codes) {
+  const want = new Set((codes || []).map(c => trimStr_(c).toUpperCase()));
   m.grid.forEach(g => {
     const n = Math.min(VIEW_OPTION_COUNT[g.keyword] || VIEW_OPTION_COUNT_DEFAULT, FORM_COLS - 1);
     const vals = []; for (let i = 1; i <= n; i++) vals.push(want.has(g.keyword + i));
@@ -1892,11 +1969,10 @@ function formSetGrid_(sheet, m, cuts) {
 }
 function formResult_(sheet, m, msg) { if (m.result) sheet.getRange(m.result, 2).setValue(msg); }
 /** フォームを空に戻す（会社コードも消す。新規or修正は「新規」に） */
-function formClear_(sheet, m) {
+function formClear_(sheet, m, views) {
   FORM_FIELDS.forEach(k => { if (m.fields[k]) sheet.getRange(m.fields[k], 2).setValue(k === 'request' ? REQUEST_OPTIONS[0] : ''); });
   formSetGrid_(sheet, m, []);
-  sheet.getRange(m.patBox, 2, 1, PATTERN_OPTIONS.length).setValues([PATTERN_OPTIONS.map(() => false)]);
-  formWriteList_(sheet, m, []);
+  formWriteList_(sheet, m, [], views);
 }
 /** 前回の視点（純ロジック）：『登録一覧』の行 [{code, number, cut, pattern, extName, regDate, name, link, assignee}] から、同じ案件のいちばん新しい登録日の行 */
 function formPrevious_(regRows, code, number) {
@@ -1922,27 +1998,82 @@ function formLoadPrevious_(ss, sheet, m, views) {
   }
   const prev = formPrevious_(regRows, f.code, f.number);
   if (!prev) { formResult_(sheet, m, '前回の登録が見つかりません（' + joinCode_(trimStr_(f.code).toUpperCase(), f.number) + '）。会社コード・案件番号を確かめてください'); return; }
-  const rows = prev.rows.map(r => ({ cut: trimStr_(r.cut).toUpperCase(), pattern: normPattern_(r.pattern), ext: trimStr_(r.extName) || formAutoExt_(r.cut, r.pattern, views) }));
-  formSetGrid_(sheet, m, rows.map(r => r.cut));
-  sheet.getRange(m.patBox, 2, 1, PATTERN_OPTIONS.length).setValues([PATTERN_OPTIONS.map(() => false)]);
-  formWriteList_(sheet, m, rows);
+  const rows = formNormalizeRows_(prev.rows.map(r => { const s = formSplitCut_(r.cut); return { code: s.code, room: s.room, pattern: r.pattern, ext: r.extName }; }), views);
+  formSetGrid_(sheet, m, rows.map(r => r.code));
+  formWriteList_(sheet, m, rows, views);
   sheet.getRange(m.fields.request, 2).setValue(REQUEST_OPTIONS[1]);
   const first = prev.rows[0];
   ['name', 'link', 'assignee'].forEach(k => { if (m.fields[k] && !trimStr_(f[k]) && trimStr_(first[k])) sheet.getRange(m.fields[k], 2).setValue(first[k]); });
-  formResult_(sheet, m, '前回（' + prev.date + ' 登録）の視点を入れました：' + rows.map(r => viewpointNameOf_(r.cut, r.pattern)).join('・') + '（' + rows.length + '件）。新規or修正は「修正」にしました');
+  formResult_(sheet, m, '前回（' + prev.date + ' 登録）の視点を入れました：' + rows.map(r => formRowLabel_(r, views)).join('・') + '（' + rows.length + '件）。新規or修正は「修正」にしました');
 }
-function formSubmit_(sheet, m) {
-  const d = formRead_(sheet, m);
-  sheet.getRange(m.submit, 2).setValue(false);
+/** フォームの値 → submitEntryForm に渡す形 */
+function formPayload_(d, toInterp) {
   const f = d.fields;
   const deadline = f.deadline instanceof Date ? fmtYMD_(f.deadline) : trimStr_(f.deadline).replace(/\//g, '-');
-  const p = {
-    code: f.code, number: f.number, name: f.name, assignee: f.assignee, link: f.link, deadline, order: f.order, memo: f.memo, toInterp: f.toInterp,
-    views: d.rows.map(r => ({ cut: r.cut, pattern: r.pattern, request: f.request, extName: r.ext })),
+  return {
+    code: f.code, number: f.number, name: f.name, assignee: f.assignee, link: f.link, deadline, order: f.order, memo: f.memo, toInterp: trimStr_(toInterp),
+    views: d.rows.map(r => ({ cut: formCut_(r.code, r.room), pattern: r.pattern, request: f.request, extName: r.ext })),
   };
-  const res = submitEntryForm(p);
-  if (res.ok) formClear_(sheet, m);
+}
+/** 「登録」にチェック：足りなければ結果に出す。そろっていれば通訳へのメッセージを書く画面を出す */
+function formSubmit_(sheet, m, views) {
+  const d = formRead_(sheet, m);
+  sheet.getRange(m.submit, 2).setValue(false);
+  const check = entryFormRows_(formPayload_(d, ''));
+  if (check.error) { formResult_(sheet, m, '✗ ' + check.error); return; }
+  formResult_(sheet, m, '通訳へのメッセージの画面で「登録する」を押してください');
+  const html = HtmlService.createHtmlOutput(formConfirmHtml_({
+    title: joinCode_(trimStr_(d.fields.code).toUpperCase(), d.fields.number) + (trimStr_(d.fields.name) ? '（' + trimStr_(d.fields.name) + '）' : ''),
+    request: trimStr_(d.fields.request), views: d.rows.map(r => formRowLabel_(r, views) + '（' + viewpointNameOf_(formCut_(r.code, r.room), r.pattern) + '）'),
+  })).setWidth(440).setHeight(460);
+  SpreadsheetApp.getUi().showModalDialog(html, '登録の確認');
+}
+/** 確認画面から呼ぶ：通訳へのメッセージを付けて登録する（名前が _ で終わる関数は google.script.run から呼べない） */
+function submitFormSheet(toInterp) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEET.FORM);
+  const m = formMap_(sheet);
+  const views = readMasters_(ss).views;
+  const res = submitEntryForm(formPayload_(formRead_(sheet, m), toInterp));
+  if (res.ok) formClear_(sheet, m, views);
   formResult_(sheet, m, (res.ok ? '✓ ' : '✗ ') + res.msg);
+  return res;
+}
+// 確認画面の中で動くスクリプト。中ではバッククォート・ドル記号＋波かっこ・バックスラッシュを使わない
+const FORM_CONFIRM_SCRIPT = `
+function el(id) { return document.getElementById(id); }
+el("cancel").addEventListener("click", function () { google.script.host.close(); });
+el("go").addEventListener("click", function () {
+  var b = el("go");
+  b.disabled = true; el("cancel").disabled = true;
+  el("msg").className = ""; el("msg").textContent = "登録しています…";
+  google.script.run.withSuccessHandler(function (r) {
+    el("msg").className = r.ok ? "ok" : "ng"; el("msg").textContent = r.msg;
+    if (r.ok) { el("cancel").textContent = "閉じる"; el("cancel").disabled = false; setTimeout(function () { google.script.host.close(); }, 2500); }
+    else { b.disabled = false; el("cancel").disabled = false; }
+  }).withFailureHandler(function (e) {
+    el("msg").className = "ng"; el("msg").textContent = (e && e.message) || String(e); b.disabled = false; el("cancel").disabled = false;
+  }).submitFormSheet(el("toInterp").value);
+});
+el("toInterp").focus();
+`;
+/** 確認画面の HTML（純ロジック） */
+function formConfirmHtml_(o) {
+  const esc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return '<!doctype html><html><head><meta charset="utf-8"><style>' +
+    'body{font-family:sans-serif;font-size:13px;margin:0;padding:12px 16px;color:#222}' +
+    'h4{margin:0 0 6px;font-size:14px}ul{margin:4px 0 12px;padding-left:18px;max-height:130px;overflow:auto}' +
+    'label{display:block;font-weight:bold;margin-bottom:4px}textarea{box-sizing:border-box;width:100%;height:96px;padding:8px;border:1px solid #ccc;border-radius:4px;font-size:13px}' +
+    '.n{color:#666;font-size:11px;margin-top:3px}.btns{display:flex;gap:8px;margin-top:14px}' +
+    'button{flex:1;padding:10px;border-radius:4px;font-size:14px;cursor:pointer;border:1px solid #ccc;background:#fff}#go{background:#1a73e8;color:#fff;border:none;font-weight:bold}button:disabled{opacity:.6}' +
+    '#msg{margin-top:10px;white-space:pre-wrap}.ok{color:#2e7d32}.ng{color:#c62828}' +
+    '</style></head><body>' +
+    '<h4>' + esc(o.title) + '（' + esc(o.request) + '）</h4>' +
+    '<div>登録する視点（' + o.views.length + '件）</div><ul>' + o.views.map(v => '<li>' + esc(v) + '</li>').join('') + '</ul>' +
+    '<label for="toInterp">通訳へのメッセージ</label><textarea id="toInterp" placeholder="翻訳してほしい点・注意点など（無ければ空のまま）"></textarea>' +
+    '<div class="n">入力シートの「管理者からの連絡」に写り、通訳向け連絡文にも入ります</div>' +
+    '<div class="btns"><button type="button" id="cancel">やめる</button><button type="button" id="go">登録する</button></div><div id="msg"></div>' +
+    '<script>' + FORM_CONFIRM_SCRIPT + '</script></body></html>';
 }
 /** 『案件入力』タブを編集したとき（onAdminEdit から） */
 function onFormEdit_(ss, sheet, range) {
@@ -1950,26 +2081,23 @@ function onFormEdit_(ss, sheet, range) {
   const r1 = range.getRow(), r2 = range.getLastRow();
   const hit = (row) => row && r1 <= row && row <= r2;
   const views = readMasters_(ss).views;
-  if (hit(m.submit) && isChecked_(sheet.getRange(m.submit, 2).getValue())) { formSubmit_(sheet, m); return; }
+  if (hit(m.submit) && isChecked_(sheet.getRange(m.submit, 2).getValue())) { formSubmit_(sheet, m, views); return; }
   if (hit(m.prev) && isChecked_(sheet.getRange(m.prev, 2).getValue())) { formLoadPrevious_(ss, sheet, m, views); return; }
-  const gridHit = m.grid.some(g => hit(g.row));
-  const bulk = hit(m.patBox);
-  if (gridHit || bulk) {
+  if (m.grid.some(g => hit(g.row))) {
     const d = formRead_(sheet, m);
-    formWriteList_(sheet, m, formListMerge_(d.cuts, d.pats, d.rows, bulk, views));
+    formWriteList_(sheet, m, formListMerge_(d.codes, d.rows, views), views);
     return;
   }
   if (r2 >= m.list1 && r1 <= m.list2) {
-    // ③を直接直したとき：社外視点名を自動の値に合わせ（人が書き換えた名前は残す）、①のチェックもそろえる
+    // ② を直したとき：外す・＋ を反映し、部屋名を分け、社外視点名を付け直す。①のチェックもそろえる
     const d = formRead_(sheet, m);
-    const vals = sheet.getRange(m.list1, 1, m.list2 - m.list1 + 1, 3).getValues();
-    vals.forEach((v, i) => {
-      const cut = trimStr_(v[0]).toUpperCase();
-      const want = cut ? (formIsAutoExt_(v[2], cut, views) ? formAutoExt_(cut, v[1], views) : trimStr_(v[2])) : '';
-      if (!sameCell_(v[2], want)) sheet.getRange(m.list1 + i, 3).setValue(want);
-      if (cut && !sameCell_(v[0], cut)) sheet.getRange(m.list1 + i, 1).setValue(cut);
-    });
-    formSetGrid_(sheet, m, d.rows.map(r => r.cut));
+    let rows = d.rows.filter(r => !r.del);
+    for (let i = 0; i < rows.length; i++) {
+      if (rows[i].plus) { rows[i].plus = false; rows = formAddPattern_(rows, i); }
+    }
+    rows = formNormalizeRows_(rows, views);
+    formWriteList_(sheet, m, rows, views);
+    formSetGrid_(sheet, m, rows.map(r => r.code));
   }
 }
 /** メニュー：『案件入力』タブを作り直す（視点マスタを変えたとき。書きかけの内容は消える） */
@@ -1978,7 +2106,6 @@ function rebuildFormSheet() {
   ensureFormSheet_(ss, readMasters_(ss), true);
   toastOrLog_('『' + SHEET.FORM + '』タブを作り直しました');
 }
-
 function regHeaderMap_(sheet) {
   const lastCol = sheet.getLastColumn();
   const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(v => trimStr_(v));
@@ -3267,7 +3394,7 @@ const HOWTO_LINES = [
   '同じファイルの中でタブを隠す方法は、編集できる人なら誰でも再表示できるため使いません。',
   '',
   '■ 案件の登録（管理者）→ 翻訳（通訳）→ 制作時間（エンジニア）',
-  '0. いちばん手軽なのは『案件入力』タブ（縦型のフォーム）。上から案件の項目を書き、①で視点の番号にチェック、②でパターンにチェック（全部の視点に付く）、③の行でパターン・社外視点名を1行ずつ直せます。「前回の視点を呼び出す」にチェックすると、同じ案件で前回登録した視点が入ります。最後に「登録」にチェックすると、すぐ登録No が付いて『登録一覧』とエンジニア入力シートに載ります（下の 1・2 を1回で行う）。',
+  '0. いちばん手軽なのは『案件入力』タブ（縦型のフォーム）。上から案件の項目を書き、①で視点（外観目線・内観目線…）の番号にチェックすると②に1行ずつ並びます。②では視点ごとに部屋名（2F など。「2F,3F」で部屋ごとの行に）・パターン（＋で足す）・社外視点名を直せます。「前回の視点を呼び出す」にチェックすると、同じ案件で前回登録した視点が入ります。最後に「登録」にチェックすると通訳へのメッセージを書く画面が出て、「登録する」で『登録一覧』とエンジニア入力シートに載ります（入力シートの視点は EXE1_2F のようなコード）。',
   '   メニュー「工程図連携 → 案件を登録（入力画面）」の小さな画面からも、同じように登録できます。',
   '1. 管理者がこのファイルの『案件登録』タブ（入力専用）に1視点1行で書く：会社コード・案件番号・社外案件名・担当者・新規or修正・視点・パターン・サーバーリンク・納期・注文書・管理者メモ（黄色い見出しの列）。「状態」に足りない項目が出ます。',
   '2. 書き終えたら「登録」にチェックします。登録No（R0001…）が付き、エンジニア入力シートへ 会社コード・案件番号・社外案件名・サーバーリンク・新規or修正・視点・パターン と「登録No」だけを写し、行は『登録一覧』へ移ります（『案件登録』からは消え、次の案件を書ける）。担当者・納期・注文書・管理者メモは入力シートへ写しません。足りない項目があるとチェックが外れます。',
