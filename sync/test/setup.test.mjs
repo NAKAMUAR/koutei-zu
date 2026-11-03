@@ -62,6 +62,7 @@ class FakeSheet {
   insertRowsAfter(after, n) { this.maxRows += n; return this; }
   insertColumnsAfter(after, n) { this.maxCols += n; return this; }
   // 列を差し込む（右の値を1つずつ右へずらす）
+  deleteRow(r) { this.rows.splice(r - 1, 1); return this; }
   insertColumnAfter(after) { this.maxCols += 1; this.rows.forEach(r => { if (r.length > after) r.splice(after, 0, ''); }); return this; }
   getName() { return this.name; }
   setName(n) { this.name = n; return this; }
@@ -186,6 +187,8 @@ function fakeFirestore(customers) {
     Object.keys(f).forEach(n => { const v = f[n]; o[n] = 'stringValue' in v ? v.stringValue : 'integerValue' in v ? Number(v.integerValue) : 'doubleValue' in v ? v.doubleValue : 'booleanValue' in v ? v.booleanValue : null; });
     return o;
   });
+  // テスト用：工程図側でタスクを直す（完了にするなど）
+  fs.setTask = (id, patch) => { const k = 'workspaces/liebe-asia-team/tasks/' + id; Object.keys(patch).forEach(f => { fs.docs[k][f] = { stringValue: patch[f] }; }); };
   fs.fetch = (url, opt) => {
     const method = (opt && opt.method) || 'get';
     const res = (code, body) => ({ getResponseCode: () => code, getContentText: () => (body === undefined ? '' : JSON.stringify(body)) });
@@ -261,6 +264,7 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
 const settingsOf = (admin) => Object.fromEntries(admin.getSheetByName('設定').rows.slice(1).map(r => [r[0], r[1]]));
 const ruleAt = (sheet, row, col) => { const v = sheet.validations.filter(x => x.col === col && x.row === row); return v.length ? v[v.length - 1].rule : null; };
 
+const inTab = (eng) => eng.getSheetByName('入力前') || eng.getSheetByName('入力シート');
 const env0 = () => makeEnv({ admin: adminSheet(), files: {} });
 let passed = 0;
 function test(name, fn) { fn(); passed++; console.log('  ok  ' + name); }
@@ -272,8 +276,8 @@ const CODES_0928 = COMPANIES_0928.map(r => r[0]);
 test('見出し行の検索：入力シートは2行目／旧レイアウトや記入ルールのタブは「今の入力タブ」とみなさない', () => {
   const env = makeEnv({ admin: adminSheet(), files: {} });
   const eng = engineerFile();
-  assert.equal(env.g.findStaffHeaderRow_(eng.getSheetByName('入力シート')), 2);
-  assert.equal(env.g.hasStaffInputHeaders_(eng.getSheetByName('入力シート')), true);
+  assert.equal(env.g.findStaffHeaderRow_(inTab(eng)), 2);
+  assert.equal(env.g.hasStaffInputHeaders_(inTab(eng)), true);
   assert.equal(env.g.findStaffHeaderRow_(eng.getSheetByName('Untitled')), 17);
   assert.equal(env.g.hasStaffInputHeaders_(eng.getSheetByName('Untitled')), false, '旧レイアウト（案件番号なし）');
   const old = legacyFile().getSheets()[0];
@@ -311,7 +315,7 @@ test('かんたん初期設定：管理者シート・入力シート（2か国�
   // 『設定』：旧 Project Schedule → 入力シートへ切り替え、自動実行の項目が増える
   const st = settingsOf(admin);
   assert.equal(st['スタッフシートのファイルID'], NEW_ID);
-  assert.equal(st['スタッフシートのタブ名'], '入力シート');
+  assert.equal(st['スタッフシートのタブ名'], '入力前');
   assert.equal(st['取込開始行'], 2);
   assert.equal(st['自動登録'], 'する');
   assert.equal(st['自動登録の待ち時間（分）'], 15);
@@ -320,9 +324,11 @@ test('かんたん初期設定：管理者シート・入力シート（2か国�
   same(admin.getSheetByName('案件マスタ').header(), ['社内案件名', '社外案件名', '会社名', 'お客様担当者', '備考']);
   assert.ok(admin.getSheetByName('使い方').rows.some(r => String(r[0]).indexOf('15分ごと') >= 0));
 
-  // エンジニア入力シート：タブは増えない。『入力シート』の見出しが2段（1列目の書き間違いは「会社コード」に直る）
-  same(eng.getSheets().map(s => s.getName()), ['Untitled', '入力シート', '記入ルール/説明']);
-  const tab = eng.getSheetByName('入力シート');
+  // エンジニア入力シート：『入力シート』は『入力前』になり、制作中・制作済みのタブができる。見出しが2段（1列目の書き間違いは「会社コード」に直る）
+  same(eng.getSheets().map(s => s.getName()), ['Untitled', '入力前', '制作中', '制作済み', '記入ルール/説明']);
+  same(eng.getSheetByName('制作中').header(2), inTab(eng).header(2), '制作中も同じ列');
+  same(eng.getSheetByName('制作済み').header(2), inTab(eng).header(2), '制作済みも同じ列');
+  const tab = inTab(eng);
   same(tab.header(2), env.g.STAFF_INPUT_COLUMNS.map(c => c.label + '\n' + c.vi));
   assert.equal(tab.header(2)[0].split('\n')[0], '会社コード');
   assert.ok(/[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]/i.test(tab.header(2).join(' ')), 'ベトナム語が入っている');
@@ -339,14 +345,15 @@ test('かんたん初期設定：管理者シート・入力シート（2か国�
   ['EX1', 'IN20', 'EXCB1', 'INCB1', 'EXM1', 'INM1', 'EXP1', 'INP1', 'VR1', 'VIDEO1'].forEach(c => assert.ok(views.includes(c), '視点 ' + c));
   ['P1', 'INCM1'].forEach(c => assert.ok(!views.includes(c), c + ' は視点マスタに無いので出さない'));
   same(ruleAt(tab, 3, 7).values.slice(0, 3), ['A', 'B', 'C']);
-  [8, 9, 10].forEach(c => assert.ok(ruleAt(tab, 3, c).values.includes('0.5'), '時間 ' + c));
+  [8, 9, 10, 11].forEach(c => assert.ok(ruleAt(tab, 3, c).values.includes('0.5'), '時間 ' + c));
+  same(tab.header(2).slice(7, 9).map(h => h.split('\n')[0]), ['White躯体', 'White家具'], 'White は躯体と家具の2列');
   assert.equal(ruleAt(tab, 3, 3), null, '社外案件名は自由入力');
   assert.equal(ruleAt(tab, 3, 4), null, 'サーバーリンクは自由入力');
   // 『記入ルール/説明』は2か国語で書き直され、視点コード表は視点マスタから
   const rules = eng.getSheetByName('記入ルール/説明');
   const text = rules.rows.map(r => r.join(' ')).join('\n');
-  ['【記入ルール】', 'Quy tắc', 'EX1 → 外観目線視点① ／ ngoại thất', 'EXP1 → 外観写真合成視点①', 'VIDEO1 → 動画', '新規 / Mới', 'không tính số giờ white'].forEach(w => assert.ok(text.toLowerCase().indexOf(w.toLowerCase()) >= 0, w));
-  assert.ok(rules.rows.some(r => r[1] === '会社コード\nMã công ty'));
+  ['【記入ルール】', 'Quy tắc', 'EX1 → 外観目線視点① ／ ngoại thất', 'EXP1 → 外観写真合成視点①', 'VIDEO1 → 動画', '黄色の列だけ', 'Chỉ nhập vào các cột màu vàng', 'White躯体', 'Trắng – nội thất', '『制作中』', 'YYMMDD'].forEach(w => assert.ok(text.toLowerCase().indexOf(w.toLowerCase()) >= 0, w));
+  ['会社コード：', '案件番号：', 'サーバーリンク：', '新規or修正：'].forEach(w => assert.ok(text.indexOf(w) < 0, '管理者が入れる列の書き方は載せない：' + w));
   assert.ok(!rules.rows.some(r => r.includes('new')), '古い記入例（new/add）は残らない');
   assert.equal(eng.getSheetByName('Untitled').rows[16][1], '社内案件名', '旧レイアウトのタブには触らない');
   assert.equal(legacy.getSheets().length, 1, '旧 Project Schedule には触らない');
@@ -390,7 +397,7 @@ test('かんたん初期設定は何度押しても同じ結果（列・タブ�
     company: admin.getSheetByName('会社マスタ').header().join(','),
     settings: admin.getSheetByName('設定').getLastRow(),
     eng: eng.getSheets().map(s => s.getName()).join(','),
-    header: eng.getSheetByName('入力シート').header(2).join('|'),
+    header: inTab(eng).header(2).join('|'),
     rules: eng.getSheetByName('記入ルール/説明').getLastRow(),
     customers: env.fs.customers().length,
     triggers: env.triggers.length,
@@ -415,8 +422,8 @@ test('『入力シート』タブが無いときは新しく作る（記入ル�
   const eng = engineerFile({ withInput: false });
   const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
   env.g.quickSetup();
-  same(eng.getSheets().map(s => s.getName()), ['入力シート', 'Untitled', '記入ルール/説明']);
-  const tab = eng.getSheetByName('入力シート');
+  same(eng.getSheets().map(s => s.getName()), ['入力前', '制作中', '制作済み', 'Untitled', '記入ルール/説明']);
+  const tab = inTab(eng);
   assert.equal(env.g.findStaffHeaderRow_(tab), 2);
   assert.equal(tab.header(2)[1], '案件番号\nSố dự án');
   assert.ok(env.alerts[0].indexOf('作りました') >= 0, env.alerts[0]);
@@ -466,7 +473,7 @@ test('メニュー「エンジニア入力シートを整える」：会社・�
   admin.getSheetByName('会社マスタ').set(19, 1, 'NEWCO'); admin.getSheetByName('会社マスタ').set(19, 2, 'ニューコ');
   admin.getSheetByName('視点マスタ').set(12, 1, 'CAD'); admin.getSheetByName('視点マスタ').set(12, 3, 'CAD図');
   env.g.createStaffInputTab();
-  const tab = eng.getSheetByName('入力シート');
+  const tab = inTab(eng);
   same(ruleAt(tab, 3, 1).values, CODES_0928.concat(['NEWCO']));
   assert.ok(ruleAt(tab, 3, 6).values.includes('CAD1'));
   assert.equal(legacy.getSheets().length, 1, '旧 Project Schedule にはタブを作らない');
@@ -478,7 +485,12 @@ test('メニュー「エンジニア入力シートを整える」：会社・�
 });
 
 // 入力シートに行を書く補助
-const writer = (tab) => (r, vals) => vals.forEach((v, j) => tab.set(r, j + 1, v));
+// 行を書く（White 1列の書き方で渡す。White躯体・White家具の2列のシートでは、White の値を躯体に入れ、家具は空にする）
+const writer = (tab) => (r, vals) => {
+  const split = String(tab.header(2)[8] || '').indexOf('White家具') === 0;
+  const arr = split && vals.length > 8 ? vals.slice(0, 8).concat([''], vals.slice(8)) : vals;
+  arr.forEach((v, j) => tab.set(r, j + 1, v));
+};
 const NEWR = '新規 / Mới', FIXR = '修正 / Sửa';
 const isDate = (v) => Object.prototype.toString.call(v) === '[object Date]';
 const linkAt = (admin) => { const link = admin.getSheetByName('連携'); const h = link.header(); return { link, h, at: (r, name) => link.rows[r - 1][h.indexOf(name)], set: (r, name, v) => link.set(r, h.indexOf(name) + 1, v) }; };
@@ -488,7 +500,7 @@ test('転記：入力シートの行が『連携』に追記され、入力日�
   const eng = engineerFile();
   const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
   env.g.quickSetup();
-  const tab = eng.getSheetByName('入力シート');
+  const tab = inTab(eng);
   const put = writer(tab);
   put(3, ['RIC', 34, 'マンション', LINK, NEWR, 'EX1', '', 6, 4, 0, '外観 昼景']);
   put(4, ['RIC', 34, 'マンション', LINK, NEWR, 'EX1', 'A', 6, 4, 0, '']);
@@ -573,7 +585,7 @@ test('15分ごとの自動実行：転記 → 15分たった「未送信」だ�
   const eng = engineerFile();
   const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
   env.g.quickSetup();
-  const put = writer(eng.getSheetByName('入力シート'));
+  const put = writer(inTab(eng));
   put(3, ['RIC', 34, 'マンション', LINK, NEWR, 'EX1', '', 6, 4, 0, '']);
   put(4, ['REN', 72, '戸建て', '', NEWR, 'EXM1', '', 8, '', '', '']);
   put(5, ['RIC', 34, 'マンション', LINK, NEWR, 'EX1', '', 1, 0, 0, '']);  // 2回目なのに新規 → 要確認
@@ -607,6 +619,12 @@ test('15分ごとの自動実行：転記 → 15分たった「未送信」だ�
   const model = tasks.filter(t => t.projectNameInternal === 'REN.72');
   same(model.map(t => [t.stepName, t.hours]), [['モデル作成', 8]]);
   assert.ok(env.fs.customers().includes('ニューコ'), '会社マスタに後から足した会社は、登録の前に顧客マスタへ追加');
+  // 工程図に登録した行は、入力シートの『制作中』へ移る（要確認の行は『入力前』に残る）
+  const doing = eng.getSheetByName('制作中');
+  const filled = (tab) => tab.rows.slice(2).filter(x => x.some(v => v !== '' && v !== false && v !== undefined && v !== null)).map(x => x[0] + '.' + x[1] + ' ' + x[5]);
+  same(filled(doing), ['RIC.34 EX1', 'REN.72 EXM1', 'NEWCO.1 IN1']);
+  same(filled(inTab(eng)), ['RIC.34 EX1'], '2回目なのに新規（要確認）の行は入力前に残る');
+  assert.ok(r.indexOf('制作中へ3件') >= 0, r);
 
   // 要確認の行は、人が「工程図へ」にチェックすると次の自動実行で登録
   set(4, '工程図へ', true);
@@ -616,7 +634,8 @@ test('15分ごとの自動実行：転記 → 15分たった「未送信」だ�
 
   // 登録後にエンジニアが時間を直す → 更新あり（自動では送らない）＋ Discord で確認を頼む → チェックで工程図の時間を更新
   env.props.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/1/abc';
-  eng.getSheetByName('入力シート').set(3, 8, 7);
+  same(filled(inTab(eng)), [], '要確認の行も登録したら制作中へ');
+  doing.set(3, 8, 7); // 制作中に移った RIC.34 EX1（1回目）の White躯体
   r = env.g.autoRun();
   assert.equal(at(2, '状態'), '更新あり');
   assert.ok(r.indexOf('登録後の変更 1件を Discord で確認依頼') >= 0, r);
@@ -633,6 +652,15 @@ test('15分ごとの自動実行：転記 → 15分たった「未送信」だ�
   assert.equal(at(2, '状態'), '登録済み');
   assert.equal(white().hours, 7);
   assert.equal(env.fs.tasks().length, 6, '更新は新しいタスクを作らない');
+  // 工程図で RIC.34 EX1（1回目）のタスクがすべて完了 → 『制作済み』へ。2回目（修正）は制作中のまま
+  env.fs.tasks().filter(t => String(t.externalId).indexOf('RIC34::EX1::1::') === 0).forEach(t => env.fs.setTask(t.id, { status: 'done' }));
+  r = env.g.autoRun();
+  assert.ok(r.indexOf('制作済みへ1件') >= 0, r);
+  same(filled(eng.getSheetByName('制作済み')), ['RIC.34 EX1']);
+  same(filled(doing), ['REN.72 EXM1', 'NEWCO.1 IN1', 'RIC.34 EX1']);
+  r = env.g.autoRun();
+  assert.ok(r.indexOf('転記 追加0・更新0') >= 0, '移しても取込キー（n回目）は変わらない：' + r);
+  assert.equal(at(2, '状態'), '登録済み');
 
   // 『設定』の自動登録を「しない」にすると転記だけ
   const st = admin.getSheetByName('設定');
@@ -680,14 +708,16 @@ test('案件登録 → 入力シートへ写す → 翻訳済み → 2時間で 
   assert.ok(isDate(R(2, '登録日時')) && isDate(R(3, '登録日時')), '書き始めた行には登録日時が自動で入る');
 
   // 入力シート：必要な列と登録Noだけ（担当者・納期・注文書・管理者メモは写さない）。後から増えた列は右端に
-  const tab = eng.getSheetByName('入力シート');
+  const tab = inTab(eng);
   const sh = tab.header(2).map(h => h.split('\n')[0]);
   ['翻訳済み', '翻訳日時', '翻訳メモ', '作業の分け方', '時間入力者', '時間入力日時', '合計', '登録No'].forEach(h => assert.ok(sh.includes(h), h));
   const S = (name) => tab.rows[2][sh.indexOf(name)];
-  assert.equal(fOf(tab, sh.indexOf('合計') + 1), '=IF(COUNT(RC8,RC9,RC10)=0,"",SUM(RC8,RC9,RC10))', '入力シートの合計も式');
+  assert.equal(fOf(tab, sh.indexOf('合計') + 1), '=IF(COUNT(RC8,RC9,RC10,RC11)=0,"",SUM(RC8,RC9,RC10,RC11))', '入力シートの合計も式');
   same([S('会社コード'), S('案件番号'), S('社外案件名'), S('新規or修正'), S('視点'), S('パターン'), S('サーバーリンク'), S('登録No')], ['RIC', 34, 'マンション', NEWR, 'EX1', 'A', LINK, 'R0001']);
   assert.ok(!tab.rows[2].some(v => v === 'Quynh' || v === 'https://drive/order.pdf' || v === '急ぎ'), '管理者だけの情報は写さない');
-  assert.equal(tab.rows[2].length, sh.indexOf('登録No') + 1, '写す列と登録Noだけを書く（合計の式などには触らない）');
+  assert.equal(tab.rows[2].length, sh.indexOf('納品名') + 1, '写す列と登録No・納品名だけを書く（合計の式などには触らない）');
+  assert.equal(S('納品名'), 'マンション_外観目線視点①_パターンA_YYMMDD', '納品名は 社外案件名_社外視点名_YYMMDD');
+  assert.equal(R(2, '納品名'), 'マンション_外観目線視点①_パターンA_YYMMDD');
   assert.equal(tab.rows[2][sh.indexOf('合計')], '', '合計の列は書かない');
   // 時間が空なので転記はまだ（記入途中）
   env.g.transferFromStaffSheet();
@@ -700,6 +730,7 @@ test('案件登録 → 入力シートへ写す → 翻訳済み → 2時間で 
   msg = env.g.syncRegistrationsNow();
   assert.ok(msg.indexOf('直した 1件') >= 0, msg);
   assert.equal(S('視点'), 'EX2');
+  assert.equal(S('納品名'), 'マンション_外観目線視点②_パターンA_YYMMDD', 'YYMMDD のままの納品名は視点を直すと作り直す');
 
   // 通訳が翻訳済みにチェック → 時間計算待ち（翻訳日時が入る）
   tab.set(3, sh.indexOf('翻訳済み') + 1, true);
@@ -748,11 +779,14 @@ test('案件登録 → 入力シートへ写す → 翻訳済み → 2時間で 
   assert.equal(at(2, '担当者'), 'Quynh');
   assert.equal(at(2, '納期'), '2030-01-20');
 
-  // 工程図が納品名を書き出すと、『案件登録』と入力シートの「納品名」に表示される
-  env.fs.docs['workspaces/liebe-asia-team/data/deliveryNames'] = { value: { stringValue: JSON.stringify({ 'RIC34::EX2-A::1': ['マンション_外観目線視点②_パターンA白色', 'マンション_外観目線視点②_パターンA色付'] }) } };
+  // 納品名は 社外案件名_社外視点名_YYMMDD（工程図の書き出しは使わない）。エンジニアが日付に書き換えたら、そのまま
+  env.fs.docs['workspaces/liebe-asia-team/data/deliveryNames'] = { value: { stringValue: JSON.stringify({ 'RIC34::EX2-A::1': ['別の名前'] }) } };
   env.g.syncRegistrationsNow();
-  assert.equal(R(2, '納品名'), 'マンション_外観目線視点②_パターンA白色 / マンション_外観目線視点②_パターンA色付');
-  assert.equal(S('納品名'), R(2, '納品名'));
+  assert.equal(R(2, '納品名'), 'マンション_外観目線視点②_パターンA_YYMMDD');
+  tab.set(3, sh.indexOf('納品名') + 1, 'マンション_外観目線視点②_パターンA_261104');
+  env.g.syncRegistrationsNow();
+  assert.equal(S('納品名'), 'マンション_外観目線視点②_パターンA_261104');
+  assert.equal(R(2, '納品名'), S('納品名'));
 
   // 入力シートで行が消されたら「入力シートに無い」（勝手に写し直さない）
   tab.rows[2] = [];
@@ -766,7 +800,7 @@ test('入力シートを編集した瞬間：翻訳済みのチェックで翻�
   const eng = engineerFile();
   const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
   env.g.quickSetup();
-  const tab = eng.getSheetByName('入力シート');
+  const tab = inTab(eng);
   const sh = tab.header(2).map(h => h.split('\n')[0]);
   const c = (name) => sh.indexOf(name) + 1;
   const put = writer(tab);
@@ -776,7 +810,9 @@ test('入力シートを編集した瞬間：翻訳済みのチェックで翻�
   assert.equal(tab.rows[2][c('翻訳日時') - 1] || '', '', '関係ない列の編集では入れない');
   edit(3, c('翻訳済み'), true);
   assert.ok(isDate(tab.rows[2][c('翻訳日時') - 1]));
-  edit(3, c('White'), 3);
+  edit(3, c('White家具'), 1);
+  assert.ok(isDate(tab.rows[2][c('時間入力日時') - 1]), 'White家具 だけでも時間入力日時が入る');
+  edit(3, c('White躯体'), 3);
   edit(3, c('Color'), 2);
   assert.ok(isDate(tab.rows[2][c('時間入力日時') - 1]));
   edit(3, c('翻訳済み'), false);
@@ -814,7 +850,7 @@ test('連絡文：ひな形から作り、同じ案件・同じ入力日の視�
   setR(2, '社外案件名', '戸建て'); setR(2, '新規or修正', '新規 / Mới'); setR(2, '視点', 'EX1'); setR(2, 'サーバーリンク', LINK);
   edit(2);
   assert.equal(R(2, '登録No'), 'R0001');
-  assert.equal(eng.getSheetByName('入力シート').rows[2][0], 'REN', '入力シートにすぐ写る');
+  assert.equal(inTab(eng).rows[2][0], 'REN', '入力シートにすぐ写る');
   // 同じ日に同じ案件の視点をもう1つ → 連絡文は1通にまとまる（ひな形の既定：資料の共有＋1時間後に計算）
   setR(3, '会社コード', 'REN'); setR(3, '案件番号', 50); setR(3, '社外案件名', '戸建て'); setR(3, '新規or修正', '新規 / Mới'); setR(3, '視点', 'IN1'); setR(3, 'サーバーリンク', LINK);
   edit(3);
@@ -833,7 +869,7 @@ test('連絡文：ひな形から作り、同じ案件・同じ入力日の視�
   setR(2, '今すぐ連携', true); // 手動連携のチェック
   edit(2);
   assert.equal(R(2, '今すぐ連携'), false, '終わるとチェックが外れる');
-  const tab = eng.getSheetByName('入力シート');
+  const tab = inTab(eng);
   const sh = tab.header(2).map(h => h.split('\n')[0]);
   assert.equal(tab.rows[2][sh.indexOf('管理者からの連絡')], '昼景・植栽多めと指示あり');
   const limI = new Date(env.g.addWorkMinutes_(R(2, '登録日時'), 90, '8-12,13-17').getTime());
@@ -919,7 +955,7 @@ test('『登録一覧』の「コピー」列：チェックするとその案�
   const setR = (row, name, v) => reg.set(row, rh.indexOf(name) + 1, v);
   setR(2, '会社コード', 'REN'); setR(2, '案件番号', 50); setR(2, '社外案件名', '戸建て'); setR(2, '新規or修正', '新規 / Mới'); setR(2, '視点', 'EX1'); setR(2, 'サーバーリンク', LINK);
   env.g.onAdminEdit({ range: reg.getRange(2, 1, 1, rh.length) });
-  const copiedBefore = eng.getSheetByName('入力シート').rows.length;
+  const copiedBefore = inTab(eng).rows.length;
   setR(2, 'コピー', true);
   env.g.onAdminEdit({ range: reg.getRange(2, ci) });
   assert.equal(reg.rows[1][ci - 1], false, 'チェックは外れる');
@@ -927,7 +963,7 @@ test('『登録一覧』の「コピー」列：チェックするとその案�
   assert.equal(env.dialogs[0].title, '連絡文');
   assert.ok(env.dialogs[0].html.includes('REN.50の資料を共有します。'), 'その行の連絡文');
   assert.ok(env.dialogs[0].html.includes('data-act="copy"') && !env.dialogs[0].html.includes('onclick='), 'ボタンは onclick 属性を使わない');
-  assert.equal(eng.getSheetByName('入力シート').rows.length, copiedBefore, '入力シートには何も書かない');
+  assert.equal(inTab(eng).rows.length, copiedBefore, '入力シートには何も書かない');
   // 同じ案件の2つ目の視点（R0002）と、別の案件（R0003）
   setR(3, '会社コード', 'REN'); setR(3, '案件番号', 50); setR(3, '社外案件名', '戸建て'); setR(3, '新規or修正', '新規 / Mới'); setR(3, '視点', 'IN1'); setR(3, 'サーバーリンク', LINK);
   env.g.onAdminEdit({ range: reg.getRange(3, 1, 1, rh.length) });
@@ -971,7 +1007,7 @@ test('『案件登録』は入力専用：「登録」にチェックした行�
   const EV = (row, name) => (ent.rows[row - 1] || [])[eh.indexOf(name)];
   const edit = (row, name) => env.g.onAdminEdit({ range: ent.getRange(row, eh.indexOf(name) + 1) });
   const fill = (row, cut, pattern) => { E(row, '会社コード', 'REN'); E(row, '案件番号', 50); E(row, '社外案件名', 'マンション'); E(row, '担当者', '武田'); E(row, '新規or修正', '新規 / Mới'); E(row, '視点', cut); E(row, 'パターン', pattern); E(row, 'サーバーリンク', LINK); };
-  const staffRows = () => eng.getSheetByName('入力シート').rows.slice(2).filter(r => r.some(v => v !== '' && v !== false && v !== undefined)).length;
+  const staffRows = () => inTab(eng).rows.slice(2).filter(r => r.some(v => v !== '' && v !== false && v !== undefined)).length;
   const before = staffRows();
   // 書き終えただけでは送らない（状態だけ「登録できます」）
   fill(2, 'EX1', 'A'); edit(2, '視点');
@@ -1041,7 +1077,7 @@ test('入力画面（縦型・1案件ずつ）：足りない項目を知らせ�
   assert.equal(ok.rows[0].number, 50);
   assert.ok(ok.rows[0].deadline instanceof Date || Object.prototype.toString.call(ok.rows[0].deadline) === '[object Date]');
   // 登録
-  const staffRows = () => eng.getSheetByName('入力シート').rows.slice(2).filter(r => r.some(v => v !== '' && v !== false && v !== undefined)).length;
+  const staffRows = () => inTab(eng).rows.slice(2).filter(r => r.some(v => v !== '' && v !== false && v !== undefined)).length;
   const before = staffRows();
   const res = env.g.submitEntryForm({ ...base, views: [{ cut: 'EX1', pattern: 'A', request: '新規 / Mới' }, { cut: 'EX2', pattern: 'B', request: '新規 / Mới' }] });
   assert.equal(res.ok, true, res.msg);
@@ -1172,7 +1208,7 @@ test('『案件入力』タブ（縦型フォーム）：①日本語の区分�
   const R = (row, name) => reg.rows[row - 1][rh.indexOf(name)];
   same([R(2, '視点'), R(2, 'パターン'), R(2, '社外視点名'), R(2, '新規or修正'), R(2, '通訳へのメッセージ')], ['EX1', 'A', '南東外観', '新規 / Mới', '昼景でお願いします']);
   same([R(4, '視点'), R(4, 'パターン'), R(4, '社外視点名')], ['EX2_2F', '', '2F外観目線視点②']);
-  const staff = eng.getSheetByName('入力シート');
+  const staff = inTab(eng);
   assert.ok(staff.rows.some(r => r.includes('EX2_2F')), 'エンジニア入力シートの視点は EX2_2F（コード）');
   assert.equal(env.g.readRegInfo_(admin).get('R0001').extName, '南東外観', '転記のとき『連携』の社外視点名に入る');
   assert.equal(list().length, 0, '登録したらフォームは空に戻る');

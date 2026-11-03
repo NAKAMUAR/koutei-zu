@@ -35,7 +35,17 @@
 
 // ============ 定数 ============
 const SHEET = { LINK: '連携', REG: '登録一覧', ENTRY: '案件登録', FORM: '案件入力', COMPANY: '会社マスタ', VIEW: '視点マスタ', PROJECT: '案件マスタ', SETTINGS: '設定', HOWTO: '使い方' };
-const STAFF_TAB_DEFAULT = '入力シート';
+// 2026-11-04：エンジニア入力シートを3つのタブに分けた。入力前（翻訳・時間がそろうまで）→ 制作中（工程図に登録してから完了まで）→ 制作済み（工程図で完了）
+const STAFF_TAB_DEFAULT = '入力前';
+const STAFF_TAB_DOING = '制作中';
+const STAFF_TAB_DONE = '制作済み';
+const STAFF_TAB_OLD = '入力シート'; // 2026-11-04 より前の入力タブの名前（『入力前』に名前を変える）
+// 各タブの1行目の案内（日本語／ベトナム語）
+const STAFF_TAB_HINTS = {
+  '入力前': '入力前：翻訳・制作時間を入れる視点。黄色の列だけ入力（灰色は自動・管理者が入れる）。そろって15分たつと工程図に登録され『制作中』へ移ります ／ Chưa nhập xong: chỉ nhập vào các cột màu vàng (cột xám là tự động / quản lý nhập). Khi đủ thông tin 15 phút sẽ được đăng ký vào 工程図 và chuyển sang tab『制作中』',
+  '制作中': '制作中：工程図に登録済みで制作中の視点（自動で移ります）。工程図で完了になると『制作済み』へ移ります ／ Đang làm: góc nhìn đã đăng ký vào 工程図 (tự động chuyển). Khi hoàn thành trên 工程図 sẽ chuyển sang tab『制作済み』',
+  '制作済み': '制作済み：工程図で完了になった視点（自動で移ります。消さない）／ Đã xong: góc nhìn đã hoàn thành trên 工程図 (tự động chuyển, không xóa)',
+};
 const STAFF_RULES_TAB = '記入ルール/説明';
 
 // 『連携』タブの見出し（列は見出し名で探す）
@@ -187,39 +197,41 @@ const STAFF_INPUT_COLUMNS = [
       'Chọn từ danh sách (EX1 = ngoại thất tầm mắt ①…, xem bảng ở tab『記入ルール/説明』). Số cuối = ①②…' },
   { key: 'pattern', label: 'パターン', vi: 'Phương án', width: 9,
     note: '同じ視点でパターン違いがあれば A・B・C…（無ければ空欄）\nNếu cùng góc nhìn có nhiều phương án: A, B, C… (không có thì để trống)' },
-  { key: 'white', label: 'White', vi: 'Trắng (giờ)', width: 9, hours: true,
-    note: 'ホワイトパースまでの制作時間（h）。モデル作成の行はモデル制作時間\nSố giờ làm đến phối cảnh trắng. Dòng dựng model: số giờ dựng model' },
-  { key: 'color', label: 'Color', vi: 'Màu (giờ)', width: 9, hours: true,
+  { key: 'whiteBody', label: 'White躯体', vi: 'Trắng – kết cấu (giờ)', width: 10, hours: true, input: true,
+    note: '躯体（建物・外構など）のホワイトまでの制作時間（h）。モデル作成の行はモデル制作時間\nSố giờ làm phối cảnh trắng phần kết cấu (tòa nhà, ngoại cảnh…). Dòng dựng model: số giờ dựng model' },
+  { key: 'whiteFurn', label: 'White家具', vi: 'Trắng – nội thất (giờ)', width: 10, hours: true, input: true,
+    note: '家具・設備のホワイトまでの制作時間（h）。無ければ空欄（工程図では White躯体 と合わせて1つの White になる）\nSố giờ làm phối cảnh trắng phần đồ nội thất. Không có thì để trống (trên 工程図 sẽ cộng chung với Trắng – kết cấu)' },
+  { key: 'color', label: 'Color', vi: 'Màu (giờ)', width: 9, hours: true, input: true,
     note: '色付きパースまでの制作時間（h）。White の時間は含めない\nSố giờ làm phối cảnh màu. Không tính số giờ White' },
-  { key: 'other', label: 'pts', vi: 'Ghép ảnh (giờ)', width: 10, hours: true,
+  { key: 'other', label: 'pts', vi: 'Ghép ảnh (giờ)', width: 10, hours: true, input: true,
     note: '写真合成・フォトショップ作業（人物・点景など）の時間（h）\nSố giờ ghép ảnh / Photoshop (người, cây, xe…)' },
-  { key: 'note', label: 'メモ', vi: 'Ghi chú', width: 30,
+  { key: 'note', label: 'メモ', vi: 'Ghi chú', width: 30, input: true,
     note: '制作上の注意点など（自由記入）\nLưu ý khi thực hiện (nhập tự do)' },
   // ここから下は「案件登録」の流れ（管理者が登録 → 通訳が翻訳 → エンジニアが時間を出す）で使う列
-  { key: 'translated', label: '翻訳済み', vi: 'Đã dịch', width: 8, checkbox: true,
+  { key: 'translated', label: '翻訳済み', vi: 'Đã dịch', width: 8, checkbox: true, input: true,
     note: '通訳：資料を翻訳してエンジニアに伝えたらチェック。ここから制作時間の計算が始まります\nPhiên dịch: dịch tài liệu xong và đã truyền đạt cho kỹ sư thì đánh dấu' },
   { key: 'transAt', label: '翻訳日時', vi: 'Thời gian dịch xong', width: 14, auto: true, datetime: true,
     note: '翻訳済みにチェックした日時（自動で入る）\nThời điểm đánh dấu đã dịch (tự động)' },
-  { key: 'transNote', label: '翻訳メモ', vi: 'Ghi chú dịch', width: 30,
+  { key: 'transNote', label: '翻訳メモ', vi: 'Ghi chú dịch', width: 30, input: true,
     note: '通訳：お客様の指示の訳・注意点など\nPhiên dịch: nội dung dịch yêu cầu của khách, lưu ý…' },
-  { key: 'split', label: '作業の分け方', vi: 'Cách chia công việc', width: 30,
+  { key: 'split', label: '作業の分け方', vi: 'Cách chia công việc', width: 30, input: true,
     note: '分けて作業できるときに書く（例：White＝躯体 3h／家具1 2h／家具2 1h）\nNếu có thể chia công việc thì ghi (VD: White = khung 3h / nội thất 1 2h / nội thất 2 1h)' },
-  { key: 'estimator', label: '時間入力者', vi: 'Người nhập giờ', width: 12,
+  { key: 'estimator', label: '時間入力者', vi: 'Người nhập giờ', width: 12, input: true,
     note: 'エンジニア：制作時間を決めた人の名前\nKỹ sư: tên người quyết định số giờ' },
   { key: 'estimatedAt', label: '時間入力日時', vi: 'Thời gian nhập giờ', width: 14, auto: true, datetime: true,
     note: 'White・Color・pts を書いた日時（自動で入る）\nThời điểm nhập số giờ (tự động)' },
   { key: 'total', label: '合計', vi: 'Tổng (giờ)', width: 8, auto: true,
-    note: 'White＋Color＋pts（自動で計算。書かなくてよい）\nTự động tính (không cần nhập)' },
+    note: 'White躯体＋White家具＋Color＋pts（自動で計算。書かなくてよい）\nTự động tính (không cần nhập)' },
   { key: 'regNo', label: '登録No', vi: 'Mã đăng ký', width: 8, auto: true,
     note: '管理者の登録番号（自動で入る。変えない）\nMã đăng ký của quản lý (tự động, không sửa)' },
   { key: 'toInterp', label: '管理者からの連絡', vi: 'Lời nhắn từ quản lý', width: 30, auto: true,
     note: '管理者が『案件登録』に書いた通訳へのメッセージ（自動で入る）\nLời nhắn của quản lý cho phiên dịch (tự động)' },
   { key: 'delivery', label: '納品名', vi: 'Tên file giao', width: 30, auto: true,
-    note: '工程図に登録されると、納品するファイルの名前が自動で入る（ステップが複数なら「 / 」区切り）\nTên file giao hàng (tự động sau khi đăng ký vào 工程図)' },
+    note: '納品するファイルの名前（自動）：社外案件名_社外視点名_YYMMDD。YYMMDD は納品する日に書き換えて使う\nTên file giao (tự động): Tên dự án_Tên góc nhìn_YYMMDD. Đổi YYMMDD thành ngày giao khi dùng' },
 ];
 const STAFF_INPUT_HEADERS = STAFF_INPUT_COLUMNS.map(c => c.label);
 // 『入力シート』1行目の案内（見出しの上が空のときだけ書く）
-const STAFF_INPUT_HINT = '1視点（パターン違いも別）＝1行。書き方は『' + STAFF_RULES_TAB + '』タブ ／ Mỗi góc nhìn (phương án khác cũng tách riêng) = 1 dòng. Xem cách nhập ở tab『' + STAFF_RULES_TAB + '』';
+const STAFF_INPUT_HINT = STAFF_TAB_HINTS[STAFF_TAB_DEFAULT];
 // プルダウンの選択肢
 const REQUEST_OPTIONS = ['新規 / Mới', '修正 / Sửa'];
 const PATTERN_OPTIONS = ['A', 'B', 'C', 'D', 'E', 'F'];
@@ -435,16 +447,34 @@ function transfer_() {
 }
 
 /** スタッフシートを読み、必要な列だけ抜き出す。見出し名で列を探すので、新旧どのレイアウトでも読める。 */
+/** White の時間：White躯体＋White家具（分ける前の『White』列だけのシートはその列） */
+function staffWhite_(v, sc) {
+  const at = (c) => (c ? v[c - 1] : '');
+  return sc.whiteBody ? Math.round((toHours_(at(sc.whiteBody)) + toHours_(at(sc.whiteFurn))) * 100) / 100 : toHours_(at(sc.white));
+}
+/** 読むタブの名前（取込キーの n回目 が変わらないよう、古い順＝制作済み→制作中→入力前）。旧レイアウトのタブ名なら、そのタブだけ */
+function staffTabNames_(cfg) {
+  return cfg.tabName === STAFF_TAB_DEFAULT ? [STAFF_TAB_DONE, STAFF_TAB_DOING, STAFF_TAB_DEFAULT] : [cfg.tabName];
+}
 function readStaffRows_(cfg) {
   const ss = SpreadsheetApp.openById(cfg.fileId);
-  const sheet = ss.getSheetByName(cfg.tabName);
-  if (!sheet) throw new Error(`エンジニア入力シートにタブ「${cfg.tabName}」が見つかりません（『設定』タブのタブ名を確認するか、メニュー「0. かんたん初期設定」を実行してください）`);
+  if (!ss.getSheetByName(cfg.tabName)) throw new Error(`エンジニア入力シートにタブ「${cfg.tabName}」が見つかりません（『設定』タブのタブ名を確認するか、メニュー「0. かんたん初期設定」を実行してください）`);
+  const names = staffTabNames_(cfg);
+  const rows = [];
+  names.forEach(name => {
+    const sheet = ss.getSheetByName(name);
+    if (sheet) readStaffTab_(sheet, cfg, names.length > 1 ? name : '').forEach(r => rows.push(r));
+  });
+  return rows;
+}
+/** 1つのタブの行を読む。tabLabel があれば 元シート行 を「制作中!5」の形にする */
+function readStaffTab_(sheet, cfg, tabLabel) {
   const lastRow = sheet.getLastRow();
   const lastCol = sheet.getLastColumn();
   if (lastRow < 2) return [];
 
   const headerRow = findStaffHeaderRow_(sheet);
-  if (headerRow < 0) throw new Error('エンジニア入力シートに見出し（会社コード・案件番号 または 社内案件名）の行が見つかりません（先頭200行を探しました）');
+  if (headerRow < 0) throw new Error('エンジニア入力シート' + (tabLabel ? '『' + tabLabel + '』' : '') + 'に見出し（会社コード・案件番号 または 社内案件名）の行が見つかりません（先頭200行を探しました）');
 
   const headers = sheet.getRange(headerRow, 1, 1, lastCol).getValues()[0].map(v => String(v || '').trim());
   const sc = staffHeaderMap_(headers);
@@ -462,7 +492,8 @@ function readStaffRows_(cfg) {
     const v = values[i];
     const code = joinCode_(at(v, sc.code), sc.number ? at(v, sc.number) : '');
     rows.push({
-      srcRow: firstDataRow + i,
+      srcRow: tabLabel ? tabLabel + '!' + (firstDataRow + i) : firstDataRow + i,
+      tab: tabLabel, row: firstDataRow + i,
       code,
       // 案件番号の列があるのに番号が入っていない（「RIC」だけ）→ 記入途中
       noNumber: !!sc.number && !!code && !/\d/.test(code),
@@ -474,7 +505,7 @@ function readStaffRows_(cfg) {
       deadlineRaw: opt(v, sc.deadline, x => x),
       item: opt(v, sc.item, trimStr_),
       note: trimStr_(at(v, sc.note)),
-      white: toHours_(at(v, sc.white)),
+      white: staffWhite_(v, sc),
       color: toHours_(at(v, sc.color)),
       other: toHours_(at(v, sc.other)),
       done: isChecked_(at(v, sc.done)),
@@ -529,6 +560,8 @@ function mapStaffColumns_(headers) {
     note: find(['備考', 'メモ']),
     done: find(['作業完了', '完了']),
     white: find(['ホワイト', 'White', 'WHITE']),
+    whiteBody: find(['White躯体']),
+    whiteFurn: find(['White家具']),
     color: find(['カラー', 'Color', 'COLOR']),
     other: find(['その他', '人物', 'pts', 'PTS', 'Pts']),
     translated: find(['翻訳済み']),
@@ -557,7 +590,7 @@ function mapStaffColumns_(headers) {
 }
 function staffHeaderMap_(headers) {
   const m = mapStaffColumns_(headers);
-  const missing = ['code', 'cut', 'white'].filter(k => !m[k]);
+  const missing = ['code', 'cut', 'white'].filter(k => !m[k] && !(k === 'white' && m.whiteBody));
   if (missing.length) {
     const label = { code: '会社コード（または社内案件名）', cut: '視点（または視点名・カット名）', white: 'White（またはホワイト時間・予想時間）' };
     throw new Error('エンジニア入力シートの見出しが見つかりません: ' + missing.map(k => label[k]).join('、'));
@@ -1206,6 +1239,78 @@ const AUTO_EVERY_MINUTES = 15;
  * 入力シートに変わりが無ければ何も書かず、自動登録の対象が無ければ工程図にもアクセスしない。
  * 結果は『設定』の「最後の自動実行」に1行で残す（エラーもここに出る）。
  */
+/**
+ * 入力シートの行を、状態に合わせてタブ間で移す（15分ごとの自動実行の最後）。
+ * 入力前 → 制作中：『連携』で工程図に登録済み（登録済み・更新あり）になった行
+ * 制作中 → 制作済み：工程図のタスク（その視点・その回）がすべて完了になった行
+ * 取込キー（n回目）は 制作済み→制作中→入力前 の順に数えるので、移しても変わらない。合計など式の列は書かない
+ */
+function moveStaffRows_(cfg) {
+  const out = { toDoing: 0, toDone: 0 };
+  if (cfg.tabName !== STAFF_TAB_DEFAULT) return out;
+  const file = SpreadsheetApp.openById(cfg.fileId);
+  const doing = file.getSheetByName(STAFF_TAB_DOING), done = file.getSheetByName(STAFF_TAB_DONE), before = file.getSheetByName(STAFF_TAB_DEFAULT);
+  if (!doing || !done || !before) return out;
+  const rows = readStaffRows_(cfg);
+  const keyed = collectSourceRows_(rows.map(r => Object.assign({}, r, { done: false })), new Date());
+  const keyByLoc = new Map();
+  keyed.forEach(k => keyByLoc.set(String(k.srcRow), k.key));
+  // 記入途中の行も数えておく（n回目を合わせるため。移す対象にはならない）
+  const link = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET.LINK);
+  const status = new Map();
+  if (link && link.getLastRow() >= 2) {
+    const col = headerMap_(link);
+    link.getDataRange().getValues().slice(1).forEach(v => { const k = String(v[col.key - 1] || ''); if (k) status.set(k, String(v[col.status - 1] || '')); });
+  }
+  const toDoing = rows.filter(r => r.tab === STAFF_TAB_DEFAULT && keyByLoc.has(String(r.srcRow)) &&
+    [STATUS.SENT, STATUS.UPDATED].indexOf(status.get(keyByLoc.get(String(r.srcRow)))) >= 0);
+  let toDone = [];
+  const doingRows = rows.filter(r => r.tab === STAFF_TAB_DOING && keyByLoc.has(String(r.srcRow)));
+  if (doingRows.length) {
+    const tasks = fsListAll_(getAuth_(), cfg, 'workspaces/' + cfg.workspaceId + '/tasks');
+    const doneKeys = staffDoneKeys_(tasks);
+    toDone = doingRows.filter(r => doneKeys.has(keyByLoc.get(String(r.srcRow))));
+  }
+  out.toDoing = moveStaffTabRows_(before, doing, toDoing.map(r => r.row));
+  out.toDone = moveStaffTabRows_(doing, done, toDone.map(r => r.row));
+  return out;
+}
+/** 工程図のタスク → すべて完了になった取込キー（純ロジック）。externalId ＝ 取込キー::ステップ */
+function staffDoneKeys_(tasks) {
+  const by = new Map();
+  (tasks || []).forEach(t => {
+    const ext = String(t && t.externalId || '');
+    const parts = ext.split('::');
+    if (parts.length < 4) return;
+    const key = parts.slice(0, 3).join('::');
+    if (!by.has(key)) by.set(key, true);
+    if (t.status !== 'done') by.set(key, false);
+  });
+  const out = new Set();
+  by.forEach((ok, k) => { if (ok) out.add(k); });
+  return out;
+}
+/** from タブの rowNumbers の行を to タブの最後の行の下へ移す（見出しが同じ並びとは限らないので、見出しの名前で列を合わせる）。移した数を返す */
+function moveStaffTabRows_(from, to, rowNumbers) {
+  if (!rowNumbers.length) return 0;
+  const fh = findStaffHeaderRow_(from), th = findStaffHeaderRow_(to);
+  const fsc = ensureStaffExtraColumns_(from, fh), tsc = ensureStaffExtraColumns_(to, th);
+  const fw = Math.max.apply(null, Object.keys(fsc).map(k => fsc[k]));
+  const tw = Math.max.apply(null, Object.keys(tsc).map(k => tsc[k]));
+  const keys = STAFF_INPUT_COLUMNS.map(d => d.key).filter(k => k !== 'total' && fsc[k] && tsc[k]);
+  // to の最後に中身がある行（プルダウン・式だけの行は数えない）
+  let last = th;
+  const tl = to.getLastRow();
+  if (tl > th) to.getRange(th + 1, 1, tl - th, tw).getValues().forEach((v, i) => { if (keys.some(k => trimStr_(v[tsc[k] - 1]) !== '' && v[tsc[k] - 1] !== false)) last = th + 1 + i; });
+  const sorted = rowNumbers.slice().sort((a, b) => a - b);
+  ensureSize_(to, last + sorted.length, tw);
+  sorted.forEach((r, i) => {
+    const v = from.getRange(r, 1, 1, fw).getValues()[0];
+    keys.forEach(k => { const val = v[fsc[k] - 1]; if (val !== '' && val !== null && val !== undefined) to.getRange(last + 1 + i, tsc[k]).setValue(val); });
+  });
+  sorted.slice().reverse().forEach(r => from.deleteRow(r));
+  return sorted.length;
+}
 function autoRun() {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(5000)) { console.log('ほかの処理が動いているので、今回の自動実行は見送りました'); return '見送り'; }
@@ -1244,6 +1349,12 @@ function autoRun() {
       }
     } else {
       parts.push('自動登録はしない設定');
+    }
+    try {
+      const mv = moveStaffRows_(cfg);
+      if (mv.toDoing || mv.toDone) parts.push('入力シート 制作中へ' + mv.toDoing + '件・制作済みへ' + mv.toDone + '件');
+    } catch (e) {
+      parts.push('入力シートの移動エラー：' + String(e && e.message || e));
     }
   } catch (e) {
     parts.push('エラー：' + String(e && e.message || e));
@@ -1334,7 +1445,7 @@ const REG_NOTES = {
   toInterp: '通訳へのメッセージ（翻訳してほしい点・注意点など）。入力シートの「管理者からの連絡」に写り、「通訳向け連絡文」にも入る',
   interpMessage: '自動：通訳に送る連絡文（ひな形は『設定』の「通訳向けの連絡文」）。メニュー「連絡文をコピー」でコピー・Discord へ送信もできる',
   message: '自動：エンジニア・通訳に送る連絡文（ひな形は『設定』の「登録時の連絡文」）。同じ社内案件名・同じ入力日の行は1通にまとめる。メニュー「連絡文をコピー」でコピー・Discord へ送信もできる',
-  delivery: '自動：工程図での納品名（工程図に登録された後に入る。ステップが複数なら「 / 」区切り）',
+  delivery: '自動：納品名（社外案件名_社外視点名_YYMMDD）。入力シートの「納品名」と同じ。YYMMDD はエンジニアが納品の日に書き換えて使う',
 };
 
 /** メニュー：『案件登録』を今すぐ入力シートへ写し、翻訳・時間を読み戻す（催促もここで送る） */
@@ -2202,6 +2313,12 @@ function nextRegNo_(rows, col) {
  * 『案件登録』⇄ エンジニア入力シート の同期と、時間計算の催促。
  * 戻り値: { msg, copied, updated, estimate, reminded, missing }
  */
+/** 納品名（純ロジック）：社外案件名_社外視点名_YYMMDD（YYMMDD はエンジニアが納品の日に書き換える）。空の部分は飛ばす */
+function deliveryNameOf_(row, views) {
+  const cut = formSplitCut_(row.cut);
+  const ext = trimStr_(row.extName) || formAutoExt_(cut.code, cut.room, row.pattern, views);
+  return [trimStr_(row.name), ext, 'YYMMDD'].filter(Boolean).join('_');
+}
 function syncRegistrations_(now) {
   const cfg = readSettings_();
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -2215,31 +2332,41 @@ function syncRegistrations_(now) {
   const staffFile = SpreadsheetApp.openById(cfg.fileId);
   const staff = staffFile.getSheetByName(cfg.tabName);
   if (!staff) throw new Error('エンジニア入力シートにタブ「' + cfg.tabName + '」が見つかりません');
-  const hr = findStaffHeaderRow_(staff);
-  if (hr < 0) throw new Error('エンジニア入力シートに見出しの行が見つかりません');
-  const sc = ensureStaffExtraColumns_(staff, hr);
-  const width = Math.max.apply(null, Object.keys(sc).map(k => sc[k]));
-  const sLast = staff.getLastRow();
-  const sVals = sLast > hr ? staff.getRange(hr + 1, 1, sLast - hr, width).getValues() : [];
+  // 入力前・制作中・制作済みの3つのタブ（古い順に数えて n回目 を決める）。登録No はどのタブにあっても探す。新しい行は入力前へ
+  const tabs = staffTabNames_(cfg).map(name => staffFile.getSheetByName(name)).filter(Boolean).map(sheet => {
+    const hr = findStaffHeaderRow_(sheet);
+    if (hr < 0) throw new Error('エンジニア入力シート『' + sheet.getName() + '』に見出しの行が見つかりません');
+    const tsc = ensureStaffExtraColumns_(sheet, hr);
+    const w = Math.max.apply(null, Object.keys(tsc).map(k => tsc[k]));
+    const last = sheet.getLastRow();
+    return { sheet, hr, sc: tsc, width: w, vals: last > hr ? sheet.getRange(hr + 1, 1, last - hr, w).getValues() : [] };
+  });
+  const before = tabs.find(t => t.sheet.getName() === staff.getName());
+  const hr = before.hr;
+  const sc = before.sc;
+  const width = before.width;
   const byNo = new Map();
   const keyByNo = new Map(); // 登録No → 取込キー（『連携』の行・工程図の externalId の先頭と同じ）
   const counts = new Map();
-  let lastData = hr; // 最後に中身がある行（プルダウンだけの行は数えない）
-  sVals.forEach((v, i) => {
-    const no = sc.regNo ? trimStr_(v[sc.regNo - 1]) : '';
-    if (no) byNo.set(no, { row: hr + 1 + i, v });
-    const code = joinCode_(v[sc.code - 1], sc.number ? v[sc.number - 1] : '');
-    const cut = trimStr_(v[sc.cut - 1]);
-    if (code && cut) {
-      const base = normCode_(code) + '::' + normCut_(viewpointNameOf_(cut, sc.pattern ? v[sc.pattern - 1] : ''));
-      const n = (counts.get(base) || 0) + 1;
-      counts.set(base, n);
-      if (no) keyByNo.set(no, base + '::' + n);
-    }
-    if (['code', 'number', 'cut', 'white', 'regNo'].some(k => sc[k] && trimStr_(v[sc[k] - 1]) !== '')) lastData = hr + 1 + i;
+  let lastData = hr; // 入力前タブで最後に中身がある行（プルダウンだけの行は数えない）
+  tabs.forEach(t => {
+    const tsc = t.sc;
+    t.vals.forEach((v, i) => {
+      const no = tsc.regNo ? trimStr_(v[tsc.regNo - 1]) : '';
+      if (no) byNo.set(no, { sheet: t.sheet, sc: tsc, row: t.hr + 1 + i, v });
+      const code = joinCode_(v[tsc.code - 1], tsc.number ? v[tsc.number - 1] : '');
+      const cut = trimStr_(v[tsc.cut - 1]);
+      if (code && cut) {
+        const base = normCode_(code) + '::' + normCut_(viewpointNameOf_(cut, tsc.pattern ? v[tsc.pattern - 1] : ''));
+        const n = (counts.get(base) || 0) + 1;
+        counts.set(base, n);
+        if (no) keyByNo.set(no, base + '::' + n);
+      }
+      if (t === before && ['code', 'number', 'cut', 'white', 'regNo'].some(k => tsc[k] && trimStr_(v[tsc[k] - 1]) !== '')) lastData = t.hr + 1 + i;
+    });
   });
+  const views = readMasters_(ss).views;
 
-  const deliveryNames = readDeliveryNames_(cfg);
   const next = nextRegNo_(data.slice(1), rc);
   const regUpdates = []; // { row, col, value }
   const staffUpdates = [];
@@ -2259,6 +2386,7 @@ function syncRegistrations_(now) {
 
     let no = trimStr_(row.no);
     let srow = null; // 入力シートの行の値（配列）
+    let ssc = sc; // その行があるタブの列の対応
     if (!no) {
       no = next();
       setReg(r, 'no', no);
@@ -2267,17 +2395,19 @@ function syncRegistrations_(now) {
       const arr = new Array(width).fill('');
       REG_COPY.forEach(k => { if (sc[k]) arr[sc[k] - 1] = k === 'pattern' ? normPattern_(row[k]) : (k === 'number' ? row[k] : trimStr_(row[k])); });
       arr[sc.regNo - 1] = no;
+      if (sc.delivery) arr[sc.delivery - 1] = deliveryNameOf_(row, views);
       appends.push(arr);
       srow = arr;
       copied++;
     } else if (byNo.has(no)) {
       const hit = byNo.get(no);
       srow = hit.v;
+      ssc = hit.sc;
       let changed = false;
       REG_COPY.forEach(k => {
-        if (!sc[k]) return;
+        if (!ssc[k]) return;
         const want = k === 'pattern' ? normPattern_(row[k]) : (k === 'number' ? row[k] : trimStr_(row[k]));
-        if (!sameCell_(srow[sc[k] - 1], want)) { staffUpdates.push({ row: hit.row, col: sc[k], value: want }); changed = true; }
+        if (!sameCell_(srow[ssc[k] - 1], want)) { staffUpdates.push({ sheet: hit.sheet, row: hit.row, col: ssc[k], value: want }); changed = true; }
       });
       if (changed) { setReg(r, 'copiedAt', now); updated++; }
     } else {
@@ -2285,12 +2415,12 @@ function syncRegistrations_(now) {
     }
 
     if (srow) {
-      const sv = (k) => (sc[k] ? srow[sc[k] - 1] : '');
-      const srcRow = byNo.has(no) ? byNo.get(no).row : null; // 入力シートの行番号（今回追加した行は null）
-      const putStaff = (k, value) => { if (srcRow && sc[k] && !sameCell_(srow[sc[k] - 1], value)) staffUpdates.push({ row: srcRow, col: sc[k], value }); };
-      const st = readStaffStamps_(srow, sc, now);
+      const sv = (k) => (ssc[k] ? srow[ssc[k] - 1] : '');
+      const hit = byNo.has(no) ? byNo.get(no) : null; // 入力シートの行（今回追加した行は null）
+      const putStaff = (k, value) => { if (hit && ssc[k] && !sameCell_(srow[ssc[k] - 1], value)) staffUpdates.push({ sheet: hit.sheet, row: hit.row, col: ssc[k], value }); };
+      const st = readStaffStamps_(srow, ssc, now);
       row.translated = st.translated;
-      row.white = sv('white'); row.color = sv('color'); row.other = sv('other');
+      row.white = staffWhite_(srow, ssc); row.color = sv('color'); row.other = sv('other');
       setReg(r, 'translated', st.translated ? '済' : '');
       ['white', 'color', 'other'].forEach(k => setReg(r, k, toHours_(row[k]) || ''));
       setReg(r, 'split', trimStr_(sv('split')));
@@ -2302,13 +2432,13 @@ function syncRegistrations_(now) {
       setReg(r, 'translatedAt', st.transAt || '');
       setReg(r, 'estimatedAt', st.estimatedAt || '');
       row.translatedAt = st.transAt || '';
-      // 納品名（工程図に登録された後）
-      const names = deliveryNames && keyByNo.has(no) ? deliveryNames[keyByNo.get(no)] : null;
-      if (names) {
-        const text = names.join(' / ');
-        setReg(r, 'delivery', text);
-        putStaff('delivery', text);
-      }
+      // 納品名（社外案件名_社外視点名_YYMMDD）
+      // 空、または YYMMDD のまま（エンジニアが日付を書いていない）なら、案件名・視点を直したときに合わせて作り直す
+      const dn = deliveryNameOf_(row, views);
+      const curDn = trimStr_(sv('delivery'));
+      const useDn = curDn === '' || /YYMMDD$/.test(curDn) ? dn : curDn;
+      putStaff('delivery', useDn);
+      setReg(r, 'delivery', useDn);
     }
     row.state = regState_(row);
     setReg(r, 'state', row.state);
@@ -2340,12 +2470,12 @@ function syncRegistrations_(now) {
   });
 
   // 入力シートへの書き込み（追加は最後に中身がある行の下へ）
-  staffUpdates.forEach(u => staff.getRange(u.row, u.col).setValue(u.value));
+  staffUpdates.forEach(u => u.sheet.getRange(u.row, u.col).setValue(u.value));
   if (appends.length) {
     // 写す列と登録Noだけを書く（行ごと書くと、合計などの式を消してしまう）
     const start = lastData + 1;
     ensureSize_(staff, start + appends.length - 1, width);
-    const cols = REG_COPY.map(k => sc[k]).concat([sc.regNo]).filter(Boolean);
+    const cols = REG_COPY.map(k => sc[k]).concat([sc.regNo, sc.delivery]).filter(Boolean);
     appends.forEach((arr, i) => cols.forEach(c => { if (arr[c - 1] !== '') staff.getRange(start + i, c).setValue(arr[c - 1]); }));
   }
 
@@ -2379,7 +2509,7 @@ function syncRegistrations_(now) {
 function readStaffStamps_(v, sc, now) {
   const at = (k) => (sc[k] ? v[sc[k] - 1] : '');
   const translated = isChecked_(at('translated'));
-  const total = Math.round((toHours_(at('white')) + toHours_(at('color')) + toHours_(at('other'))) * 100) / 100;
+  const total = Math.round((staffWhite_(v, sc) + toHours_(at('color')) + toHours_(at('other'))) * 100) / 100;
   const tr = parseDateTime_(at('transAt'));
   const es = parseDateTime_(at('estimatedAt'));
   return {
@@ -2403,7 +2533,7 @@ function onStaffEdit(e) {
     const lastCol = sheet.getLastColumn();
     const sc = mapStaffColumns_(sheet.getRange(hr, 1, 1, lastCol).getValues()[0]);
     if (!sc.number || !sc.translated || !sc.transAt || !sc.estimatedAt) return; // 今のレイアウトの入力タブだけ
-    const watch = ['translated', 'white', 'color', 'other'].map(k => sc[k]).filter(Boolean);
+    const watch = ['translated', 'white', 'whiteBody', 'whiteFurn', 'color', 'other'].map(k => sc[k]).filter(Boolean);
     const c1 = e.range.getColumn(), c2 = e.range.getLastColumn();
     if (!watch.some(c => c >= c1 && c <= c2)) return;
     const r1 = Math.max(e.range.getRow(), hr + 1), r2 = e.range.getLastRow();
@@ -2903,9 +3033,11 @@ function ensureStaffInputTab_(ss) {
   ensureTimeZone_(staff); // 翻訳日時・時間入力日時もベトナム時間で
   let sheet = staff.getSheetByName(STAFF_TAB_DEFAULT);
   let how = 'existing';
+  // 2026-11-04 より前の『入力シート』は、そのまま『入力前』にする
+  if (!sheet && staff.getSheetByName(STAFF_TAB_OLD)) { sheet = staff.getSheetByName(STAFF_TAB_OLD); sheet.setName(STAFF_TAB_DEFAULT); how = 'renamed'; }
   if (!sheet) {
     // 旧レイアウトのタブ（product schedule・予想時間など）や記入例のタブは使わない。今の列がそろった見出しを持つタブだけを使う
-    const reuse = staff.getSheets().filter(sh => sh.getName() !== STAFF_RULES_TAB && hasStaffInputHeaders_(sh))[0];
+    const reuse = staff.getSheets().filter(sh => [STAFF_RULES_TAB, STAFF_TAB_DOING, STAFF_TAB_DONE].indexOf(sh.getName()) < 0 && hasStaffInputHeaders_(sh))[0];
     if (reuse) { reuse.setName(STAFF_TAB_DEFAULT); sheet = reuse; how = 'renamed'; }
     else { sheet = staff.insertSheet(STAFF_TAB_DEFAULT, 0); how = 'created'; }
   }
@@ -2918,6 +3050,20 @@ function ensureStaffInputTab_(ss) {
   const codes = readCompanyCodes_(ss);
   const views = readMasters_(ss).views;
   formatStaffInputTab_(sheet, headerRow, { codes, views: viewCodeOptions_(views) });
+  // 制作中・制作済みのタブ（入力前と同じ列。行は自動で移る）
+  [STAFF_TAB_DOING, STAFF_TAB_DONE].forEach((name, i) => {
+    let tab = staff.getSheetByName(name);
+    if (!tab) {
+      const at = staff.getSheets().map(sh => sh.getName()).indexOf(STAFF_TAB_DEFAULT) + 1 + i;
+      tab = staff.insertSheet(name, at);
+    }
+    if (tab.getLastRow() === 0 || findStaffHeaderRow_(tab) < 0) {
+      const head = sheet.getRange(headerRow, 1, 1, sheet.getLastColumn()).getValues()[0];
+      ensureSize_(tab, 2, head.length);
+      tab.getRange(2, 1, 1, head.length).setValues([head]);
+    }
+    formatStaffInputTab_(tab, findStaffHeaderRow_(tab), { codes, views: viewCodeOptions_(views) });
+  });
   writeStaffRulesTab_(staff, views);
   writeSetting_(ss, 'tabName', STAFF_TAB_DEFAULT);
   writeSetting_(ss, 'startRow', 2);
@@ -2925,7 +3071,7 @@ function ensureStaffInputTab_(ss) {
   const head = how === 'created' ? where + 'に入力タブ『' + STAFF_TAB_DEFAULT + '』を作りました。'
     : how === 'renamed' ? where + 'の入力用タブの名前を『' + STAFF_TAB_DEFAULT + '』に合わせました。'
     : where + 'の『' + STAFF_TAB_DEFAULT + '』タブを整えました。';
-  return head + '見出しを日本語・ベトナム語の2段にし、プルダウン（会社コード ' + codes.length + ' 社・新規or修正・視点 ' + viewKeywords_(views).join('/') + '・パターン・時間）を付け、『' +
+  return head + '『' + STAFF_TAB_DOING + '』『' + STAFF_TAB_DONE + '』タブも用意し、見出しを日本語・ベトナム語の2段にし、プルダウン（会社コード ' + codes.length + ' 社・新規or修正・視点 ' + viewKeywords_(views).join('/') + '・パターン・時間）を付け、『' +
     STAFF_RULES_TAB + '』タブを書き直しました。（『設定』のタブ名を「' + STAFF_TAB_DEFAULT + '」、取込開始行を 2 にしました）';
 }
 
@@ -2934,8 +3080,18 @@ function ensureStaffInputTab_(ss) {
  * 既存の列は動かさない。戻り値は列番号の対応（mapStaffColumns_ と同じ形）
  */
 function ensureStaffExtraColumns_(sheet, headerRow) {
-  const lastCol = Math.max(sheet.getLastColumn(), 1);
+  let lastCol = Math.max(sheet.getLastColumn(), 1);
   let sc = mapStaffColumns_(sheet.getRange(headerRow, 1, 1, lastCol).getValues()[0]);
+  // 2026-11-04：White を「White躯体」「White家具」に分けた。前の『White』列は White躯体 にして、そのすぐ右に White家具 を差し込む
+  if (sc.white && !sc.whiteBody && sc.number) {
+    const body = STAFF_INPUT_COLUMNS.find(d => d.key === 'whiteBody');
+    const furn = STAFF_INPUT_COLUMNS.find(d => d.key === 'whiteFurn');
+    sheet.getRange(headerRow, sc.white).setValue(body.label + '\n' + body.vi);
+    sheet.insertColumnAfter(sc.white);
+    sheet.getRange(headerRow, sc.white + 1).setValue(furn.label + '\n' + furn.vi);
+    lastCol = Math.max(sheet.getLastColumn(), 1);
+    sc = mapStaffColumns_(sheet.getRange(headerRow, 1, 1, lastCol).getValues()[0]);
+  }
   const missing = STAFF_INPUT_COLUMNS.filter(d => !sc[d.key]);
   if (!missing.length) return sc;
   ensureSize_(sheet, headerRow, lastCol + missing.length);
@@ -2985,7 +3141,7 @@ function staffValidation_(key, choices) {
       return list(viewOptions, true, 'リストから選ぶ（一覧は『記入ルール/説明』）/ Chọn mã góc nhìn từ danh sách');
     case 'pattern':
       return list(PATTERN_OPTIONS, true, 'パターン違いが無ければ空欄 / Không có phương án khác thì để trống');
-    case 'white': case 'color': case 'other':
+    case 'white': case 'whiteBody': case 'whiteFurn': case 'color': case 'other':
       return list(HOUR_OPTIONS, true, '時間（h）/ Số giờ');
     case 'translated':
       return dv().requireCheckbox().build();
@@ -3011,23 +3167,28 @@ function formatStaffInputTab_(sheet, headerRow, choices) {
     if (!c) return;
     const head = sheet.getRange(headerRow, c);
     if (isCurrent) head.setValue(def.label + '\n' + def.vi);
-    head.setNote(def.note).setFontWeight('bold').setBackground('#dde5f0').setWrap(true).setVerticalAlignment('middle');
+    // 黄色＝エンジニア・通訳が入力する列、灰色＝自動・管理者が入れる列（触らない）
+    head.setNote(def.note).setFontWeight('bold').setBackground(def.input ? '#fff2cc' : '#e6e6e6').setWrap(true).setVerticalAlignment('middle');
+    sheet.getRange(start, c, n, 1).setBackground(def.input ? null : '#f3f3f3');
     sheet.setColumnWidth(c, def.width * 9);
     const rule = staffValidation_(def.key, choices);
     if (rule) sheet.getRange(start, c, n, 1).setDataValidation(rule);
     if (def.hours) sheet.getRange(start, c, n, 1).setNumberFormat('0.##');
     // 合計は式（White＋Color＋pts）。値はスクリプトから書かない
-    if (def.key === 'total' && sc.white && sc.color && sc.other) {
-      const refs = 'RC' + sc.white + ',RC' + sc.color + ',RC' + sc.other;
+    if (def.key === 'total' && (sc.whiteBody || sc.white) && sc.color && sc.other) {
+      const refs = (sc.whiteBody ? 'RC' + sc.whiteBody + ',RC' + sc.whiteFurn : 'RC' + sc.white) + ',RC' + sc.color + ',RC' + sc.other;
       sheet.getRange(start, c, n, 1).setFormulaR1C1('=IF(COUNT(' + refs + ')=0,"",SUM(' + refs + '))');
     }
     if (def.datetime) sheet.getRange(start, c, n, 1).setNumberFormat('yyyy-mm-dd hh:mm');
-    if (def.auto) { head.setBackground('#e6e6e6'); sheet.getRange(start, c, n, 1).setBackground('#f3f3f3'); }
   });
   if (isCurrent) sheet.setRowHeight(headerRow, 42);
-  // 見出しの上が空なら1行の案内を書く（書き方の本文は『記入ルール/説明』タブ）
-  if (headerRow >= 2 && sheet.getRange(headerRow - 1, 1, 1, lastCol).getValues()[0].every(v => trimStr_(v) === '')) {
-    sheet.getRange(headerRow - 1, 1).setValue(STAFF_INPUT_HINT).setFontColor('#555555');
+  // 見出しの上に1行の案内を書く（タブごとの説明。書き方の本文は『記入ルール/説明』タブ）
+  const hint = STAFF_TAB_HINTS[sheet.getName()];
+  const above = headerRow >= 2 ? sheet.getRange(headerRow - 1, 1, 1, lastCol).getValues()[0] : null;
+  if (above && (hint || above.every(v => trimStr_(v) === ''))) {
+    const old = trimStr_(above[0]);
+    if (hint && (old === '' || old.indexOf('1視点') === 0 || Object.keys(STAFF_TAB_HINTS).some(k => old === STAFF_TAB_HINTS[k]))) sheet.getRange(headerRow - 1, 1).setValue(hint).setFontColor('#555555');
+    else if (!hint && old === '') sheet.getRange(headerRow - 1, 1).setValue(STAFF_INPUT_HINT).setFontColor('#555555');
   }
   if (headerRow <= 3) sheet.setFrozenRows(headerRow); // 上に長い書き方がある旧レイアウトは固定しない（画面が埋まるため）
 }
@@ -3036,47 +3197,35 @@ function formatStaffInputTab_(sheet, headerRow, choices) {
 const STAFF_RULES_LINES = [
   ['title', '【記入ルール】工程図 エンジニア入力シート', '【Quy tắc nhập liệu】Bảng nhập của kỹ sư (工程図)'],
   ['h', '■ 基本', '■ Cơ bản'],
-  ['', '・『入力シート』タブの2行目（見出し）より下に、1視点＝1行で書きます。同じ視点のパターン違い（A・B…）も別の行です。',
-    '・Nhập vào tab『入力シート』, bên dưới dòng tiêu đề (dòng 2): mỗi góc nhìn = 1 dòng. Phương án khác (A, B…) của cùng góc nhìn cũng là 1 dòng riêng.'],
-  ['', '・依頼が来るたびに新しい行を足します。過去の行は消したり書き換えたりしないでください。',
-    '・Mỗi lần có yêu cầu thì thêm 1 dòng mới. Không xóa hoặc sửa các dòng cũ.'],
+  ['', '・黄色の列だけ入力します。灰色の列（会社コード・案件番号・視点・パターン・登録No・納品名など）は管理者が登録したもの・自動で入るものなので、触らないでください。',
+    '・Chỉ nhập vào các cột màu vàng. Các cột màu xám (Mã công ty, Số dự án, Góc nhìn, Phương án, Mã đăng ký, Tên file giao…) do quản lý đăng ký hoặc tự động điền, không được sửa.'],
+  ['', '・管理者が登録すると『入力前』タブに1視点＝1行で入ります。行を足したり消したりしないでください。',
+    '・Khi quản lý đăng ký, mỗi góc nhìn = 1 dòng sẽ xuất hiện ở tab『入力前』. Không thêm hoặc xóa dòng.'],
   ['', '・時間は h（時間）で、リストから選びます（0.5 刻み）。リストに無い時間は数字を直接入力できます。',
     '・Thời gian tính bằng giờ (h), chọn từ danh sách (bước 0.5). Nếu không có trong danh sách thì nhập số trực tiếp.'],
-  ['', '・会社コード・案件番号・新規or修正・視点・時間（White / Color / pts のどれか）がそろった行から、管理者に届きます。',
-    '・Dòng có đủ Mã công ty, Số dự án, Mới / Sửa, Góc nhìn và giờ (White / Color / pts) sẽ được gửi đến quản lý.'],
-  ['h', '■ 各列の書き方', '■ Cách nhập từng cột'],
-  ['', '会社コード：REN・RIC など、リストから選ぶ（リストに無い会社は管理者に連絡）', 'Mã công ty: chọn REN, RIC… từ danh sách (nếu không có, liên hệ quản lý)'],
-  ['', '案件番号：数字だけ（例 34）。会社コードと合わせて「RIC.34」として扱います', 'Số dự án: chỉ nhập số (VD: 34). Ghép với mã công ty thành「RIC.34」'],
-  ['', '社外案件名：お客様の案件名を自由入力（例 マンション）', 'Tên dự án: tên dự án của khách hàng, nhập tự do (VD: マンション)'],
-  ['', 'サーバーリンク：保存先フォルダのリンク（CG から始まるパス）を貼り付け', 'Link thư mục: dán đường dẫn thư mục lưu file (bắt đầu bằng CG)'],
-  ['', '新規or修正：その視点の初回依頼は「新規」、2回目以降はすべて「修正」', 'Mới / Sửa: yêu cầu lần đầu của góc nhìn đó chọn「新規 / Mới」, từ lần thứ 2 trở đi chọn「修正 / Sửa」'],
-  ['', '視点：下の「視点コード」から選ぶ（①と末尾の数字は同じ。外観目線視点② → EX2）。表に無い視点は管理者に連絡', 'Góc nhìn: chọn theo bảng「Mã góc nhìn」bên dưới (số ① = số cuối, VD: ngoại thất tầm mắt ② → EX2). Nếu không có, liên hệ quản lý'],
-  ['', 'パターン：同じ視点でパターン違いがあれば A・B・C…（無ければ空欄）', 'Phương án: nếu cùng góc nhìn có nhiều phương án thì chọn A, B, C… (không có thì để trống)'],
-  ['', 'White：ホワイトパースまでの制作時間（モデル作成の行はモデル制作時間）', 'White: số giờ làm đến phối cảnh trắng (dòng dựng model: số giờ dựng model)'],
-  ['', 'Color：色付きパースまでの制作時間（White の時間は含めない）', 'Color: số giờ làm phối cảnh màu (không tính số giờ White)'],
-  ['', 'pts：写真合成・フォトショップ作業（人物・点景など）の時間', 'pts: số giờ ghép ảnh / làm Photoshop (người, cây, xe…)'],
-  ['', 'メモ：制作上の注意点など（自由記入）', 'Ghi chú: lưu ý khi thực hiện (nhập tự do)'],
+  ['h', '■ タブの流れ', '■ Luồng các tab'],
+  ['', '『入力前』：翻訳・制作時間を入れる視点。時間がそろって15分たつと、工程図に登録されて『制作中』へ自動で移ります。',
+    '『入力前』(Chưa nhập xong): góc nhìn cần dịch và nhập số giờ. Khi đủ số giờ 15 phút, sẽ tự động đăng ký vào 工程図 và chuyển sang『制作中』.'],
+  ['', '『制作中』：工程図に登録済みで制作中の視点。工程図で完了になると『制作済み』へ自動で移ります。',
+    '『制作中』(Đang làm): góc nhìn đã đăng ký vào 工程図. Khi hoàn thành trên 工程図 sẽ tự động chuyển sang『制作済み』.'],
+  ['', '『制作済み』：工程図で完了になった視点（記録として残します。消さないでください）。',
+    '『制作済み』(Đã xong): góc nhìn đã hoàn thành trên 工程図 (lưu lại làm hồ sơ, không xóa).'],
+  ['h', '■ 黄色の列の書き方', '■ Cách nhập các cột màu vàng'],
   ['', '翻訳済み：通訳が資料を翻訳してエンジニアに伝えたらチェック（翻訳日時は自動で入ります）', 'Đã dịch: phiên dịch đánh dấu khi đã dịch tài liệu và truyền đạt cho kỹ sư (thời gian tự động ghi)'],
-  ['', '翻訳メモ：通訳がお客様の指示の訳・注意点を書く', 'Ghi chú dịch: phiên dịch ghi nội dung dịch yêu cầu của khách, lưu ý'],
-  ['', '作業の分け方：分けて作業できるときに書く（例 White＝躯体 3h／家具1 2h／家具2 1h）。工程図ではこの作業ごとに分かれます。分けた時間の合計は White などの時間と同じにしてください',
-    'Cách chia công việc: ghi khi có thể chia việc (VD: White = khung 3h / nội thất 1 2h / nội thất 2 1h). 工程図 sẽ chia theo từng việc. Tổng giờ phải bằng giờ White…'],
+  ['', '翻訳メモ：通訳がお客様の指示の訳・注意点を書く（「管理者からの連絡」も必ず読む）', 'Ghi chú dịch: phiên dịch ghi nội dung dịch yêu cầu của khách, lưu ý (hãy đọc kỹ「Lời nhắn từ quản lý」)'],
+  ['', 'White躯体：躯体（建物・外構など）のホワイトまでの制作時間（モデル作成の行はモデル制作時間）', 'Trắng – kết cấu: số giờ làm phối cảnh trắng phần kết cấu (tòa nhà, ngoại cảnh…) (dòng dựng model: số giờ dựng model)'],
+  ['', 'White家具：家具・設備のホワイトまでの制作時間（無ければ空欄）', 'Trắng – nội thất: số giờ làm phối cảnh trắng phần đồ nội thất (không có thì để trống)'],
+  ['', 'Color：色付きパースまでの制作時間（White の時間は含めない）', 'Màu: số giờ làm phối cảnh màu (không tính số giờ Trắng)'],
+  ['', 'pts：写真合成・フォトショップ作業（人物・点景など）の時間', 'Ghép ảnh: số giờ ghép ảnh / làm Photoshop (người, cây, xe…)'],
+  ['', 'メモ：制作上の注意点など（自由記入）', 'Ghi chú: lưu ý khi thực hiện (nhập tự do)'],
+  ['', '作業の分け方：分けて作業できるときに書く（例 White＝躯体 3h／家具1 2h）。工程図ではこの作業ごとに分かれます。分けた時間の合計は White などの時間と同じにしてください',
+    'Cách chia công việc: ghi khi có thể chia việc (VD: White = kết cấu 3h / nội thất 1 2h). 工程図 sẽ chia theo từng việc. Tổng giờ phải bằng số giờ Trắng…'],
   ['', '時間入力者：制作時間を決めた人の名前（時間入力日時・合計は自動で入ります）', 'Người nhập giờ: tên người quyết định số giờ (thời gian nhập và tổng tự động ghi)'],
-  ['', '登録No：管理者が登録した行に自動で入ります。変えないでください', 'Mã đăng ký: tự động có ở dòng do quản lý đăng ký. Không sửa'],
-  ['', '納品名：工程図に登録されると、納品するファイルの名前が自動で入ります。納品のときはこの名前を使ってください', 'Tên file giao: tự động có sau khi đăng ký vào 工程図. Khi giao hàng, hãy dùng tên này'],
-  ['', '管理者からの連絡：管理者から通訳へのメッセージ（翻訳してほしい点・注意点）が自動で入ります。通訳は必ず読んでください', 'Lời nhắn từ quản lý: lời nhắn của quản lý cho phiên dịch (tự động). Phiên dịch hãy đọc kỹ'],
-  ['', '※ 管理者が登録した行（登録No あり）は、会社コード〜パターンが自動で入ります。翻訳済みから2時間たっても時間が空だと Discord で催促が届きます',
-    '※ Dòng do quản lý đăng ký (có Mã đăng ký) sẽ tự điền từ Mã công ty đến Phương án. Nếu 2 giờ sau khi dịch xong vẫn chưa có số giờ, sẽ có nhắc nhở qua Discord'],
-  ['h', '■ 視点コード', '■ Mã góc nhìn'],
-];
-// 記入例（『記入ルール/説明』の最後に表で載せる。入力シートの列の順）
-const STAFF_RULES_EXAMPLES = [
-  ['RIC', 34, 'マンション', '\\\\CG-SERVER2\\…\\RIC.34', '新規 / Mới', 'EX1', '', 6, 4, 0, '外観 昼景 / ngoại thất ban ngày'],
-  ['RIC', 34, 'マンション', '\\\\CG-SERVER2\\…\\RIC.34', '新規 / Mới', 'EX1', 'A', 6, 4, 0, 'EX1 のパターン違い / phương án khác của EX1'],
-  ['RIC', 34, 'マンション', '\\\\CG-SERVER2\\…\\RIC.34', '新規 / Mới', 'IN1', '', 5, 3.5, 1.5, '人物あり → pts / có người → pts'],
-  ['RIC', 34, 'マンション', '\\\\CG-SERVER2\\…\\RIC.34', '修正 / Sửa', 'EX1', '', 0, 1.5, 0, '2回目の依頼（色の修正）/ yêu cầu lần 2 (sửa màu)'],
-  ['REN', 72, '戸建て', '\\\\CG-SERVER2\\…\\REN.72', '新規 / Mới', 'EXCB1', '', 5, 3, 0, '外観鳥瞰 / ngoại thất chim bay'],
-  ['REN', 72, '戸建て', '\\\\CG-SERVER2\\…\\REN.72', '新規 / Mới', 'EXP1', '', 2, 1, 0.5, '外観写真合成 / ghép ảnh ngoại thất'],
-  ['REN', 72, '戸建て', '\\\\CG-SERVER2\\…\\REN.72', '新規 / Mới', 'EXM1', '', 8, 0, 0, 'モデル作成（外観）/ dựng model ngoại thất'],
+  ['h', '■ 納品名', '■ Tên file giao'],
+  ['', '納品名は自動で入ります（社外案件名_社外視点名_YYMMDD）。YYMMDD を納品する日（例 261104）に書き換えて使ってください。',
+    'Tên file giao được tự động điền (Tên dự án_Tên góc nhìn_YYMMDD). Khi dùng, hãy đổi YYMMDD thành ngày giao (VD: 261104).'],
+  ['', '※ 翻訳済みから2時間たっても時間が空だと Discord で催促が届きます', '※ Nếu 2 giờ sau khi dịch xong vẫn chưa có số giờ, sẽ có nhắc nhở qua Discord'],
+  ['h', '■ 視点コードの読み方（灰色の「視点」列）', '■ Cách đọc mã góc nhìn (cột「Góc nhìn」màu xám)'],
 ];
 
 /** 『記入ルール/説明』タブを日本語・ベトナム語の併記で書き直す（本文はB列。A列は余白） */
@@ -3095,10 +3244,6 @@ function writeStaffRulesTab_(staff, views) {
     push([l[1]], 'ja'); push(['   ' + l[2]], 'vi');
   });
   viewCodeLines_(views).forEach(l => push([l], 'ja'));
-  r++;
-  push(['■ 記入例（読むだけ。実際の入力は『' + STAFF_TAB_DEFAULT + '』タブへ） ／ Ví dụ (chỉ để xem, nhập thật ở tab『' + STAFF_TAB_DEFAULT + '』)'], 'h');
-  push(STAFF_INPUT_COLUMNS.map(c => c.label + '\n' + c.vi), 'tableHead');
-  STAFF_RULES_EXAMPLES.forEach(e => push(e, 'table'));
 
   ensureSize_(sh, r, width + 1);
   cells.forEach(c => {

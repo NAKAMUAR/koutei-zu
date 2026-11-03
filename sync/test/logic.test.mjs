@@ -15,7 +15,7 @@ vm.createContext(ctx);
 const exportsList = ['normCode_', 'codePrefix_', 'normCut_', 'normPattern_', 'viewpointNameOf_', 'cutTokens_', 'cutNumber_', 'circled_',
   'externalViewpointName_', 'guessCompanyFromLink_', 'findProject_', 'judgeCompany_', 'judgeViewpoint_',
   'judgeStepKind_', 'requestStepKind_', 'judgeRow_', 'parseDeadline_', 'toHours_', 'collectSourceRows_', 'buildTaskRecords_', 'parseSplit_', 'resolveStepLabel_',
-  'resolveDeliverySuffix_', 'normalizeStepTypes_', 'staffHeaderMap_', 'mapStaffColumns_', 'joinCode_', 'fsEncodeFields_', 'fsDecodeDoc_', 'rowObjToArray_', 'arrayToRowObj_',
+  'resolveDeliverySuffix_', 'normalizeStepTypes_', 'staffHeaderMap_', 'staffWhite_', 'staffDoneKeys_', 'deliveryNameOf_', 'mapStaffColumns_', 'joinCode_', 'fsEncodeFields_', 'fsDecodeDoc_', 'rowObjToArray_', 'arrayToRowObj_',
   'STATUS', 'KIND', 'STEP_KIND', 'DEFAULT_STEP_TYPES', 'H', 'STAFF_INPUT_HEADERS', 'STAFF_INPUT_COLUMNS', 'INITIAL_VIEW_MASTER',
   'HOUR_OPTIONS', 'REQUEST_OPTIONS', 'deriveExternal_', 'viewCodeOptions_', 'viewCodeLines_', 'linkChoiceLists_',
   'isAutoSendTarget_', 'planCompanyAdditions_', 'companyKey_', 'parseDateTime_'];
@@ -256,14 +256,19 @@ test('時間の解釈', () => {
 });
 
 test('入力シートの見出し → 列（今のレイアウト。日本語＋ベトナム語の2段見出しでも読める）', () => {
-  const expected = { code: 1, number: 2, name: 3, link: 4, request: 5, cut: 6, pattern: 7, white: 8, color: 9, other: 10, note: 11, deadline: 0, item: 0, done: 0 };
+  // 2026-11-04 から White は White躯体・White家具 の2列
+  const expected = { code: 1, number: 2, name: 3, link: 4, request: 5, cut: 6, pattern: 7, white: 8, whiteBody: 8, whiteFurn: 9, color: 10, other: 11, note: 12, deadline: 0, item: 0, done: 0 };
   const plainHeaders = g.staffHeaderMap_(g.STAFF_INPUT_HEADERS);
   Object.keys(expected).forEach(k => assert.equal(plainHeaders[k], expected[k], k));
   const bilingual = g.staffHeaderMap_(g.STAFF_INPUT_COLUMNS.map(c => c.label + '\n' + c.vi));
   Object.keys(expected).forEach(k => assert.equal(bilingual[k], expected[k], k));
-  // 1列目の見出しを「社外案件名」と書き間違えていても、案件番号のすぐ左なら会社コードとみなす
+  // 分ける前のシート（White 1列）。1列目の見出しを「社外案件名」と書き間違えていても、案件番号のすぐ左なら会社コードとみなす
+  const old = { code: 1, number: 2, name: 3, link: 4, request: 5, cut: 6, pattern: 7, white: 8, whiteBody: 0, color: 9, other: 10, note: 11 };
   const typo = g.staffHeaderMap_(['社外案件名', '案件番号', '社外案件名', 'サーバーリンク', '新規or修正', '視点', 'パターン', 'White', 'Color', 'pts', 'メモ']);
-  Object.keys(expected).forEach(k => assert.equal(typo[k], expected[k], k));
+  Object.keys(old).forEach(k => assert.equal(typo[k], old[k], k));
+  // White の時間：躯体＋家具（分ける前は White 列）
+  assert.equal(g.staffWhite_([0, 0, 0, 0, 0, 0, 0, 3, 1.5, 2], plainHeaders), 4.5);
+  assert.equal(g.staffWhite_([0, 0, 0, 0, 0, 0, 0, 3, 2], typo), 3);
 });
 
 test('スタッフシートの見出し → 列（旧レイアウト product schedule）', () => {
