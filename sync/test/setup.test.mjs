@@ -87,6 +87,7 @@ class FakeSheet {
 class FakeSpreadsheet {
   constructor(name, sheets) { this.name = name; this.sheets = sheets; }
   getName() { return this.name; }
+  getId() { return 'id:' + this.name; }
   getSheets() { return this.sheets.slice(); }
   getSheetByName(n) { return this.sheets.find(s => s.getName() === n) || null; }
   insertSheet(name, idx) { const sh = new FakeSheet(name); if (idx === undefined) this.sheets.push(sh); else this.sheets.splice(idx, 0, sh); return sh; }
@@ -238,7 +239,7 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
     },
   };
   vm.createContext(ctx);
-  const names = ['onStaffEdit', 'syncRegistrationsNow', 'saveDiscordWebhook_', 'inNotifyHours_', 'isReminderDue_', 'regState_', 'REG_STATE', 'quickSetup', 'createStaffInputTab', 'transferFromStaffSheet', 'autoRun', 'readSettings_', 'readStaffRows_', 'collectSourceRows_', 'findStaffHeaderRow_',
+  const names = ['onAdminEdit', 'renderRegMessage_', 'onStaffEdit', 'syncRegistrationsNow', 'saveDiscordWebhook_', 'inNotifyHours_', 'isReminderDue_', 'regState_', 'REG_STATE', 'quickSetup', 'createStaffInputTab', 'transferFromStaffSheet', 'autoRun', 'readSettings_', 'readStaffRows_', 'collectSourceRows_', 'findStaffHeaderRow_',
     'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT'];
   env.g = vm.runInContext(src + '\n;({' + names.join(',') + '})', ctx);
   return env;
@@ -246,6 +247,7 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
 const settingsOf = (admin) => Object.fromEntries(admin.getSheetByName('設定').rows.slice(1).map(r => [r[0], r[1]]));
 const ruleAt = (sheet, row, col) => { const v = sheet.validations.filter(x => x.col === col && x.row === row); return v.length ? v[v.length - 1].rule : null; };
 
+const env0 = () => makeEnv({ admin: adminSheet(), files: {} });
 let passed = 0;
 function test(name, fn) { fn(); passed++; console.log('  ok  ' + name); }
 // vm で作った配列は別 realm なので、JSON で正規化してから比べる
@@ -341,7 +343,8 @@ test('かんたん初期設定：管理者シート・入力シート（2か国�
   assert.ok(!customers.includes('株式会社サンゲツ'));
   assert.equal(customers.length, KOUTEI_CUSTOMERS.length + COMPANIES_0928.length - 7);
   // 30分ごとの自動実行が1つ
-  same(env.triggers.map(t => [t.fn, t.every || null, t.file || null]), [['autoRun', 30, null], ['onStaffEdit', null, NEW_ID]], '30分ごとの自動実行＋入力シートの編集トリガー');
+  same(env.triggers.map(t => [t.fn, t.every || null, t.file || null]), [['autoRun', 30, null], ['onStaffEdit', null, NEW_ID], ['onAdminEdit', null, 'id:工程図連携']],
+    '30分ごとの自動実行＋入力シートの編集トリガー＋管理者シートの編集トリガー');
 
   // 結果は1つのダイアログ
   assert.equal(env.alerts.length, 1);
@@ -753,6 +756,39 @@ test('入力シートを編集した瞬間：翻訳済みのチェックで翻�
   // 見出しより上・他のタブの編集は無視
   env.g.onStaffEdit({ range: tab.getRange(1, 1) });
   env.g.onStaffEdit({ range: eng.getSheetByName('記入ルール/説明').getRange(5, 2) });
+});
+
+test('連絡文：ひな形から作り、同じ案件・同じ入力日の視点は1通にまとめる／管理者シートに書いたらすぐ入力シートへ写す', () => {
+  const r = (o) => ({ code: 'REN', number: 50, name: '戸建て', link: '\\\\CG-SERVER2\\REN.50', cut: 'EX1', pattern: '', request: '新規 / Mới', assignee: 'Quynh', deadline: '2030-01-20', ...o });
+  const tpl = '{社内案件名}の資料を共有します。\n{サーバーリンク}\n\n発行から1時間後には制作時間の計算をお願いします。';
+  assert.equal(env0().g.renderRegMessage_(tpl, [r({})]), 'REN.50の資料を共有します。\n\\\\CG-SERVER2\\REN.50\n\n発行から1時間後には制作時間の計算をお願いします。');
+  assert.equal(env0().g.renderRegMessage_('{社外案件名}：{視点一覧}（{新規or修正}・納期{納期}・{不明}）', [r({}), r({ cut: 'IN2', pattern: 'A' })]), '戸建て：EX1・IN2-A（新規・納期1/20・{不明}）');
+
+  const admin = adminSheet();
+  const eng = engineerFile();
+  const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
+  env.g.quickSetup();
+  const reg = admin.getSheetByName('案件登録');
+  const rh = reg.header();
+  const setR = (row, name, v) => reg.set(row, rh.indexOf(name) + 1, v);
+  const R = (row, name) => reg.rows[row - 1][rh.indexOf(name)];
+  const edit = (row) => env.g.onAdminEdit({ range: reg.getRange(row, 1, 1, rh.length) });
+  // 記入途中では写さない
+  setR(2, '会社コード', 'REN'); setR(2, '案件番号', 50);
+  edit(2);
+  assert.equal(R(2, '登録No') || '', '');
+  // そろった瞬間に写す
+  setR(2, '社外案件名', '戸建て'); setR(2, '新規or修正', '新規 / Mới'); setR(2, '視点', 'EX1'); setR(2, 'サーバーリンク', LINK);
+  edit(2);
+  assert.equal(R(2, '登録No'), 'R0001');
+  assert.equal(eng.getSheetByName('入力シート').rows[2][0], 'REN', '入力シートにすぐ写る');
+  // 同じ日に同じ案件の視点をもう1つ → 連絡文は1通にまとまる（ひな形の既定：資料の共有＋1時間後に計算）
+  setR(3, '会社コード', 'REN'); setR(3, '案件番号', 50); setR(3, '社外案件名', '戸建て'); setR(3, '新規or修正', '新規 / Mới'); setR(3, '視点', 'IN1'); setR(3, 'サーバーリンク', LINK);
+  edit(3);
+  assert.equal(R(2, '連絡文'), 'REN.50の資料を共有します。\n' + LINK + '\n\n発行から1時間後には制作時間の計算をお願いします。');
+  assert.equal(R(3, '連絡文'), R(2, '連絡文'));
+  // 『案件登録』以外のタブの編集では動かない
+  env.g.onAdminEdit({ range: admin.getSheetByName('連携').getRange(1, 1) });
 });
 
 test('催促の時間帯と判定', () => {
