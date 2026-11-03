@@ -89,6 +89,8 @@ class FakeSpreadsheet {
   constructor(name, sheets) { this.name = name; this.sheets = sheets; }
   getName() { return this.name; }
   getId() { return 'id:' + this.name; }
+  getSpreadsheetTimeZone() { return this.tz || 'America/Los_Angeles'; }
+  setSpreadsheetTimeZone(z) { this.tz = z; return this; }
   getSheets() { return this.sheets.slice(); }
   getSheetByName(n) { return this.sheets.find(s => s.getName() === n) || null; }
   insertSheet(name, idx) { const sh = new FakeSheet(name); if (idx === undefined) this.sheets.push(sh); else this.sheets.splice(idx, 0, sh); return sh; }
@@ -343,6 +345,9 @@ test('かんたん初期設定：管理者シート・入力シート（2か国�
   ['株式会社リックデザイン', 'ソーシャルインテリア', 'FRYGALLERY', 'ヴンダー', 'CONTE'].forEach(c => assert.ok(customers.includes(c), c + ' を追加'));
   assert.ok(!customers.includes('株式会社サンゲツ'));
   assert.equal(customers.length, KOUTEI_CUSTOMERS.length + COMPANIES_0928.length - 7);
+  // 2つのシートのタイムゾーンはベトナム時間に合わせる
+  assert.equal(admin.getSpreadsheetTimeZone(), 'Asia/Ho_Chi_Minh');
+  assert.equal(eng.getSpreadsheetTimeZone(), 'Asia/Ho_Chi_Minh');
   // 30分ごとの自動実行が1つ
   same(env.triggers.map(t => [t.fn, t.every || null, t.file || null]), [['autoRun', 30, null], ['onStaffEdit', null, NEW_ID], ['onAdminEdit', null, 'id:工程図連携']],
     '30分ごとの自動実行＋入力シートの編集トリガー＋管理者シートの編集トリガー');

@@ -147,6 +147,17 @@ const SETTING_NOTES = {
 };
 
 const PROP_SERVICE_ACCOUNT = 'SERVICE_ACCOUNT_JSON';
+// 時刻はすべてベトナム時間（appsscript.json の timeZone と同じ）。連絡文の時刻もこれで書き、2つのシートもこれに合わせる
+const APP_TIME_ZONE = 'Asia/Ho_Chi_Minh';
+const APP_TIME_ZONE_ALIASES = ['Asia/Ho_Chi_Minh', 'Asia/Saigon'];
+/** シートのタイムゾーンがベトナム時間でなければ直す（直したら true） */
+function ensureTimeZone_(ss) {
+  try {
+    if (APP_TIME_ZONE_ALIASES.indexOf(ss.getSpreadsheetTimeZone()) >= 0) return false;
+    ss.setSpreadsheetTimeZone(APP_TIME_ZONE);
+    return true;
+  } catch (e) { return false; }
+}
 const PROP_DISCORD = 'DISCORD_WEBHOOK_URL';
 
 // 旧スタッフシート（「Project Schedule」の『案件シート(一覧)』）。『設定』がこれを指したままなら
@@ -1647,11 +1658,9 @@ function renderRegMessage_(template, rows, opts) {
   return String(template || '').replace(/\{([^{}]+)\}/g, (m, k) => (k in vals ? vals[k] : m)).replace(/\n{3,}/g, '\n\n').trim();
 }
 
-/** 連絡文の日時はシートと同じタイムゾーンで「11/3 15:15」の形にする */
+/** 連絡文の日時はベトナム時間で「11/3 15:15」の形にする（シートのタイムゾーンの設定に関係なく） */
 function regMessageOpts_(cfg, ss) {
-  let tz = '';
-  try { tz = ss.getSpreadsheetTimeZone(); } catch (e) { tz = ''; }
-  const fmt = (tz && typeof Utilities !== 'undefined') ? (d) => Utilities.formatDate(d, tz, 'M/d H:mm') : null;
+  const fmt = typeof Utilities !== 'undefined' ? (d) => Utilities.formatDate(d, APP_TIME_ZONE, 'M/d H:mm') : null;
   return { calcMinutes: cfg.calcMinutes, fmt };
 }
 
@@ -1981,6 +1990,7 @@ function createStaffInputTab() {
 function ensureStaffInputTab_(ss) {
   const cfg = readSettings_();
   const staff = SpreadsheetApp.openById(cfg.fileId);
+  ensureTimeZone_(staff); // 翻訳日時・時間入力日時もベトナム時間で
   let sheet = staff.getSheetByName(STAFF_TAB_DEFAULT);
   let how = 'existing';
   if (!sheet) {
@@ -2265,6 +2275,7 @@ function setupSheet() {
   toastOrLog_('初期設定が完了しました。');
 }
 function setupSheet_(ss) {
+  ensureTimeZone_(ss); // シートの時刻をベトナム時間に
   const link = ensureLinkSheet_(ss);
   const col = headerMap_(link);
   link.setFrozenRows(1);
