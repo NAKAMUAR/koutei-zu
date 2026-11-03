@@ -2670,8 +2670,11 @@ function serviceAccountToken_(sa) {
 }
 
 // ============ Firestore REST ============
+// 工程図の Firestore データベース名は "default"（カッコなし・Enterprise edition）。src/firebase.js の DATABASE_ID と同じ。
+// 標準の "(default)" を指すと「The database (default) does not exist」の 404 になる（2026-11-03 の設置で発覚）。
+const FIRESTORE_DATABASE_ID = 'default';
 function fsBase_(cfg) {
-  return 'https://firestore.googleapis.com/v1/projects/' + cfg.projectId + '/databases/(default)/documents';
+  return 'https://firestore.googleapis.com/v1/projects/' + cfg.projectId + '/databases/' + FIRESTORE_DATABASE_ID + '/documents';
 }
 function fsFetch_(auth, url, method, body) {
   const res = UrlFetchApp.fetch(url, {
@@ -2682,7 +2685,12 @@ function fsFetch_(auth, url, method, body) {
     muteHttpExceptions: true,
   });
   const code = res.getResponseCode();
-  if (code === 404 && method === 'get') return null;
+  if (code === 404 && method === 'get') {
+    // 「ドキュメントが無い」は null。データベースそのものが無い 404 は接続の誤りなので、空として扱わずにエラーにする
+    const text404 = res.getContentText();
+    if (/database .* does not exist/i.test(text404)) throw new Error('工程図のデータベースが見つかりません（プロジェクト ' + url.split('/projects/')[1].split('/')[0] + '・データベース ' + FIRESTORE_DATABASE_ID + '）: ' + text404.slice(0, 300));
+    return null;
+  }
   if (code >= 300) throw new Error('Firestore ' + method.toUpperCase() + ' ' + code + ': ' + res.getContentText().slice(0, 500));
   const text = res.getContentText();
   return text ? JSON.parse(text) : {};

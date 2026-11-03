@@ -181,8 +181,11 @@ function fakeFirestore(customers) {
   });
   fs.fetch = (url, opt) => {
     const method = (opt && opt.method) || 'get';
-    const p = decodeURIComponent(url.split('/documents/')[1].split('?')[0]);
     const res = (code, body) => ({ getResponseCode: () => code, getContentText: () => (body === undefined ? '' : JSON.stringify(body)) });
+    // 本物の工程図と同じく、データベース名は "default"（カッコなし）。"(default)" などを指すと 404 になる
+    const db = decodeURIComponent(url.split('/databases/')[1].split('/')[0]);
+    if (db !== 'default') return res(404, { error: { code: 404, message: 'The database ' + db + ' does not exist for project koutei-zu', status: 'NOT_FOUND' } });
+    const p = decodeURIComponent(url.split('/documents/')[1].split('?')[0]);
     if (method === 'get') {
       if (/\/tasks$/.test(p)) return res(200, { documents: Object.keys(fs.docs).filter(k => k.indexOf(p + '/') === 0).map(k => ({ name: k, fields: fs.docs[k] })) });
       return fs.docs[p] ? res(200, { name: p, fields: fs.docs[p] }) : res(404, { error: 'NOT_FOUND' });
