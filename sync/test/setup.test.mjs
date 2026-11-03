@@ -256,7 +256,7 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
     },
   };
   vm.createContext(ctx);
-  const names = ['onAdminEdit', 'renderRegMessage_', 'onStaffEdit', 'syncRegistrationsNow', 'saveDiscordWebhook_', 'inNotifyHours_', 'isReminderDue_', 'regState_', 'REG_STATE', 'quickSetup', 'createStaffInputTab', 'transferFromStaffSheet', 'autoRun', 'readSettings_', 'readStaffRows_', 'collectSourceRows_', 'findStaffHeaderRow_',
+  const names = ['onAdminEdit', 'renderRegMessage_', 'onStaffEdit', 'syncRegistrationsNow', 'saveDiscordWebhook_', 'inNotifyHours_', 'isReminderDue_', 'calcDeadlineOf_', 'regState_', 'REG_STATE', 'quickSetup', 'createStaffInputTab', 'transferFromStaffSheet', 'autoRun', 'readSettings_', 'readStaffRows_', 'collectSourceRows_', 'findStaffHeaderRow_',
     'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_'];
   env.g = vm.runInContext(src + '\n;({' + names.join(',') + '})', ctx);
   return env;
@@ -741,10 +741,10 @@ test('案件登録 → 入力シートへ写す → 翻訳済み → 2時間で 
   assert.equal(R(2, '翻訳メモ'), '昼景・植栽多め');
   assert.ok(isDate(R(2, '翻訳日時')), '翻訳日時（入力シートにも入る）');
   assert.ok(isDate(S('翻訳日時')));
-  assert.equal(env.discord.length, 0, 'まだ2時間たっていない');
+  assert.equal(env.discord.length, 0, 'まだ期限（登録から1時間30分）前');
 
-  // 2時間たっても時間が空 → Webhook 未設定なら送らずに結果へ書く
-  tab.set(3, sh.indexOf('翻訳日時') + 1, new Date(Date.now() - 2.5 * 3600000)); // 2.5時間前にチェックした
+  // 連絡文の期限を過ぎても時間が空 → Webhook 未設定なら送らずに結果へ書く
+  setR(2, '登録日時', new Date(Date.now() - 3 * 86400000)); // 3日前に登録した
   msg = env.g.syncRegistrationsNow();
   assert.ok(msg.indexOf('Webhook が未設定') >= 0, msg);
   assert.throws(() => env.g.saveDiscordWebhook_('https://example.com/x'));
@@ -753,7 +753,7 @@ test('案件登録 → 入力シートへ写す → 翻訳済み → 2時間で 
   assert.ok(msg.indexOf('Discord で催促 1件') >= 0, msg);
   assert.equal(env.discord.length, 1);
   assert.ok(env.discord[0].indexOf('RIC.34 マンション EX2-A（新規） 担当 Quynh') >= 0, env.discord[0]);
-  assert.ok(env.discord[0].indexOf('翻訳済みから 2時間') >= 0, env.discord[0]);
+  assert.ok(env.discord[0].indexOf('期限 ') >= 0 && env.discord[0].indexOf('翻訳待ち') < 0, env.discord[0]);
   assert.equal(R(2, '催促回数'), 1);
   // すぐにはくり返さない。1時間たったらもう一度
   env.g.syncRegistrationsNow();
@@ -897,14 +897,21 @@ test('催促の時間帯と判定', () => {
   assert.equal(env.g.inNotifyHours_(at(7, 59), '8:00-20:00'), false);
   assert.equal(env.g.inNotifyHours_(at(23), '22-6'), true);
   assert.equal(env.g.inNotifyHours_(at(3), ''), true);
-  const cfg = { notifyFirst: 2, notifyRepeat: 1 };
-  const now = at(12);
-  const base = { state: env.g.REG_STATE.ESTIMATE, translatedAt: at(9, 30) };
+  const vn = (h, m = 0) => new Date(Date.UTC(2030, 0, 7, h - 7, m)); // ベトナム時間
+  // 期限＝登録 10:00＋90分（8-12,13-17 だけ数える）＝ 11:30。昼休みをまたぐと延びる
+  const cfg = { notifyFirst: 2, notifyRepeat: 1, calcMinutes: 90, calcHours: '8-12,13-17' };
+  const now = vn(12);
+  const base = { state: env.g.REG_STATE.ESTIMATE, regDate: vn(10), translatedAt: vn(10, 20) };
+  assert.equal(env.g.calcDeadlineOf_(base, cfg).getTime(), vn(11, 30).getTime());
   assert.equal(env.g.isReminderDue_(base, now, cfg), true);
-  assert.equal(env.g.isReminderDue_({ ...base, translatedAt: at(10, 30) }, now, cfg), false);
-  assert.equal(env.g.isReminderDue_({ ...base, notifiedAt: at(11, 30) }, now, cfg), false);
-  assert.equal(env.g.isReminderDue_({ ...base, notifiedAt: at(11, 0) }, now, cfg), true);
-  assert.equal(env.g.isReminderDue_({ ...base, notifiedAt: at(9, 0) }, now, cfg), true, '翻訳済みを付け直したら数え直す');
+  assert.equal(env.g.isReminderDue_(base, vn(11, 29), cfg), false, '期限の前は送らない');
+  assert.equal(env.g.isReminderDue_({ ...base, regDate: vn(11) }, vn(13, 10), cfg), false, '昼休みは数えない（期限 13:30）');
+  assert.equal(env.g.isReminderDue_({ ...base, regDate: vn(11) }, vn(13, 30), cfg), true);
+  assert.equal(env.g.isReminderDue_({ ...base, state: env.g.REG_STATE.TRANSLATE }, now, cfg), true, '翻訳待ちのままでも期限を過ぎたら知らせる');
+  assert.equal(env.g.isReminderDue_({ ...base, notifiedAt: vn(11, 40) }, now, cfg), false);
+  assert.equal(env.g.isReminderDue_({ ...base, notifiedAt: vn(11, 0) }, now, cfg), true, '期限より前の催促は数えない');
+  assert.equal(env.g.isReminderDue_({ ...base, notifiedAt: vn(11, 30) }, vn(12, 30), cfg), true, '1時間ごと');
+  assert.equal(env.g.isReminderDue_({ state: env.g.REG_STATE.ESTIMATE, translatedAt: vn(9, 30) }, now, cfg), true, '登録日時が無い行は翻訳済みから2時間');
   assert.equal(env.g.isReminderDue_({ ...base, state: env.g.REG_STATE.DONE }, now, cfg), false);
 });
 

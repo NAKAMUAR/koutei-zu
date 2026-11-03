@@ -100,7 +100,7 @@ const SETTING_KEYS = {
   autoSend: '自動登録',
   autoWait: '自動登録の待ち時間（分）',
   notify: '時間計算の催促（Discord）',
-  notifyFirst: '催促するまでの時間（時間）',
+  notifyFirst: '催促するまでの時間（登録日時が無い行だけ・翻訳済みから・時間）',
   notifyRepeat: '催促のくり返し（時間）',
   notifyHours: '催促する時間帯（ベトナム時間）',
   regMessage: '登録時の連絡文',
@@ -148,7 +148,7 @@ const SETTING_NOTES = {
   autoSend: '「する」：15分ごとの自動実行で、状態が「未送信」の行と「工程図へ」にチェックした行を工程図に登録（「要確認」「更新あり」はチェックするまで待つ）。「しない」：転記だけ自動',
   autoWait: '「未送信」の行は、最後に内容が変わってからこの分数がたってから自動登録する（エンジニアが入力ミスを直す時間）',
   notify: '「する」：『案件登録』で翻訳済みになってから制作時間が出ない視点を Discord で知らせる（Webhook はメニュー「Discord 通知の設定」）。「しない」：知らせない',
-  notifyFirst: '翻訳済みにチェックが入ってから、この時間たっても制作時間（White・Color・pts）が空なら知らせる',
+  notifyFirst: '催促は、連絡文の {計算期限}（登録日時＋下の「制作時間の計算の期限」）を過ぎても制作時間が空なら送る。この欄は登録日時が無い行だけに使う（翻訳済みからの時間）',
   notifyRepeat: '1回目のあとは、この時間ごとに知らせる（15分ごとの自動実行で確かめるので、最大15分ほど遅れる）',
   regMessage: '『案件登録』の「連絡文」列とメニュー「連絡文をコピー」のひな形（エンジニア向け）。使える文字：{社内案件名} {社外案件名} {サーバーリンク} {視点一覧} {視点} {パターン} {担当者} {納期} {新規or修正} {通訳へのメッセージ} {登録日時} {計算期限}（＝登録日時＋「制作時間の計算の期限」）（セルの中の改行もそのまま使えます）',
   calcMinutes: '連絡文の {計算期限} ＝『登録一覧』の登録日時＋この分数（90 ＝ 1時間30分後）。下の「数える時間帯」の外（昼休み・終業後）は数えない',
@@ -1396,7 +1396,7 @@ function stopAutoRun() {
 //   ② 15分ごとの自動実行（またはメニュー）で、エンジニア入力シートへ必要な列だけ写す（注文書・管理者メモ・担当者・納期は写さない）
 //   ③ 通訳が入力シートの「翻訳済み」にチェック → エンジニアが White・Color・pts と作業の分け方を書く
 //   ④ 翻訳済み・時間・作業の分け方を『案件登録』に読み戻し、状態（翻訳待ち／時間計算待ち／時間入力済み）を付ける
-//   ⑤ 翻訳済みから2時間たっても時間が空なら Discord で催促（以降1時間ごと）
+//   ⑤ 連絡文の期限（登録日時＋計算の期限）を過ぎても時間が空なら Discord で催促（以降1時間ごと）
 //   ⑥ 時間が入った行は、いつもの転記 → 自動登録で工程図へ（担当者・納期は『案件登録』から入る）
 const REG_H = {
   no: '登録No', state: '状態',
@@ -2278,23 +2278,36 @@ function inNotifyHours_(now, spec) {
   return from <= to ? (cur >= from && cur < to) : (cur >= from || cur < to);
 }
 /**
- * 催促する行か（純ロジック）。時間計算待ちで、翻訳済みから first 時間たち、
+ * 制作時間の計算の期限（純ロジック）＝ 連絡文の {計算期限} と同じ：登録日時＋calcMinutes 分（calcHours の時間帯だけ数える）。
+ * 登録日時が無い行は、翻訳済みの日時＋notifyFirst 時間。どちらも無ければ null
+ */
+function calcDeadlineOf_(r, cfg) {
+  const reg = parseDateTime_(r.regDate);
+  if (reg) {
+    const mins = cfg.calcMinutes != null && isFinite(cfg.calcMinutes) ? cfg.calcMinutes : 90;
+    return cfg.calcHours ? addWorkMinutes_(reg, mins, cfg.calcHours) : new Date(reg.getTime() + mins * 60000);
+  }
+  const tr = parseDateTime_(r.translatedAt);
+  return tr ? new Date(tr.getTime() + (cfg.notifyFirst || 2) * 3600000) : null;
+}
+/**
+ * 催促する行か（純ロジック）。翻訳待ち・時間計算待ちのまま、連絡文の期限（calcDeadlineOf_）を過ぎ、
  * まだ催促していない／前の催促から repeat 時間たった（5分の余裕）行。
  */
 function isReminderDue_(r, now, cfg) {
-  if (r.state !== REG_STATE.ESTIMATE) return false;
-  const tr = parseDateTime_(r.translatedAt);
-  if (!tr) return false;
-  const H = 3600000;
-  if (now.getTime() - tr.getTime() < cfg.notifyFirst * H) return false;
+  if (r.state !== REG_STATE.ESTIMATE && r.state !== REG_STATE.TRANSLATE) return false;
+  const due = calcDeadlineOf_(r, cfg);
+  if (!due || now.getTime() < due.getTime()) return false;
   const last = parseDateTime_(r.notifiedAt);
-  if (!last || last.getTime() < tr.getTime()) return true; // 翻訳済みを付け直したら数え直す
-  return now.getTime() - last.getTime() >= cfg.notifyRepeat * H - 5 * 60000;
+  const tr = parseDateTime_(r.translatedAt);
+  if (!last || last.getTime() < due.getTime()) return true;
+  if (tr && last.getTime() < tr.getTime()) return true; // 翻訳済みを付け直したら数え直す
+  return now.getTime() - last.getTime() >= cfg.notifyRepeat * 3600000 - 5 * 60000;
 }
-/** 催促のメッセージ（日本語・ベトナム語）。items: [{ label, hours }] */
+/** 催促のメッセージ（日本語・ベトナム語）。items: [{ label, due（期限の文字）, waiting（翻訳待ちなら true） }] */
 function reminderMessage_(items, cfg) {
-  const lines = ['⏰ 制作時間の計算をお願いします / Vui lòng nhập số giờ dự kiến (White / Color / pts)'];
-  items.forEach(it => lines.push('・' + it.label + ' … 翻訳済みから ' + it.hours + '時間 / đã ' + it.hours + ' giờ'));
+  const lines = ['⏰ 制作時間の計算の期限を過ぎています / Đã quá hạn nhập số giờ dự kiến (White / Color / pts)'];
+  items.forEach(it => lines.push('・' + it.label + ' … 期限 ' + it.due + ' / hạn ' + it.due + (it.waiting ? '（まだ翻訳待ち / chưa dịch xong）' : '')));
   if (cfg && cfg.fileId) lines.push('入力先 / Nhập tại: https://docs.google.com/spreadsheets/d/' + cfg.fileId + '/edit');
   return lines.join('\n');
 }
@@ -2443,12 +2456,13 @@ function syncRegistrations_(now) {
     row.state = regState_(row);
     setReg(r, 'state', row.state);
     if (row.state === REG_STATE.MISSING) missing++;
-    if (row.state === REG_STATE.ESTIMATE) {
-      estimate++;
-      if (isReminderDue_(row, now, cfg)) {
-        const tr = parseDateTime_(row.translatedAt);
-        due.push({ r, label: regLabel_(row), hours: Math.floor((now.getTime() - tr.getTime()) / 3600000), count: parseInt(row.notifyCount, 10) || 0 });
-      }
+    if (row.state === REG_STATE.ESTIMATE) estimate++;
+    if (isReminderDue_(row, now, cfg)) {
+      const d = calcDeadlineOf_(row, cfg);
+      due.push({
+        r, label: regLabel_(row), count: parseInt(row.notifyCount, 10) || 0, waiting: row.state === REG_STATE.TRANSLATE,
+        due: (d.getMonth() + 1) + '/' + d.getDate() + ' ' + d.getHours() + ':' + pad2_(d.getMinutes()),
+      });
     }
   }
 
@@ -3224,7 +3238,7 @@ const STAFF_RULES_LINES = [
   ['h', '■ 納品名', '■ Tên file giao'],
   ['', '納品名は自動で入ります（社外案件名_社外視点名_YYMMDD）。YYMMDD を納品する日（例 261104）に書き換えて使ってください。',
     'Tên file giao được tự động điền (Tên dự án_Tên góc nhìn_YYMMDD). Khi dùng, hãy đổi YYMMDD thành ngày giao (VD: 261104).'],
-  ['', '※ 翻訳済みから2時間たっても時間が空だと Discord で催促が届きます', '※ Nếu 2 giờ sau khi dịch xong vẫn chưa có số giờ, sẽ có nhắc nhở qua Discord'],
+  ['', '※ 連絡文の期限を過ぎても時間が空だと Discord で催促が届きます', '※ Nếu quá hạn trong tin nhắn mà vẫn chưa có số giờ, sẽ có nhắc nhở qua Discord'],
   ['h', '■ 視点コードの読み方（灰色の「視点」列）', '■ Cách đọc mã góc nhìn (cột「Góc nhìn」màu xám)'],
 ];
 
@@ -3615,7 +3629,7 @@ const HOWTO_LINES = [
   '2. 書き終えたら「登録」にチェックします。登録No（R0001…）が付き、エンジニア入力シートへ 会社コード・案件番号・社外案件名・サーバーリンク・新規or修正・視点・パターン と「登録No」だけを写し、行は『登録一覧』へ移ります（『案件登録』からは消え、次の案件を書ける）。担当者・納期・注文書・管理者メモは入力シートへ写しません。足りない項目があるとチェックが外れます。',
   '3. 通訳が入力シートの「翻訳済み」にチェック（訳は「翻訳メモ」へ。「翻訳日時」は自動）→ エンジニアが White・Color・pts と「作業の分け方」「時間入力者」を書く（「時間入力日時」「合計」は自動）。',
   '4. 翻訳済み・時間・作業の分け方は『登録一覧』の灰色の列に読み戻され、「状態」が 翻訳待ち → 時間計算待ち → 時間入力済み と進みます。',
-  '5. 翻訳済みになってから2時間たっても時間が空なら Discord で催促し、以降1時間ごとにくり返します（『設定』で時間・時間帯を変えられます。Webhook はメニュー「Discord 通知の設定」）。',
+  '5. 連絡文の期限（登録日時＋「制作時間の計算の期限」）を過ぎても時間が空なら Discord で催促し、以降1時間ごとにくり返します（『設定』で時間・時間帯を変えられます。Webhook はメニュー「Discord 通知の設定」）。',
   '6. 時間が入った行は『連携』へ転記され、最後に変わってから15分たつと工程図に登録されます（新しい行だけ追加）。『登録一覧』の担当者・納期が工程図に入ります。登録した後でエンジニアが時間などを直したら、状態を「更新あり」にして Discord で確認を頼みます（自動では書き換えない。よければ『連携』の「工程図へ」にチェック）。',
   '7. 工程図で決まった納品名（ファイル名）は、『登録一覧』と入力シートの「納品名」列に自動で表示されます（工程図で納品名を直すと、次の自動実行で追従）。',
   '・「連絡文」列に、エンジニア・通訳へ送る文が自動で入ります（同じ案件・同じ入力日の視点は1通）。行を選んでメニュー「連絡文をコピー」を押すと、コピーや Discord への送信ができます。文面は『設定』の「登録時の連絡文」で変えられます。',
