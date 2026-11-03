@@ -1288,7 +1288,7 @@ const REG_NOTES = {
   regDate: '自動：書き始めた日時。会社コード・案件番号・視点・新規or修正がそろって入力シートへ写した（登録Noが付いた）ときにその日時に直す。連絡文の {登録日時} {計算期限} のもと',
   copiedAt: '自動：入力シートへ写した（直した）日時', notifiedAt: '自動：最後に Discord で催促した日時', notifyCount: '自動：催促した回数',
   manual: 'チェックすると、その行をすぐ入力シートへ写す（手動連携。終わるとチェックは外れる）',
-  copy: 'チェックすると、その行の連絡文（エンジニア向け・通訳向け）の画面が開く。文章は選んだ状態なので ⌘C（Windows は Ctrl+C）でコピーできる。チェックはすぐ外れる',
+  copy: 'チェックすると、その行の案件の連絡文（エンジニア向け・通訳向け）の画面が開く。同じ案件・同じ登録日の視点（R0001〜R0003 など）は1通にまとめて出る。文章は選んだ状態なので ⌘C（Windows は Ctrl+C）でコピーできる。チェックはすぐ外れる',
   toInterp: '通訳へのメッセージ（翻訳してほしい点・注意点など）。入力シートの「管理者からの連絡」に写り、「通訳向け連絡文」にも入る',
   interpMessage: '自動：通訳に送る連絡文（ひな形は『設定』の「通訳向けの連絡文」）。メニュー「連絡文をコピー」でコピー・Discord へ送信もできる',
   message: '自動：エンジニア・通訳に送る連絡文（ひな形は『設定』の「登録時の連絡文」）。同じ社内案件名・同じ入力日の行は1通にまとめる。メニュー「連絡文をコピー」でコピー・Discord へ送信もできる',
@@ -1711,19 +1711,32 @@ function showRegMessage() {
   const range = sheet.getActiveRange();
   const r1 = Math.max(2, range.getRow()), r2 = range.getLastRow();
   if (r2 < r1) { alertOrLog_('見出しより下の行を選んでください。'); return; }
-  showRegMessageRows_(ss, sheet, r1, r2);
+  const rows = [];
+  for (let r = r1; r <= r2; r++) rows.push(r);
+  showRegMessageRows_(ss, sheet, rows, false);
 }
-/** 『案件登録』の r1〜r2 行の連絡文の画面を出す（メニュー「連絡文をコピー」と「コピー」列のチェックから呼ぶ） */
-function showRegMessageRows_(ss, sheet, r1, r2) {
+/**
+ * 『案件登録』の行（行番号の配列）の連絡文の画面を出す（メニュー「連絡文をコピー」と「コピー」列のチェックから呼ぶ）。
+ * 文は「連絡文」列と同じく、同じ案件・同じ登録日の行を1通にまとめる。
+ * wholeCase=true（「コピー」列）のときは、選んだ行と同じ案件・同じ登録日の行をシート全体から集める
+ * （R0001 にチェックしても、同じ日に登録した R0002・R0003 の視点も入った1通になる）。
+ */
+function showRegMessageRows_(ss, sheet, rowNumbers, wholeCase) {
   const cfg = readSettings_();
   const rc = regHeaderMap_(sheet);
-  const vals = sheet.getRange(r1, 1, r2 - r1 + 1, sheet.getLastColumn()).getValues();
+  const last = sheet.getLastRow();
+  if (last < 2) { alertOrLog_('選んだ行に、会社コード・案件番号・視点・新規or修正がそろった行がありません。'); return; }
+  const all = sheet.getRange(2, 1, last - 1, sheet.getLastColumn()).getValues();
+  const rowObj = (v) => { const row = {}; Object.keys(rc).forEach(k => { row[k] = v[rc[k] - 1]; }); return row; };
+  const picked = rowNumbers.filter(r => r >= 2 && r <= last).map(r => rowObj(all[r - 2])).filter(row => regState_(row) !== REG_STATE.DRAFT);
+  let target = picked;
+  if (wholeCase && picked.length) {
+    const keys = new Set(picked.map(regGroupKey_));
+    target = all.map(rowObj).filter(row => regState_(row) !== REG_STATE.DRAFT && keys.has(regGroupKey_(row)));
+  }
   const groups = new Map();
-  vals.forEach(v => {
-    const row = {};
-    Object.keys(rc).forEach(k => { row[k] = v[rc[k] - 1]; });
-    if (regState_(row) === REG_STATE.DRAFT) return;
-    const k = normCode_(joinCode_(row.code, row.number));
+  target.forEach(row => {
+    const k = regGroupKey_(row);
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(row);
   });
@@ -1786,7 +1799,7 @@ function onAdminEdit(e) {
       vals.forEach((v, i) => { if (isChecked_(v[rc.copy - 1])) copyRows.push(r1 + i); });
       if (copyRows.length) {
         copyRows.forEach(r => sheet.getRange(r, rc.copy).setValue(false));
-        showRegMessageRows_(e.source || SpreadsheetApp.getActiveSpreadsheet(), sheet, copyRows[0], copyRows[copyRows.length - 1]);
+        showRegMessageRows_(e.source || SpreadsheetApp.getActiveSpreadsheet(), sheet, copyRows, true);
         return;
       }
     }

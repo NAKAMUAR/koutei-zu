@@ -889,7 +889,7 @@ await (async () => {
 })();
 test('連絡文の画面：開いたら文を選んでおき、コピーは clipboard が無くても・拒否されても黙って止まらない', () => {});
 
-test('『案件登録』の「コピー」列：チェックするとその行の連絡文の画面が開き、チェックは外れる（連携は動かさない）', () => {
+test('『案件登録』の「コピー」列：チェックするとその案件（同じ登録日の視点をまとめて）の連絡文の画面が開き、チェックは外れる（連携は動かさない）', () => {
   const admin = adminSheet();
   const eng = engineerFile();
   const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
@@ -912,11 +912,30 @@ test('『案件登録』の「コピー」列：チェックするとその行�
   assert.ok(env.dialogs[0].html.includes('REN.50の資料を共有します。'), 'その行の連絡文');
   assert.ok(env.dialogs[0].html.includes('data-act="copy"') && !env.dialogs[0].html.includes('onclick='), 'ボタンは onclick 属性を使わない');
   assert.equal(eng.getSheetByName('入力シート').rows.length, copiedBefore, '入力シートには何も書かない');
-  // 記入途中の行にチェック → 画面は出さず案内だけ
-  setR(3, '会社コード', 'REN'); setR(3, 'コピー', true);
+  // 同じ案件の2つ目の視点（R0002）と、別の案件（R0003）
+  setR(3, '会社コード', 'REN'); setR(3, '案件番号', 50); setR(3, '社外案件名', '戸建て'); setR(3, '新規or修正', '新規 / Mới'); setR(3, '視点', 'IN1'); setR(3, 'サーバーリンク', LINK);
+  env.g.onAdminEdit({ range: reg.getRange(3, 1, 1, rh.length) });
+  setR(4, '会社コード', 'RIC'); setR(4, '案件番号', 34); setR(4, '社外案件名', 'マンション'); setR(4, '新規or修正', '新規 / Mới'); setR(4, '視点', 'EX2'); setR(4, 'サーバーリンク', LINK);
+  env.g.onAdminEdit({ range: reg.getRange(4, 1, 1, rh.length) });
+  same([2, 3, 4].map(r => reg.rows[r - 1][rh.indexOf('登録No')]), ['R0001', 'R0002', 'R0003']);
+  // R0001 にチェック → 同じ案件・同じ登録日の EX1・IN1 が1通に。別の案件（RIC.34）は入らない
+  setR(2, 'コピー', true);
+  env.g.onAdminEdit({ range: reg.getRange(2, ci) });
+  const html2 = env.dialogs[env.dialogs.length - 1].html;
+  assert.ok(html2.includes('視点：EX1・IN1'), '同じ案件の視点をまとめる');
+  assert.ok(!html2.includes('RIC.34の資料') && !html2.includes('マンション') && !html2.includes('EX2'), '別の案件は入れない');
+  assert.equal((html2.match(/REN\.50の資料を共有します。/g) || []).length, 1, 'エンジニア向けは1通');
+  // R0002（2つ目の視点）にチェックしても同じ1通
+  setR(3, 'コピー', true);
   env.g.onAdminEdit({ range: reg.getRange(3, ci) });
-  assert.equal(reg.rows[2][ci - 1], false);
-  assert.equal(env.dialogs.length, 1);
+  assert.equal(env.dialogs[env.dialogs.length - 1].html, html2);
+  // メニュー（選んだ行だけ）は従来どおり：R0003 だけ選べば RIC.34 だけ
+  const nDialogs = env.dialogs.length;
+  // 記入途中の行にチェック → 画面は出さず案内だけ
+  setR(5, '会社コード', 'REN'); setR(5, 'コピー', true);
+  env.g.onAdminEdit({ range: reg.getRange(5, ci) });
+  assert.equal(reg.rows[4][ci - 1], false);
+  assert.equal(env.dialogs.length, nDialogs);
   assert.ok(env.alerts.some(a => a.includes('そろった行がありません')), env.alerts.join('/'));
 });
 
