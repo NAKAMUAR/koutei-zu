@@ -43,6 +43,10 @@ class FakeRange {
   setWrap() { return this; }
   breakApart() { return this; }
   setVerticalAlignment() { return this; }
+  setHorizontalAlignment() { return this; }
+  merge() { this.sheet.merges.push([this.row, this.col, this.nr, this.nc]); return this; }
+  clearDataValidations() { this.sheet.validations = []; return this; }
+  setFormula(f) { this.sheet.formulas.push({ row: this.row, col: this.col, nr: this.nr, f }); return this; }
   setDataValidation(rule) { this.sheet.validations.push({ row: this.row, col: this.col, nr: this.nr, rule }); return this; }
   setNumberFormat(f) { this.sheet.formats.push({ row: this.row, col: this.col, f }); return this; }
   setFormulaR1C1(f) { this.sheet.formulas.push({ row: this.row, col: this.col, nr: this.nr, f }); return this; }
@@ -50,13 +54,15 @@ class FakeRange {
 class FakeSheet {
   // size 省略時は新規タブと同じ 1000行×26列。CSV から作ったタブなどは中身ぴったりの大きさを渡す
   constructor(name, rows = [], size) {
-    this.name = name; this.rows = rows.map(r => r.slice()); this.notes = {}; this.validations = []; this.formats = []; this.formulas = []; this.frozen = 0;
+    this.name = name; this.rows = rows.map(r => r.slice()); this.notes = {}; this.validations = []; this.formats = []; this.formulas = []; this.merges = []; this.frozen = 0;
     this.maxRows = size ? size.rows : 1000; this.maxCols = size ? size.cols : 26;
   }
   getMaxRows() { return this.maxRows; }
   getMaxColumns() { return this.maxCols; }
   insertRowsAfter(after, n) { this.maxRows += n; return this; }
   insertColumnsAfter(after, n) { this.maxCols += n; return this; }
+  // 列を差し込む（右の値を1つずつ右へずらす）
+  insertColumnAfter(after) { this.maxCols += 1; this.rows.forEach(r => { if (r.length > after) r.splice(after, 0, ''); }); return this; }
   getName() { return this.name; }
   setName(n) { this.name = n; return this; }
   // セルに直接書く（スクリプトの書き込みは getRange で範囲を確かめてから来る。テストで人が下に書き足すときはシートが広がる）
@@ -247,7 +253,7 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
   };
   vm.createContext(ctx);
   const names = ['onAdminEdit', 'renderRegMessage_', 'onStaffEdit', 'syncRegistrationsNow', 'saveDiscordWebhook_', 'inNotifyHours_', 'isReminderDue_', 'regState_', 'REG_STATE', 'quickSetup', 'createStaffInputTab', 'transferFromStaffSheet', 'autoRun', 'readSettings_', 'readStaffRows_', 'collectSourceRows_', 'findStaffHeaderRow_',
-    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_'];
+    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'readRegInfo_', 'ensureRegSheet_'];
   env.g = vm.runInContext(src + '\n;({' + names.join(',') + '})', ctx);
   return env;
 }
@@ -651,7 +657,9 @@ test('案件登録 → 入力シートへ写す → 翻訳済み → 2時間で 
   const R = (r, name) => reg.rows[r - 1][rh.indexOf(name)];
   const setR = (r, name, v) => reg.set(r, rh.indexOf(name) + 1, v);
   ['会社コード', '案件番号', '社外案件名', '担当者', '新規or修正', '視点', 'パターン', 'サーバーリンク', '納期', '注文書', '管理者メモ'].forEach(h => assert.ok(rh.includes(h), h));
-  assert.equal(admin.getSheets()[0].getName(), '案件登録', '案件登録タブは先頭');
+  assert.equal(admin.getSheets()[0].getName(), '案件入力', '案件入力（縦型フォーム）タブが先頭');
+  assert.equal(admin.getSheets()[1].getName(), '案件登録', '案件登録タブはその次');
+  assert.equal(rh[rh.indexOf('パターン') + 1], '社外視点名', '社外視点名はパターンの右');
 
   // 管理者が2行登録（2行目は視点が空＝記入中）
   [['RIC', 34, 'マンション', 'Quynh', NEWR, 'EX1', 'A', LINK, '2030-01-20', 'https://drive/order.pdf', '急ぎ']].forEach((vals, i) =>
@@ -952,8 +960,8 @@ test('『案件登録』は入力専用：「登録」にチェックした行�
   const eng = engineerFile();
   const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
   env.g.quickSetup();
-  assert.equal(admin.getSheets()[0].getName(), '案件登録', '入力タブが先頭');
-  assert.equal(admin.getSheets()[1].getName(), '登録一覧');
+  assert.equal(admin.getSheets()[1].getName(), '案件登録', '入力タブは縦型フォームの次');
+  assert.equal(admin.getSheets()[2].getName(), '登録一覧');
   const ent = admin.getSheetByName('案件登録');
   const eh = ent.header();
   same(eh.slice(0, 5), ['登録', '状態', '会社コード', '案件番号', '社外案件名']);
@@ -1090,6 +1098,95 @@ test('入力画面（縦型・1案件ずつ）：足りない項目を知らせ�
   assert.ok(els.sum.textContent.startsWith('視点を選んでください'), '登録したら選んだ視点は空に戻る');
   // 送った内容はそのままサーバー側で3行になる
   assert.equal(env.g.entryFormRows_({ ...sent, number: '53' }).rows.length, 3);
+});
+
+test('『案件入力』タブ（縦型フォーム）：①視点にチェック→②まとめてパターン→③行ごとに直す→「登録」で社外視点名つきで登録／前回の視点を呼び出す', () => {
+  const admin = adminSheet();
+  const eng = engineerFile();
+  const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
+  env.g.quickSetup();
+  const f = admin.getSheetByName('案件入力');
+  assert.ok(f, '『案件入力』タブができる');
+  assert.equal(admin.getSheets()[0].getName(), '案件入力');
+  const m = JSON.parse(JSON.stringify(env.g.formMap_(f)));
+  const A = (r) => (f.rows[r - 1] || [])[0];
+  same(['会社コード', '案件番号', '社外案件名', '担当者', '新規or修正'].map(l => A(m.fields[{ 会社コード: 'code', 案件番号: 'number', 社外案件名: 'name', 担当者: 'assignee', 新規or修正: 'request' }[l]])), ['会社コード', '案件番号', '社外案件名', '担当者', '新規or修正']);
+  assert.ok(m.fields.code < m.pick && m.pick < m.pat && m.pat < m.submit && m.submit < m.list, '上から 項目→①→②→登録→③ の順（縦に並ぶ）');
+  same(m.grid.map(g => g.keyword).slice(0, 3), ['EX', 'IN', 'EXCB']);
+  assert.equal(f.rows[m.fields.request - 1][1], '新規 / Mới', '新規or修正の初期値は新規');
+  assert.ok(f.formulas.some(x => x.row === m.sum && /TEXTJOIN/.test(x.f)), '登録する視点の一覧は式');
+  const edit = (r, c, v) => { f.set(r, c, v); env.g.onAdminEdit({ range: f.getRange(r, c), source: admin }); };
+  const list = () => { const out = []; for (let r = m.list1; r <= m.list2; r++) { const v = f.rows[r - 1] || []; if (v[0]) out.push([v[0], v[1] || '', v[2]]); } return out; };
+  const ex = m.grid.find(g => g.keyword === 'EX').row, inn = m.grid.find(g => g.keyword === 'IN').row;
+  // ① EX1・EX2・IN3 にチェック
+  edit(ex, 2, true); edit(ex, 3, true); edit(inn, 4, true);
+  same(list(), [['EX1', '', '外観目線視点①'], ['EX2', '', '外観目線視点②'], ['IN3', '', '内観目線視点③']]);
+  // ② まとめて A・B
+  edit(m.patBox, 2, true); edit(m.patBox, 3, true);
+  same(list().map(r => r[0] + '-' + r[1]), ['EX1-A', 'EX1-B', 'EX2-A', 'EX2-B', 'IN3-A', 'IN3-B']);
+  assert.equal(list()[0][2], '外観目線視点①_パターンA');
+  // ③ IN3 はパターンなしの1行にしたい：IN3-B の行を消し、IN3-A のパターンを消す。EX1-A は客先の呼び方に書き換え
+  const rowOf = (cut, p) => m.list1 + list().findIndex(r => r[0] === cut && r[1] === p);
+  const rB = rowOf('IN3', 'B'); f.set(rB, 1, ''); f.set(rB, 2, ''); env.g.onAdminEdit({ range: f.getRange(rB, 1, 1, 2), source: admin });
+  edit(rowOf('IN3', 'A'), 2, '');
+  edit(rowOf('EX1', 'A'), 3, '南東外観');
+  same(list().map(r => r[0] + '-' + r[1] + ':' + r[2]), ['EX1-A:南東外観', 'EX1-B:外観目線視点①_パターンB', 'EX2-A:外観目線視点②_パターンA', 'EX2-B:外観目線視点②_パターンB', 'IN3-:内観目線視点③']);
+  // ① に EX3 を足しても、直した行はそのまま
+  edit(ex, 4, true);
+  same(list().map(r => r[0] + '-' + r[1] + ':' + r[2]).slice(4), ['EX3-A:外観目線視点③_パターンA', 'EX3-B:外観目線視点③_パターンB', 'IN3-:内観目線視点③'], '①の並び（EX→IN）の順。新しい視点には②のパターンが付く');
+  assert.equal(list()[0][2], '南東外観');
+  // ① の EX3 を外すと消える
+  edit(ex, 4, false);
+  assert.equal(list().length, 5);
+  // 足りない（会社コードが空）→ 登録しない
+  edit(m.submit, 2, true);
+  assert.ok(String(f.rows[m.result - 1][1]).startsWith('✗ 足りない項目があります：会社コード'), f.rows[m.result - 1][1]);
+  assert.equal(f.rows[m.submit - 1][1], false, '登録のチェックは外れる');
+  // 書いて登録
+  f.set(m.fields.code, 2, 'REN'); f.set(m.fields.number, 2, 60); f.set(m.fields.name, 2, '戸建'); f.set(m.fields.link, 2, LINK);
+  f.set(m.fields.deadline, 2, new Date(2030, 10, 20));
+  edit(m.submit, 2, true);
+  assert.ok(String(f.rows[m.result - 1][1]).startsWith('✓ 登録しました：R0001・R0002・R0003・R0004・R0005（REN.60）'), f.rows[m.result - 1][1]);
+  const reg = admin.getSheetByName('登録一覧');
+  const rh = reg.header();
+  const R = (row, name) => reg.rows[row - 1][rh.indexOf(name)];
+  same([R(2, '視点'), R(2, 'パターン'), R(2, '社外視点名'), R(2, '新規or修正')], ['EX1', 'A', '南東外観', '新規 / Mới']);
+  same([R(6, '視点'), R(6, 'パターン'), R(6, '社外視点名')], ['IN3', '', '内観目線視点③']);
+  assert.equal(env.g.readRegInfo_(admin).get('R0001').extName, '南東外観', '転記のとき『連携』の社外視点名に入る');
+  assert.equal(list().length, 0, '登録したらフォームは空に戻る');
+  assert.equal(f.rows[m.fields.code - 1][1], '');
+  assert.equal(f.rows[ex - 1][1], false, '①のチェックも外れる');
+  // 前回の視点を呼び出す
+  edit(m.prev, 2, true);
+  assert.ok(String(f.rows[m.result - 1][1]).includes('会社コードと案件番号'));
+  f.set(m.fields.code, 2, 'REN'); f.set(m.fields.number, 2, 60);
+  edit(m.prev, 2, true);
+  same(list().map(r => r[0] + '-' + r[1] + ':' + r[2]), ['EX1-A:南東外観', 'EX1-B:外観目線視点①_パターンB', 'EX2-A:外観目線視点②_パターンA', 'EX2-B:外観目線視点②_パターンB', 'IN3-:内観目線視点③']);
+  assert.equal(f.rows[m.fields.request - 1][1], '修正 / Sửa', '新規or修正は修正に');
+  assert.equal(f.rows[m.fields.name - 1][1], '戸建', '社外案件名も前回から');
+  assert.equal(f.rows[ex - 1][1], true, '①にもチェックが入る');
+  assert.equal(f.rows[m.prev - 1][1], false);
+  // 純ロジック：②を変えたら付け直し（書き換えた社外視点名は同じ視点・パターンなら残る）
+  const merged = env.g.formListMerge_(['EX1'], ['A', 'C'], [{ cut: 'EX1', pattern: 'A', ext: '南東外観' }, { cut: 'EX1', pattern: 'B', ext: '外観目線視点①_パターンB' }], true, []);
+  same(JSON.parse(JSON.stringify(merged)), [{ cut: 'EX1', pattern: 'A', ext: '南東外観' }, { cut: 'EX1', pattern: 'C', ext: '外観目線視点①_パターンC' }]);
+});
+
+test('『登録一覧』に社外視点名の列が無い（前の版）ときは、パターンの右に差し込む', () => {
+  const admin = adminSheet();
+  const eng = engineerFile();
+  const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
+  env.g.quickSetup();
+  const reg = admin.getSheetByName('登録一覧');
+  const ci = reg.header().indexOf('社外視点名');
+  reg.rows.forEach(r => { if (r.length > ci) r.splice(ci, 1); });
+  reg.set(2, reg.header().indexOf('視点') + 1, 'EX9');
+  reg.set(2, reg.header().indexOf('サーバーリンク') + 1, LINK);
+  assert.ok(!reg.header().includes('社外視点名'));
+  env.g.ensureRegSheet_(admin, null);
+  const h = reg.header();
+  assert.equal(h[h.indexOf('パターン') + 1], '社外視点名');
+  assert.equal(reg.rows[1][h.indexOf('視点')], 'EX9');
+  assert.equal(reg.rows[1][h.indexOf('サーバーリンク')], LINK, '右の列の値も一緒にずれる');
 });
 
 console.log(`\n${passed} tests passed`);
