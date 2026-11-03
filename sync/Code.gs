@@ -1679,6 +1679,20 @@ function regMessageOpts_(cfg, ss) {
   return { calcMinutes: cfg.calcMinutes, fmt };
 }
 
+// 連絡文ダイアログの「コピー」ボタン（ダイアログの中で動くスクリプト）。
+// Apps Script のダイアログは入れ子の iframe なので、navigator.clipboard が無い・拒否されることがある
+// （2026-11-03、押しても何も起きなかった）。押した操作の中で同期的に execCommand("copy") を先に試し、
+// だめなら clipboard API、それもだめなら文章を選んだまま ⌘C／Ctrl+C を案内する。例外で黙って止まらない。
+const REG_DIALOG_COPY_FAIL = '自動でコピーできませんでした。文章を選んだ状態にしたので ⌘C（Windows は Ctrl+C）でコピーしてください';
+const REG_DIALOG_COPY_SCRIPT =
+  'function msg(id,t){document.getElementById(id+"m").textContent=t;}' +
+  'function copyText(id){var t=document.getElementById(id);var ng=' + JSON.stringify(REG_DIALOG_COPY_FAIL) + ';' +
+  'try{t.focus();t.select();t.setSelectionRange(0,t.value.length);}catch(e){}' +
+  'var ok=false;try{ok=document.execCommand("copy");}catch(e){ok=false;}' +
+  'if(ok){msg(id,"コピーしました");return;}' +
+  'try{if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t.value).then(function(){msg(id,"コピーしました");},function(){msg(id,ng);});return;}}catch(e){}' +
+  'msg(id,ng);}';
+
 /** メニュー：『案件登録』で選んだ行の連絡文を出す（コピー・Discord へ送信） */
 function showRegMessage() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1718,9 +1732,7 @@ function showRegMessage() {
     box('eng', 'エンジニア向け', text) + box('int', '通訳向け', interp) +
     '<p style="color:#666;font-size:12px">ひな形は『設定』の「登録時の連絡文」「通訳向けの連絡文」で変えられます。ここで直してからコピー・送信してもかまいません。</p></div>' +
     '<script>' +
-    'function msg(id,t){document.getElementById(id+"m").textContent=t;}' +
-    'function copyText(id){var t=document.getElementById(id);t.select();' +
-    'navigator.clipboard.writeText(t.value).then(function(){msg(id,"コピーしました");},function(){document.execCommand("copy");msg(id,"コピーしました");});}' +
+    REG_DIALOG_COPY_SCRIPT +
     'function sendText(id){msg(id,"送信中…");google.script.run.withSuccessHandler(function(){msg(id,"Discord に送りました");})' +
     '.withFailureHandler(function(e){msg(id,e.message||e);}).sendTextToDiscord(document.getElementById(id).value);}' +
     '</script>'

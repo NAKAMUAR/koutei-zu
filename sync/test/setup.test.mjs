@@ -246,7 +246,7 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
   };
   vm.createContext(ctx);
   const names = ['onAdminEdit', 'renderRegMessage_', 'onStaffEdit', 'syncRegistrationsNow', 'saveDiscordWebhook_', 'inNotifyHours_', 'isReminderDue_', 'regState_', 'REG_STATE', 'quickSetup', 'createStaffInputTab', 'transferFromStaffSheet', 'autoRun', 'readSettings_', 'readStaffRows_', 'collectSourceRows_', 'findStaffHeaderRow_',
-    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT'];
+    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_COPY_SCRIPT', 'REG_DIALOG_COPY_FAIL'];
   env.g = vm.runInContext(src + '\n;({' + names.join(',') + '})', ctx);
   return env;
 }
@@ -854,5 +854,29 @@ test('催促の時間帯と判定', () => {
   assert.equal(env.g.isReminderDue_({ ...base, notifiedAt: at(9, 0) }, now, cfg), true, '翻訳済みを付け直したら数え直す');
   assert.equal(env.g.isReminderDue_({ ...base, state: env.g.REG_STATE.DONE }, now, cfg), false);
 });
+
+// 連絡文ダイアログの「コピー」ボタン：ダイアログ内のスクリプトを偽のブラウザで動かす
+async function runCopy(env, { execOk, execThrows, clipboard }) {
+  const shown = {};
+  const ta = { value: 'REN.50の資料を共有します。', focus() {}, select() {}, setSelectionRange() {} };
+  const doc = {
+    getElementById: (id) => (id === 'eng' ? ta : { set textContent(v) { shown[id] = v; } }),
+    execCommand: () => { if (execThrows) throw new Error('blocked'); return execOk; },
+  };
+  const nav = clipboard === 'none' ? {} : { clipboard: { writeText: () => (clipboard === 'ok' ? Promise.resolve() : Promise.reject(new Error('NotAllowedError'))) } };
+  const c = vm.createContext({ document: doc, navigator: nav });
+  vm.runInContext(env.g.REG_DIALOG_COPY_SCRIPT + ';copyText("eng")', c);
+  await new Promise(r => setTimeout(r, 0));
+  return shown.engm;
+}
+await (async () => {
+  const env = env0();
+  const NG = env.g.REG_DIALOG_COPY_FAIL;
+  assert.equal(await runCopy(env, { execOk: true, clipboard: 'none' }), 'コピーしました', 'clipboard が無くても execCommand でコピー');
+  assert.equal(await runCopy(env, { execOk: false, clipboard: 'ok' }), 'コピーしました', 'execCommand がだめなら clipboard API');
+  assert.equal(await runCopy(env, { execOk: false, clipboard: 'deny' }), NG, '両方だめなら ⌘C を案内');
+  assert.equal(await runCopy(env, { execThrows: true, clipboard: 'none' }), NG, '例外でも案内が出る');
+})();
+test('連絡文のコピー：入れ子のダイアログで clipboard が無くても・拒否されても、黙って止まらない', () => {});
 
 console.log(`\n${passed} tests passed`);
