@@ -651,7 +651,7 @@ test('案件登録 → 入力シートへ写す → 翻訳済み → 2時間で 
   assert.equal(fOf(reg, rh.indexOf('合計') + 1), `=IF(COUNT(RC${cw},RC${cw + 1},RC${cw + 2})=0,"",SUM(RC${cw},RC${cw + 1},RC${cw + 2}))`);
   assert.equal(R(3, '状態'), '記入中');
   assert.equal(R(3, '登録No'), '');
-  assert.ok(isDate(R(2, '入力日')) && isDate(R(3, '入力日')), '書き始めた行には入力日が自動で入る');
+  assert.ok(isDate(R(2, '登録日時')) && isDate(R(3, '登録日時')), '書き始めた行には登録日時が自動で入る');
 
   // 入力シート：必要な列と登録Noだけ（担当者・納期・注文書・管理者メモは写さない）。後から増えた列は右端に
   const tab = eng.getSheetByName('入力シート');
@@ -762,8 +762,13 @@ test('入力シートを編集した瞬間：翻訳済みのチェックで翻�
 
 test('連絡文：ひな形から作り、同じ案件・同じ入力日の視点は1通にまとめる／管理者シートに書いたらすぐ入力シートへ写す', () => {
   const r = (o) => ({ code: 'REN', number: 50, name: '戸建て', link: '\\\\CG-SERVER2\\REN.50', cut: 'EX1', pattern: '', request: '新規 / Mới', assignee: 'Quynh', deadline: '2030-01-20', ...o });
-  const tpl = '{社内案件名}の資料を共有します。\n{サーバーリンク}\n\n発行から1時間後には制作時間の計算をお願いします。';
-  assert.equal(env0().g.renderRegMessage_(tpl, [r({})]), 'REN.50の資料を共有します。\n\\\\CG-SERVER2\\REN.50\n\n発行から1時間後には制作時間の計算をお願いします。');
+  const tpl = '{社内案件名}の資料を共有します。\n{サーバーリンク}\n\n{計算期限}までに制作時間の計算をお願いします。';
+  // 登録日時 11/3 14:00 ＋ 75分 → 11/3 15:15（まとめた行のうち一番早い登録日時から）
+  const regAt = new Date(2030, 10, 3, 14, 0);
+  assert.equal(env0().g.renderRegMessage_(tpl, [r({ regDate: new Date(2030, 10, 3, 14, 30) }), r({ regDate: regAt })], { calcMinutes: 75 }),
+    'REN.50の資料を共有します。\n\\\\CG-SERVER2\\REN.50\n\n11/3 15:15までに制作時間の計算をお願いします。');
+  assert.equal(env0().g.renderRegMessage_('{登録日時}／{計算期限}', [r({ regDate: regAt })], { calcMinutes: 90 }), '11/3 14:00／11/3 15:30');
+  assert.equal(env0().g.renderRegMessage_('[{計算期限}]', [r({})], { calcMinutes: 75 }), '[]', '登録日時が無ければ空');
   assert.equal(env0().g.renderRegMessage_('{社外案件名}：{視点一覧}（{新規or修正}・納期{納期}・{不明}）', [r({}), r({ cut: 'IN2', pattern: 'A' })]), '戸建て：EX1・IN2-A（新規・納期1/20・{不明}）');
 
   const admin = adminSheet();
@@ -787,7 +792,12 @@ test('連絡文：ひな形から作り、同じ案件・同じ入力日の視�
   // 同じ日に同じ案件の視点をもう1つ → 連絡文は1通にまとまる（ひな形の既定：資料の共有＋1時間後に計算）
   setR(3, '会社コード', 'REN'); setR(3, '案件番号', 50); setR(3, '社外案件名', '戸建て'); setR(3, '新規or修正', '新規 / Mới'); setR(3, '視点', 'IN1'); setR(3, 'サーバーリンク', LINK);
   edit(3);
-  assert.equal(R(2, '連絡文'), 'REN.50の資料を共有します。\n' + LINK + '\n\n発行から1時間後には制作時間の計算をお願いします。');
+  // 既定のひな形：登録日時（登録Noが付いた時刻）＋1時間15分を期限として書く
+  const rd = R(2, '登録日時');
+  assert.ok(isDate(rd));
+  const lim = new Date(rd.getTime() + 75 * 60000);
+  const limText = (lim.getMonth() + 1) + '/' + lim.getDate() + ' ' + lim.getHours() + ':' + String(lim.getMinutes()).padStart(2, '0');
+  assert.equal(R(2, '連絡文'), 'REN.50の資料を共有します。\n' + LINK + '\n\n' + limText + 'までに制作時間の計算をお願いします。');
   assert.equal(R(3, '連絡文'), R(2, '連絡文'));
   // 『案件登録』以外のタブの編集では動かない
   env.g.onAdminEdit({ range: admin.getSheetByName('連携').getRange(1, 1) });

@@ -94,6 +94,7 @@ const SETTING_KEYS = {
   notifyRepeat: '催促のくり返し（時間）',
   notifyHours: '催促する時間帯（ベトナム時間）',
   regMessage: '登録時の連絡文',
+  calcMinutes: '制作時間の計算の期限（登録から・分）',
   interpMessage: '通訳向けの連絡文',
   manualRun: '今すぐ全部連携（チェックで実行）',
   lastAuto: '最後の自動実行',
@@ -115,7 +116,8 @@ const SETTING_DEFAULTS = {
   notifyFirst: 2,
   notifyRepeat: 1,
   notifyHours: '8-20',
-  regMessage: '{社内案件名}の資料を共有します。\n{サーバーリンク}\n\n発行から1時間後には制作時間の計算をお願いします。',
+  regMessage: '{社内案件名}の資料を共有します。\n{サーバーリンク}\n\n{計算期限}までに制作時間の計算をお願いします。',
+  calcMinutes: 75,
   interpMessage: '{社内案件名}（{社外案件名}）の資料の翻訳をお願いします。\n{サーバーリンク}\n視点：{視点一覧}\n{通訳へのメッセージ}\n\n翻訳が終わったら、エンジニア入力シートの「翻訳済み」にチェックしてください。',
   manualRun: false,
   lastAuto: '',
@@ -136,7 +138,8 @@ const SETTING_NOTES = {
   notify: '「する」：『案件登録』で翻訳済みになってから制作時間が出ない視点を Discord で知らせる（Webhook はメニュー「Discord 通知の設定」）。「しない」：知らせない',
   notifyFirst: '翻訳済みにチェックが入ってから、この時間たっても制作時間（White・Color・pts）が空なら知らせる',
   notifyRepeat: '1回目のあとは、この時間ごとに知らせる（30分ごとの自動実行で確かめるので、最大30分ほど遅れる）',
-  regMessage: '『案件登録』の「連絡文」列とメニュー「連絡文をコピー」のひな形（エンジニア向け）。使える文字：{社内案件名} {社外案件名} {サーバーリンク} {視点一覧} {視点} {パターン} {担当者} {納期} {新規or修正} {通訳へのメッセージ}（セルの中の改行もそのまま使えます）',
+  regMessage: '『案件登録』の「連絡文」列とメニュー「連絡文をコピー」のひな形（エンジニア向け）。使える文字：{社内案件名} {社外案件名} {サーバーリンク} {視点一覧} {視点} {パターン} {担当者} {納期} {新規or修正} {通訳へのメッセージ} {登録日時} {計算期限}（＝登録日時＋「制作時間の計算の期限」）（セルの中の改行もそのまま使えます）',
+  calcMinutes: '連絡文の {計算期限} ＝『案件登録』の登録日時＋この分数（75 ＝ 1時間15分後）',
   interpMessage: '『案件登録』の「通訳向け連絡文」列のひな形。使える文字は「登録時の連絡文」と同じ。{通訳へのメッセージ} には『案件登録』の「通訳へのメッセージ」が入る',
   manualRun: 'チェックすると、その場で 案件登録→入力シート・転記・工程図への登録 をまとめて動かす（終わるとチェックは外れ、結果は「最後の自動実行」に出る）',
   notifyHours: 'この時間帯だけ知らせる（例 8-20 ＝ 8時〜20時。時刻はベトナム時間）。夜に止まっていた分は、時間帯に入ったら知らせる',
@@ -1234,7 +1237,7 @@ const REG_H = {
   cut: '視点', pattern: 'パターン', link: 'サーバーリンク', deadline: '納期', order: '注文書', memo: '管理者メモ',
   translated: '翻訳済み', translatedAt: '翻訳日時', transNote: '翻訳メモ', white: 'White', color: 'Color', other: 'pts', total: '合計', split: '作業の分け方',
   estimator: '時間入力者', estimatedAt: '時間入力日時',
-  regDate: '入力日', delivery: '納品名', message: '連絡文',
+  regDate: '登録日時', delivery: '納品名', message: '連絡文',
   manual: '今すぐ連携', toInterp: '通訳へのメッセージ', interpMessage: '通訳向け連絡文', copiedAt: '入力シートへ写した日時', notifiedAt: '最後の催促', notifyCount: '催促回数',
 };
 const REG_ORDER = ['no', 'state', 'manual', 'regDate', 'code', 'number', 'name', 'internal', 'assignee', 'request', 'cut', 'pattern', 'link', 'deadline', 'order', 'memo', 'toInterp',
@@ -1256,7 +1259,7 @@ const REG_NOTES = {
   transNote: '自動：入力シートの翻訳メモ', white: '自動：入力シートの White', color: '自動：入力シートの Color', other: '自動：入力シートの pts',
   total: '自動：White＋Color＋pts', split: '自動：入力シートの作業の分け方',
   estimator: '自動：入力シートの時間入力者（制作時間を決めた人）', estimatedAt: '自動：入力シートに制作時間が書かれた日時',
-  regDate: '自動：この行を書き始めた日',
+  regDate: '自動：書き始めた日時。会社コード・案件番号・視点・新規or修正がそろって入力シートへ写した（登録Noが付いた）ときにその日時に直す。連絡文の {登録日時} {計算期限} のもと',
   copiedAt: '自動：入力シートへ写した（直した）日時', notifiedAt: '自動：最後に Discord で催促した日時', notifyCount: '自動：催促した回数',
   manual: 'チェックすると、その行をすぐ入力シートへ写す（手動連携。終わるとチェックは外れる）',
   toInterp: '通訳へのメッセージ（翻訳してほしい点・注意点など）。入力シートの「管理者からの連絡」に写り、「通訳向け連絡文」にも入る',
@@ -1317,7 +1320,7 @@ function formatRegSheet_(sheet, masters, codes) {
   sheet.getRange(2, rc.cut, n - 1, 1).setDataValidation(list(viewCodeOptions_(masters.views), true));
   sheet.getRange(2, rc.pattern, n - 1, 1).setDataValidation(list(PATTERN_OPTIONS, true));
   sheet.getRange(2, rc.deadline, n - 1, 1).setNumberFormat('yyyy-mm-dd');
-  ['translatedAt', 'estimatedAt', 'regDate', 'copiedAt', 'notifiedAt'].forEach(k => sheet.getRange(2, rc[k], n - 1, 1).setNumberFormat(k === 'regDate' ? 'yyyy-mm-dd' : 'yyyy-mm-dd hh:mm'));
+  ['translatedAt', 'estimatedAt', 'regDate', 'copiedAt', 'notifiedAt'].forEach(k => sheet.getRange(2, rc[k], n - 1, 1).setNumberFormat('yyyy-mm-dd hh:mm'));
 }
 function regHeaderMap_(sheet) {
   const lastCol = sheet.getLastColumn();
@@ -1430,7 +1433,7 @@ function syncRegistrations_(now) {
     if (REG_INPUT.every(k => trimStr_(get(k)) === '')) continue;
     const row = {};
     Object.keys(rc).forEach(k => { row[k] = get(k); });
-    if (trimStr_(row.regDate) === '') setReg(r, 'regDate', now); // 入力日＝書き始めた日（あとで変えない）
+    if (trimStr_(row.regDate) === '') setReg(r, 'regDate', now); // 書き始めた日時（登録Noが付いたときに直す）
     const draft = regState_(row) === REG_STATE.DRAFT;
     if (draft) { setReg(r, 'state', REG_STATE.DRAFT); continue; }
 
@@ -1440,6 +1443,7 @@ function syncRegistrations_(now) {
       no = next();
       setReg(r, 'no', no);
       setReg(r, 'copiedAt', now);
+      setReg(r, 'regDate', now); // 登録日時＝入力シートへ写した（登録Noが付いた）日時
       const arr = new Array(width).fill('');
       REG_COPY.forEach(k => { if (sc[k]) arr[sc[k] - 1] = k === 'pattern' ? normPattern_(row[k]) : (k === 'number' ? row[k] : trimStr_(row[k])); });
       arr[sc.regNo - 1] = no;
@@ -1499,6 +1503,7 @@ function syncRegistrations_(now) {
   }
 
   // 連絡文（同じ社内案件名・同じ入力日の行は1通にまとめる）
+  const msgOpts = regMessageOpts_(cfg, ss);
   const groups = new Map();
   for (let r = 1; r < data.length; r++) {
     const row = {};
@@ -1509,8 +1514,8 @@ function syncRegistrations_(now) {
     groups.get(k).push({ r, row });
   }
   groups.forEach(list => {
-    const text = renderRegMessage_(cfg.regMessage, list.map(x => x.row));
-    const interp = renderRegMessage_(cfg.interpMessage, list.map(x => x.row));
+    const text = renderRegMessage_(cfg.regMessage, list.map(x => x.row), msgOpts);
+    const interp = renderRegMessage_(cfg.interpMessage, list.map(x => x.row), msgOpts);
     list.forEach(x => { setReg(x.r, 'message', text); setReg(x.r, 'interpMessage', interp); });
   });
 
@@ -1609,11 +1614,18 @@ function regGroupKey_(row) {
 /**
  * 連絡文のひな形 → 文（純ロジック）。rows は同じ案件の行（1行目の値を使い、{視点一覧} は全行の視点）。
  * 使える文字：{社内案件名} {社外案件名} {サーバーリンク} {視点一覧} {視点} {パターン} {担当者} {納期} {新規or修正}
+ *   {通訳へのメッセージ} {登録日時} {計算期限}（＝登録日時＋opts.calcMinutes 分）。opts.fmt で日時の書き方を変えられる
  */
-function renderRegMessage_(template, rows) {
+function renderRegMessage_(template, rows, opts) {
   const list = (rows || []).filter(Boolean);
   if (!list.length) return '';
   const first = list[0];
+  const o = opts || {};
+  const fmtDT = o.fmt || ((d) => (d.getMonth() + 1) + '/' + d.getDate() + ' ' + d.getHours() + ':' + pad2_(d.getMinutes()));
+  // 登録日時：まとめた行のうち一番早いもの。{計算期限} ＝ 登録日時＋calcMinutes 分
+  const regs = list.map(r => parseDateTime_(r.regDate)).filter(Boolean).sort((a, b) => a - b);
+  const reg = regs.length ? regs[0] : null;
+  const mins = o.calcMinutes != null && isFinite(o.calcMinutes) ? o.calcMinutes : 75;
   const dl = parseDateTime_(first.deadline);
   const links = [];
   list.forEach(r => { const l = trimStr_(r.link); if (l && links.indexOf(l) < 0) links.push(l); });
@@ -1629,8 +1641,18 @@ function renderRegMessage_(template, rows) {
     '納期': dl ? (dl.getMonth() + 1) + '/' + dl.getDate() : trimStr_(first.deadline),
     '新規or修正': String(first.request || '').indexOf('修正') === 0 ? '修正' : '新規',
     '通訳へのメッセージ': list.map(r => trimStr_(r.toInterp)).filter((v, i, a) => v && a.indexOf(v) === i).join('\n'),
+    '登録日時': reg ? fmtDT(reg) : '',
+    '計算期限': reg ? fmtDT(new Date(reg.getTime() + mins * 60000)) : '',
   };
   return String(template || '').replace(/\{([^{}]+)\}/g, (m, k) => (k in vals ? vals[k] : m)).replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/** 連絡文の日時はシートと同じタイムゾーンで「11/3 15:15」の形にする */
+function regMessageOpts_(cfg, ss) {
+  let tz = '';
+  try { tz = ss.getSpreadsheetTimeZone(); } catch (e) { tz = ''; }
+  const fmt = (tz && typeof Utilities !== 'undefined') ? (d) => Utilities.formatDate(d, tz, 'M/d H:mm') : null;
+  return { calcMinutes: cfg.calcMinutes, fmt };
 }
 
 /** メニュー：『案件登録』で選んだ行の連絡文を出す（コピー・Discord へ送信） */
@@ -1653,7 +1675,8 @@ function showRegMessage() {
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(row);
   });
-  const join = (tpl) => [...groups.values()].map(list => renderRegMessage_(tpl, list)).filter(Boolean).join('\n\n――――――\n\n');
+  const msgOpts = regMessageOpts_(cfg, ss);
+  const join = (tpl) => [...groups.values()].map(list => renderRegMessage_(tpl, list, msgOpts)).filter(Boolean).join('\n\n――――――\n\n');
   const text = join(cfg.regMessage);
   const interp = join(cfg.interpMessage);
   if (!text) { alertOrLog_('選んだ行に、会社コード・案件番号・視点・新規or修正がそろった行がありません。'); return; }
@@ -2445,6 +2468,8 @@ function readSettings_() {
   cfg.notifyHours = trimStr_(cfg.notifyHours);
   cfg.regMessage = String(cfg.regMessage || '').trim() ? String(cfg.regMessage) : SETTING_DEFAULTS.regMessage;
   cfg.interpMessage = String(cfg.interpMessage || '').trim() ? String(cfg.interpMessage) : SETTING_DEFAULTS.interpMessage;
+  cfg.calcMinutes = Math.max(0, parseFloat(cfg.calcMinutes));
+  if (!isFinite(cfg.calcMinutes)) cfg.calcMinutes = SETTING_DEFAULTS.calcMinutes;
   if (!cfg.fileId) throw new Error('『設定』タブの「スタッフシートのファイルID」が空です');
   return cfg;
 }
