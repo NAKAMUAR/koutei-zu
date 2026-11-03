@@ -1499,7 +1499,7 @@ function appendToRegList_(list, rc, rows) {
 }
 
 // ============ 入力画面（メニュー「案件を登録（入力画面）」） ============
-// 2026-11-03：登録ページを縦型の入力画面にした。案件の項目を縦に並べ、視点は「＋ 視点を足す」で何行でも。
+// 2026-11-03：登録ページを縦型の入力画面にした。1案件ぶんの視点・パターンはボタンでまとめて選ぶ（新規or修正は案件で1つ）。
 // 「登録」で、視点ごとに1行ずつ『登録一覧』へ書き、すぐ登録No を付けてエンジニア入力シートへ写す（『案件登録』タブは通らない）。
 const ENTRY_FORM_FIELDS = ['code', 'number', 'name', 'assignee', 'link', 'deadline', 'order', 'memo', 'toInterp'];
 /**
@@ -1558,25 +1558,121 @@ function openEntryForm() {
   const opts = {
     codes: readCompanyCodes_(ss), cuts: viewCodeOptions_(masters.views), patterns: PATTERN_OPTIONS, requests: REQUEST_OPTIONS,
   };
-  const html = HtmlService.createHtmlOutput(entryFormHtml_(opts)).setWidth(460).setHeight(720);
+  const html = HtmlService.createHtmlOutput(entryFormHtml_(opts)).setWidth(480).setHeight(760);
   SpreadsheetApp.getUi().showModalDialog(html, '案件を登録');
 }
-/** 入力画面の HTML（純ロジック）。ボタンは onclick 属性を使わず addEventListener で付ける（連絡文の画面と同じ理由） */
+// 入力画面の中で動くスクリプト（ブラウザ側）。文字列の引用符の書き間違いを防ぐため、テンプレート文字列で書く。
+// 中ではバッククォート・ドル記号＋波かっこ・バックスラッシュを使わない（そのまま送るため。HTML の属性は ' で囲む）。古いブラウザでも動く書き方（var・function）にする。
+const ENTRY_FORM_SCRIPT = `
+var S = { order: [], pats: {} };
+function el(id) { return document.getElementById(id); }
+function esc(t) { return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
+function groups() {
+  var g = [], m = {};
+  for (var i = 0; i < CUTS.length; i++) {
+    var c = CUTS[i], k = c.replace(/[0-9]+$/, "");
+    if (!m[k]) { m[k] = { k: k, list: [] }; g.push(m[k]); }
+    m[k].list.push(c);
+  }
+  return g;
+}
+function toggleCut(c) {
+  var i = S.order.indexOf(c);
+  if (i >= 0) { S.order.splice(i, 1); delete S.pats[c]; } else { S.order.push(c); S.pats[c] = [""]; }
+  render();
+}
+function togglePat(c, p) {
+  var a = (S.pats[c] || []).slice();
+  if (p === "") { a = [""]; } else {
+    a = a.filter(function (x) { return x !== ""; });
+    var i = a.indexOf(p);
+    if (i >= 0) a.splice(i, 1); else a.push(p);
+    if (!a.length) a = [""];
+  }
+  S.pats[c] = a;
+  render();
+}
+function buildViews(req) {
+  var v = [];
+  for (var i = 0; i < S.order.length; i++) {
+    var c = S.order[i], a = S.pats[c] || [""];
+    var ps = [""].concat(PATS).filter(function (p) { return a.indexOf(p) >= 0; });
+    for (var j = 0; j < ps.length; j++) v.push({ cut: c, pattern: ps[j], request: req });
+  }
+  return v;
+}
+function label(v) { return v.cut + (v.pattern ? "-" + v.pattern : ""); }
+function render() {
+  var h = "", g = groups();
+  for (var i = 0; i < g.length; i++) {
+    h += "<div class='g'><span class='gk'>" + esc(g[i].k) + "</span>";
+    for (var j = 0; j < g[i].list.length; j++) {
+      var c = g[i].list[j];
+      h += "<button type='button' class='b" + (S.order.indexOf(c) >= 0 ? " on" : "") + "' data-cut='" + esc(c) + "'>" + esc(c.slice(g[i].k.length) || c) + "</button>";
+    }
+    h += "</div>";
+  }
+  el("picker").innerHTML = h || "<div class='n'>『視点マスタ』に視点がありません</div>";
+  var ch = "";
+  for (var k = 0; k < S.order.length; k++) {
+    var cc = S.order[k], a = S.pats[cc] || [""], opts = [""].concat(PATS);
+    ch += "<div class='c'><b>" + esc(cc) + "</b><span class='pl'>パターン</span>";
+    for (var m = 0; m < opts.length; m++) {
+      ch += "<button type='button' class='p" + (a.indexOf(opts[m]) >= 0 ? " on" : "") + "' data-for='" + esc(cc) + "' data-pat='" + esc(opts[m]) + "'>" + (opts[m] ? esc(opts[m]) : "なし") + "</button>";
+    }
+    ch += "</div>";
+  }
+  el("chosen").innerHTML = ch;
+  var vs = buildViews("");
+  el("sum").textContent = vs.length ? "登録する視点：" + vs.map(label).join("・") + "（" + vs.length + "件）" : "視点を選んでください（番号を押すと選ばれ、もう一度押すと外れます）";
+}
+function show(t, ok) { var m = el("msg"); m.textContent = t; m.className = ok ? "ok" : "ng"; }
+function reset() {
+  ["number", "name", "link", "deadline", "order", "memo", "toInterp"].forEach(function (id) { el(id).value = ""; });
+  S = { order: [], pats: {} };
+  render();
+}
+function submit(b) {
+  var p = { code: el("code").value, number: el("number").value, name: el("name").value, assignee: el("assignee").value, link: el("link").value,
+    deadline: el("deadline").value, order: el("order").value, memo: el("memo").value, toInterp: el("toInterp").value, views: buildViews(el("req").value) };
+  if (!p.views.length) { show("視点を1つ以上選んでください", false); return; }
+  b.disabled = true;
+  show("登録しています…", true);
+  google.script.run.withSuccessHandler(function (r) { b.disabled = false; show(r.msg, r.ok); if (r.ok) reset(); })
+    .withFailureHandler(function (e) { b.disabled = false; show((e && e.message) || String(e), false); }).submitEntryForm(p);
+}
+document.addEventListener("click", function (e) {
+  var t = e.target;
+  if (!t || !t.getAttribute) return;
+  var c = t.getAttribute("data-cut");
+  if (c) { toggleCut(c); return; }
+  var f = t.getAttribute("data-for");
+  if (f) { togglePat(f, t.getAttribute("data-pat") || ""); return; }
+  if (t.id === "go") submit(t);
+});
+render();
+`;
+/** 入力画面の HTML（純ロジック）。1案件ぶんの視点・パターンをボタンでまとめて選ぶ。ボタンは onclick 属性を使わず、画面全体のクリックで受ける */
 function entryFormHtml_(o) {
   const esc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   const options = (list, blank) => (blank ? '<option value="">' + esc(blank) + '</option>' : '') + list.map(v => '<option value="' + esc(v) + '">' + esc(v) + '</option>').join('');
   const field = (id, label, input, note) => '<div class="f"><label for="' + id + '">' + label + '</label>' + input + (note ? '<div class="n">' + note + '</div>' : '') + '</div>';
   const text = (id, ph) => '<input id="' + id + '" type="text" placeholder="' + esc(ph || '') + '">';
   const req = '<span class="r">必須</span>';
+  const json = (v) => JSON.stringify(v).replace(/</g, '\\u003c');
   return '<!doctype html><html><head><meta charset="utf-8"><style>' +
     'body{font-family:sans-serif;font-size:13px;margin:0;padding:12px 16px;background:#f6f6f6;color:#222}' +
     '.f{margin-bottom:12px}label{display:block;font-weight:bold;margin-bottom:4px}' +
     'input,select,textarea{box-sizing:border-box;width:100%;padding:8px;border:1px solid #ccc;border-radius:4px;font-size:13px;background:#fff}' +
     'textarea{height:56px;resize:vertical}.r{color:#c62828;font-weight:normal;font-size:11px;margin-left:6px}.n{color:#666;font-size:11px;margin-top:3px}' +
     'h3{margin:18px 0 8px;font-size:13px;border-top:1px solid #ddd;padding-top:12px}' +
-    '.v{display:flex;gap:6px;margin-bottom:6px;align-items:center}.v select{flex:1}.v .x{flex:0 0 32px;width:32px;padding:6px 0;background:#fff;border:1px solid #ccc;border-radius:4px;cursor:pointer}' +
-    '.add{background:none;border:none;color:#1a73e8;cursor:pointer;padding:4px 0;font-size:13px}' +
-    '.go{width:100%;margin-top:16px;padding:10px;background:#1a73e8;color:#fff;border:none;border-radius:4px;font-size:14px;font-weight:bold;cursor:pointer}.go:disabled{background:#9bbcf0}' +
+    '.g{display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin-bottom:6px}.gk{flex:0 0 52px;font-weight:bold;color:#555}' +
+    '.b,.p{min-width:34px;padding:5px 8px;border:1px solid #bbb;border-radius:4px;background:#fff;cursor:pointer;font-size:13px}' +
+    '.b.on,.p.on{background:#1a73e8;border-color:#1a73e8;color:#fff}' +
+    '.c{display:flex;flex-wrap:wrap;align-items:center;gap:4px;padding:6px 8px;margin-bottom:4px;background:#fff;border:1px solid #ddd;border-radius:4px}' +
+    '.c b{flex:0 0 52px}.pl{color:#666;font-size:11px;margin-right:4px}' +
+    '#sum{margin-top:10px;padding:8px;background:#e8f0fe;border-radius:4px;font-weight:bold}' +
+    '.go{width:100%;margin-top:12px;padding:10px;background:#1a73e8;color:#fff;border:none;border-radius:4px;font-size:14px;font-weight:bold;cursor:pointer}.go:disabled{background:#9bbcf0}' +
     '#msg{margin-top:10px;white-space:pre-wrap}.ok{color:#2e7d32}.ng{color:#c62828}' +
     '</style></head><body>' +
     field('code', '会社コード' + req, '<select id="code">' + options(o.codes, '選んでください') + '</select>') +
@@ -1588,28 +1684,12 @@ function entryFormHtml_(o) {
     field('order', '注文書', text('order', '注文書のファイルのリンクなど')) +
     field('memo', '管理者メモ', '<textarea id="memo"></textarea>', '管理者だけのメモ（入力シートには写さない）') +
     field('toInterp', '通訳へのメッセージ', '<textarea id="toInterp"></textarea>', '入力シートの「管理者からの連絡」に写る') +
+    field('req', '新規or修正' + req, '<select id="req">' + options(o.requests) + '</select>', 'この案件の視点すべてに同じものが入る') +
     '<h3>視点' + req + '</h3>' +
-    '<div id="views"></div><button type="button" class="add" id="addView">＋ 視点を足す</button>' +
-    '<button type="button" class="go" id="go">登録</button><div id="msg"></div>' +
-    '<script>' +
-    'var CUTS=' + JSON.stringify(o.cuts) + ',PATS=' + JSON.stringify(o.patterns) + ',REQS=' + JSON.stringify(o.requests) + ';' +
-    'function opt(list,blank){var h=blank?"<option value=\\"\\">"+blank+"</option>":"";for(var i=0;i<list.length;i++){h+="<option>"+list[i]+"</option>";}return h;}' +
-    'function addView(){var d=document.createElement("div");d.className="v";' +
-    'd.innerHTML="<select class=\\"cut\\">"+opt(CUTS,"視点")+"</select><select class=\\"pat\\">"+opt(PATS,"パターンなし")+"</select><select class=\\"req\\">"+opt(REQS,"")+"</select><button type=\\"button\\" class=\\"x\\" title=\\"この視点を消す\\">×</button>";' +
-    'd.querySelector(".x").addEventListener("click",function(){d.parentNode.removeChild(d);});document.getElementById("views").appendChild(d);}' +
-    'function val(id){return document.getElementById(id).value;}' +
-    'function show(t,ok){var m=document.getElementById("msg");m.textContent=t;m.className=ok?"ok":"ng";}' +
-    'function reset(){["number","name","link","deadline","order","memo","toInterp"].forEach(function(id){document.getElementById(id).value="";});' +
-    'document.getElementById("views").innerHTML="";addView();}' +
-    'document.getElementById("addView").addEventListener("click",addView);' +
-    'document.getElementById("go").addEventListener("click",function(){var b=this;' +
-    'var views=[];var rows=document.querySelectorAll("#views .v");for(var i=0;i<rows.length;i++){views.push({cut:rows[i].querySelector(".cut").value,pattern:rows[i].querySelector(".pat").value,request:rows[i].querySelector(".req").value});}' +
-    'var p={code:val("code"),number:val("number"),name:val("name"),assignee:val("assignee"),link:val("link"),deadline:val("deadline"),order:val("order"),memo:val("memo"),toInterp:val("toInterp"),views:views};' +
-    'b.disabled=true;show("登録しています…",true);' +
-    'google.script.run.withSuccessHandler(function(r){b.disabled=false;show(r.msg,r.ok);if(r.ok)reset();})' +
-    '.withFailureHandler(function(e){b.disabled=false;show(e&&e.message||String(e),false);}).submitEntryForm(p);});' +
-    'addView();' +
-    '</script></body></html>';
+    '<div class="n" style="margin:-4px 0 8px">番号を押すと選ばれます（もう一度押すと外れます）。選んだ視点ごとにパターンを押します（複数可。A と B を押すと2行になります）</div>' +
+    '<div id="picker"></div><div id="chosen"></div><div id="sum"></div>' +
+    '<button type="button" class="go" id="go">この案件を登録</button><div id="msg"></div>' +
+    '<script>var CUTS=' + json(o.cuts) + ',PATS=' + json(o.patterns) + ';' + ENTRY_FORM_SCRIPT + '</script></body></html>';
 }
 function regHeaderMap_(sheet) {
   const lastCol = sheet.getLastColumn();
@@ -2896,7 +2976,7 @@ const HOWTO_LINES = [
   '同じファイルの中でタブを隠す方法は、編集できる人なら誰でも再表示できるため使いません。',
   '',
   '■ 案件の登録（管理者）→ 翻訳（通訳）→ 制作時間（エンジニア）',
-  '0. いちばん手軽なのは、メニュー「工程図連携 → 案件を登録（入力画面）」。縦に並んだ入力画面に案件の項目を書き、視点は「＋ 視点を足す」で何行でも。「登録」を押すと、すぐ登録No が付いて『登録一覧』とエンジニア入力シートに載ります（下の 1・2 を1回で行う）。',
+  '0. いちばん手軽なのは、メニュー「工程図連携 → 案件を登録（入力画面）」。縦に並んだ入力画面に案件の項目を書き、その案件の視点を番号ボタンでまとめて選び、視点ごとにパターン（なし・A・B…）を押します。「この案件を登録」を押すと、すぐ登録No が付いて『登録一覧』とエンジニア入力シートに載ります（下の 1・2 を1回で行う）。',
   '1. 管理者がこのファイルの『案件登録』タブ（入力専用）に1視点1行で書く：会社コード・案件番号・社外案件名・担当者・新規or修正・視点・パターン・サーバーリンク・納期・注文書・管理者メモ（黄色い見出しの列）。「状態」に足りない項目が出ます。',
   '2. 書き終えたら「登録」にチェックします。登録No（R0001…）が付き、エンジニア入力シートへ 会社コード・案件番号・社外案件名・サーバーリンク・新規or修正・視点・パターン と「登録No」だけを写し、行は『登録一覧』へ移ります（『案件登録』からは消え、次の案件を書ける）。担当者・納期・注文書・管理者メモは入力シートへ写しません。足りない項目があるとチェックが外れます。',
   '3. 通訳が入力シートの「翻訳済み」にチェック（訳は「翻訳メモ」へ。「翻訳日時」は自動）→ エンジニアが White・Color・pts と「作業の分け方」「時間入力者」を書く（「時間入力日時」「合計」は自動）。',

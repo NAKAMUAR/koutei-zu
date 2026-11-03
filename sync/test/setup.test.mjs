@@ -1017,7 +1017,7 @@ test('移行：前の『案件登録』（登録No の列あり）はそのま�
   assert.equal(admin.getSheets()[0].getName(), '案件登録');
 });
 
-test('入力画面（縦型）：足りない項目を知らせ、「登録」で視点ごとに『登録一覧』へ書いてすぐ登録No を付け、入力シートへ写す', () => {
+test('入力画面（縦型・1案件ずつ）：足りない項目を知らせ、視点とパターンをボタンでまとめて選んで「登録」すると視点ごとに『登録一覧』へ書いてすぐ登録No を付け、入力シートへ写す', () => {
   const admin = adminSheet();
   const eng = engineerFile();
   const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
@@ -1059,27 +1059,37 @@ test('入力画面（縦型）：足りない項目を知らせ、「登録」�
   assert.ok(html.indexOf('<label for="code">会社コード') < html.indexOf('<label for="number">案件番号'), '項目は縦に並ぶ');
   const script = html.split('<script>')[1].split('</script>')[0];
   new vm.Script(script); // 文法エラーなら例外
-  // 偽のブラウザで「＋ 視点を足す」と「登録」を押す
-  const made = []; const listeners = {}; let sent = null;
-  const el = (id) => ({ id, value: id === 'code' ? 'REN' : id === 'number' ? '52' : '', className: '', textContent: '', innerHTML: '', disabled: false,
-    appendChild(d) { made.push(d); }, addEventListener(ev, fn) { listeners[id] = fn; } });
-  const els = {}; ['code', 'number', 'name', 'assignee', 'link', 'deadline', 'order', 'memo', 'toInterp', 'views', 'addView', 'go', 'msg'].forEach(id => { els[id] = el(id); });
-  const doc = {
-    getElementById: (id) => els[id],
-    createElement: () => { const sel = (c) => ({ value: c === 'cut' ? 'EX3' : c === 'req' ? '新規 / Mới' : '' }); const d = { className: '', set innerHTML(v) { this._h = v; }, get innerHTML() { return this._h; },
-      parts: { cut: sel('cut'), pat: sel('pat'), req: sel('req'), x: { addEventListener() {} } }, querySelector(q) { return this.parts[q.slice(1)]; } }; return d; },
-    querySelectorAll: () => made,
-  };
+  // 偽のブラウザで、視点の番号・パターンを押してから「この案件を登録」を押す
+  assert.ok(html.indexOf('<label for="req">新規or修正') < html.indexOf('<h3>視点'), '新規or修正は案件で1つ');
+  let sent = null; let onClick = null;
+  const el = (id) => ({ id, value: id === 'code' ? 'REN' : id === 'number' ? '52' : id === 'req' ? '修正 / Sửa' : '', className: '', textContent: '', innerHTML: '', disabled: false });
+  const els = {}; ['code', 'number', 'name', 'assignee', 'link', 'deadline', 'order', 'memo', 'toInterp', 'req', 'picker', 'chosen', 'sum', 'go', 'msg'].forEach(id => { els[id] = el(id); });
+  const doc = { getElementById: (id) => els[id], addEventListener(ev, fn) { if (ev === 'click') onClick = fn; } };
   const gsr = { withSuccessHandler(f) { this.ok = f; return this; }, withFailureHandler(f) { this.ng = f; return this; }, submitEntryForm(p) { sent = p; this.ok({ ok: true, msg: '登録しました' }); } };
   vm.runInContext(script, vm.createContext({ document: doc, google: { script: { run: gsr } } }));
-  assert.equal(made.length, 1, '開いた時点で視点の行が1つ');
-  assert.ok(made[0].innerHTML.includes('<option value="">視点</option>'), made[0].innerHTML.slice(0, 80));
-  listeners.addView();
-  assert.equal(made.length, 2, '「＋ 視点を足す」で行が増える');
-  listeners.go.call(els.go);
+  const click = (attrs, id) => onClick({ target: { id: id || '', getAttribute: (n) => (attrs[n] === undefined ? null : attrs[n]) } });
+  assert.ok(els.picker.innerHTML.includes("data-cut='EX1'") && els.picker.innerHTML.includes("data-cut='EX2'"), els.picker.innerHTML.slice(0, 120));
+  assert.ok(els.sum.textContent.startsWith('視点を選んでください'));
+  click({}, 'go');
+  assert.equal(sent, null, '視点が無いと送らない');
+  assert.ok(els.msg.textContent.includes('1つ以上'));
+  click({ 'data-cut': 'EX1' }); click({ 'data-cut': 'EX2' });
+  assert.ok(els.picker.innerHTML.includes("class='b on' data-cut='EX1'"), '選んだ番号は色が付く');
+  assert.equal(els.sum.textContent, '登録する視点：EX1・EX2（2件）');
+  click({ 'data-for': 'EX1', 'data-pat': 'B' }); click({ 'data-for': 'EX1', 'data-pat': 'A' });
+  assert.equal(els.sum.textContent, '登録する視点：EX1-A・EX1-B・EX2（3件）', 'パターンは A→B の順に並ぶ');
+  click({ 'data-for': 'EX2', 'data-pat': 'A' }); click({ 'data-for': 'EX2', 'data-pat': '' });
+  assert.equal(els.sum.textContent, '登録する視点：EX1-A・EX1-B・EX2（3件）', '「なし」を押すとパターンが外れる');
+  click({ 'data-cut': 'EX2' });
+  assert.equal(els.sum.textContent, '登録する視点：EX1-A・EX1-B（2件）', 'もう一度押すと外れる');
+  click({ 'data-cut': 'EX2' });
+  click({}, 'go');
   assert.equal(sent.code, 'REN'); assert.equal(sent.number, '52');
-  same(sent.views.map(v => v.cut), ['EX3', 'EX3']);
+  same(sent.views, [{ cut: 'EX1', pattern: 'A', request: '修正 / Sửa' }, { cut: 'EX1', pattern: 'B', request: '修正 / Sửa' }, { cut: 'EX2', pattern: '', request: '修正 / Sửa' }]);
   assert.equal(els.msg.textContent, '登録しました');
+  assert.ok(els.sum.textContent.startsWith('視点を選んでください'), '登録したら選んだ視点は空に戻る');
+  // 送った内容はそのままサーバー側で3行になる
+  assert.equal(env.g.entryFormRows_({ ...sent, number: '53' }).rows.length, 3);
 });
 
 console.log(`\n${passed} tests passed`);
