@@ -898,7 +898,7 @@ test('『案件登録』の「コピー」列：チェックするとその行�
   const rh = reg.header();
   const ci = rh.indexOf('コピー') + 1;
   assert.ok(ci > 0, '「コピー」列がある');
-  assert.equal(rh[ci - 2], '通訳向け連絡文', '連絡文の列のすぐ右');
+  assert.equal(ci, 5, 'E列（登録日時のすぐ右）');
   assert.equal(ruleAt(reg, 2, ci).type, 'checkbox');
   const setR = (row, name, v) => reg.set(row, rh.indexOf(name) + 1, v);
   setR(2, '会社コード', 'REN'); setR(2, '案件番号', 50); setR(2, '社外案件名', '戸建て'); setR(2, '新規or修正', '新規 / Mới'); setR(2, '視点', 'EX1'); setR(2, 'サーバーリンク', LINK);
