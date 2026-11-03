@@ -254,7 +254,7 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
   };
   vm.createContext(ctx);
   const names = ['onAdminEdit', 'renderRegMessage_', 'onStaffEdit', 'syncRegistrationsNow', 'saveDiscordWebhook_', 'inNotifyHours_', 'isReminderDue_', 'regState_', 'REG_STATE', 'quickSetup', 'createStaffInputTab', 'transferFromStaffSheet', 'autoRun', 'readSettings_', 'readStaffRows_', 'collectSourceRows_', 'findStaffHeaderRow_',
-    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'readRegInfo_', 'ensureRegSheet_'];
+    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_'];
   env.g = vm.runInContext(src + '\n;({' + names.join(',') + '})', ctx);
   return env;
 }
@@ -818,10 +818,10 @@ test('連絡文：ひな形から作り、同じ案件・同じ入力日の視�
   // 同じ日に同じ案件の視点をもう1つ → 連絡文は1通にまとまる（ひな形の既定：資料の共有＋1時間後に計算）
   setR(3, '会社コード', 'REN'); setR(3, '案件番号', 50); setR(3, '社外案件名', '戸建て'); setR(3, '新規or修正', '新規 / Mới'); setR(3, '視点', 'IN1'); setR(3, 'サーバーリンク', LINK);
   edit(3);
-  // 既定のひな形：登録日時（登録Noが付いた時刻）＋1時間15分を期限として書く
+  // 既定のひな形：登録日時（登録Noが付いた時刻）＋1時間30分（8〜12時・13〜17時だけ数える）を期限として書く
   const rd = R(2, '登録日時');
   assert.ok(isDate(rd));
-  const lim = new Date(rd.getTime() + 75 * 60000);
+  const lim = new Date(env.g.addWorkMinutes_(rd, 90, '8-12,13-17').getTime());
   const limText = (lim.getMonth() + 1) + '/' + lim.getDate() + ' ' + lim.getHours() + ':' + String(lim.getMinutes()).padStart(2, '0');
   assert.equal(R(2, '連絡文'), 'REN.50の資料を共有します。\n' + LINK + '\n\n' + limText + 'までに制作時間の計算をお願いします。');
   assert.equal(R(3, '連絡文'), R(2, '連絡文'));
@@ -836,10 +836,9 @@ test('連絡文：ひな形から作り、同じ案件・同じ入力日の視�
   const tab = eng.getSheetByName('入力シート');
   const sh = tab.header(2).map(h => h.split('\n')[0]);
   assert.equal(tab.rows[2][sh.indexOf('管理者からの連絡')], '昼景・植栽多めと指示あり');
-  assert.ok(String(R(2, '通訳向け連絡文')).startsWith('REN.50（戸建て）の資料の翻訳をお願いします。'), R(2, '通訳向け連絡文'));
-  assert.ok(String(R(2, '通訳向け連絡文')).includes('視点：EX1・IN1'));
-  assert.ok(String(R(2, '通訳向け連絡文')).includes('昼景・植栽多めと指示あり'));
-  assert.ok(String(R(2, '通訳向け連絡文')).endsWith('「翻訳済み」にチェックしてください。'));
+  const limI = new Date(env.g.addWorkMinutes_(R(2, '登録日時'), 90, '8-12,13-17').getTime());
+  const limIText = (limI.getMonth() + 1) + '/' + limI.getDate() + ' ' + limI.getHours() + ':' + String(limI.getMinutes()).padStart(2, '0');
+  assert.equal(R(2, '通訳向け連絡文'), '戸建て案件(REN.50)の資料を共有しますので、翻訳をお願いします。\n⇩サーバーリンク\n' + LINK + '\n\n制作時間の計算については' + limIText + 'までに記入してください。\n昼景・植栽多めと指示あり');
   assert.ok(!String(R(2, '連絡文')).includes('昼景'), 'エンジニア向けの既定の文には入れない');
 
   // 『設定』の「今すぐ全部連携」にチェック → 自動実行と同じ処理が動き、チェックが外れる
@@ -939,7 +938,7 @@ test('『登録一覧』の「コピー」列：チェックするとその案�
   setR(2, 'コピー', true);
   env.g.onAdminEdit({ range: reg.getRange(2, ci) });
   const html2 = env.dialogs[env.dialogs.length - 1].html;
-  assert.ok(html2.includes('視点：EX1・IN1'), '同じ案件の視点をまとめる');
+  assert.equal((html2.match(/戸建て案件\(REN\.50\)/g) || []).length, 1, '同じ案件の視点をまとめて通訳向けも1通');
   assert.ok(!html2.includes('RIC.34の資料') && !html2.includes('マンション') && !html2.includes('EX2'), '別の案件は入れない');
   assert.equal((html2.match(/REN\.50の資料を共有します。/g) || []).length, 1, 'エンジニア向けは1通');
   // R0002（2つ目の視点）にチェックしても同じ1通
@@ -998,7 +997,7 @@ test('『案件登録』は入力専用：「登録」にチェックした行�
   assert.equal(EV(2, '状態'), '記入中（視点が空）');
   assert.equal(EV(3, '会社コード') || '', '', '3行目は空になる');
   assert.equal(EV(2, '登録'), false);
-  assert.ok(String(R(2, '通訳向け連絡文')).includes('視点：EX1-A・EX2-B'), '同じ案件・同じ日の視点は1通');
+  assert.ok(String(R(2, '通訳向け連絡文')).includes('(REN.50)の資料を共有しますので') && R(3, '通訳向け連絡文') === R(2, '通訳向け連絡文'), '同じ案件・同じ日の視点は1通');
   // もう一度チェックしても二重に登録しない
   env.g.autoRun();
   assert.equal(staffRows(), before + 2);
@@ -1054,7 +1053,7 @@ test('入力画面（縦型・1案件ずつ）：足りない項目を知らせ�
   same([R(2, '視点'), R(2, 'パターン'), R(2, '担当者'), R(2, '通訳へのメッセージ'), R(2, '状態')], ['EX1', 'A', '武田', '昼景で', '翻訳待ち']);
   same([R(3, '視点'), R(3, 'パターン')], ['EX2', 'B']);
   assert.equal(staffRows(), before + 2, '入力シートに2行');
-  assert.ok(String(R(2, '通訳向け連絡文')).includes('視点：EX1-A・EX2-B'));
+  assert.ok(String(R(2, '通訳向け連絡文')).startsWith('マンション案件(REN.50)の資料を共有しますので、翻訳をお願いします。') && String(R(2, '通訳向け連絡文')).endsWith('昼景で'), R(2, '通訳向け連絡文'));
   // 次の登録は続きの番号
   const res2 = env.g.submitEntryForm({ ...base, number: '51', views: [{ cut: 'IN1', pattern: '', request: '新規 / Mới' }] });
   same(res2.nos, ['R0003']);
@@ -1161,9 +1160,12 @@ test('『案件入力』タブ（縦型フォーム）：①日本語の区分�
   assert.ok(html.includes('通訳へのメッセージ') && html.includes('2F 外観目線②（EX2_2F）'), html.slice(0, 300));
   assert.ok(!html.includes('onclick='));
   new vm.Script(html.split('<script>')[1].split('</script>')[0]);
+  assert.ok(html.includes('戸建案件(REN.60)の資料を共有しますので、翻訳をお願いします。'), '確認画面に通訳への連絡文（ひな形から）');
+  assert.ok(!html.split('<script>')[1].includes('\\'), '画面のスクリプトにバックスラッシュが無い（文字列のまま送るため）');
   assert.equal(list().length, 5, '画面で「登録する」を押すまでは登録しない');
   const res = env.g.submitFormSheet('昼景でお願いします');
   assert.equal(res.ok, true, res.msg);
+  assert.ok(String(res.interp).startsWith('戸建案件(REN.60)の資料を共有しますので') && String(res.interp).endsWith('昼景でお願いします'), '登録後に通訳への連絡文を返す（画面でコピー）');
   assert.ok(String(cell(m.result, 2)).startsWith('✓ 登録しました：R0001・R0002・R0003・R0004・R0005（REN.60）'), cell(m.result, 2));
   const reg = admin.getSheetByName('登録一覧');
   const rh = reg.header();
@@ -1204,6 +1206,20 @@ test('『登録一覧』に社外視点名の列が無い（前の版）とき�
   assert.equal(h[h.indexOf('パターン') + 1], '社外視点名');
   assert.equal(reg.rows[1][h.indexOf('視点')], 'EX9');
   assert.equal(reg.rows[1][h.indexOf('サーバーリンク')], LINK, '右の列の値も一緒にずれる');
+});
+
+test('制作時間の計算の期限：8〜12時・13〜17時（ベトナム時間）だけ数えて1時間30分', () => {
+  const env = makeEnv({ admin: adminSheet(), files: {} });
+  const vn = (d, h, mi) => new Date(Date.UTC(2030, 10, d, h - 7, mi)); // ベトナム時間の 11/d h:mi
+  const at = (x) => { const t = new Date(x.getTime() + 7 * 3600000); return (t.getUTCMonth() + 1) + '/' + t.getUTCDate() + ' ' + t.getUTCHours() + ':' + String(t.getUTCMinutes()).padStart(2, '0'); };
+  const add = (d) => at(env.g.addWorkMinutes_(d, 90, '8-12,13-17'));
+  assert.equal(add(vn(4, 9, 0)), '11/4 10:30', '午前はそのまま');
+  assert.equal(add(vn(4, 11, 30)), '11/4 14:00', '12〜13時は数えない');
+  assert.equal(add(vn(4, 12, 20)), '11/4 14:30', '昼休み中に登録 → 13時から数える');
+  assert.equal(add(vn(4, 16, 30)), '11/5 9:00', '17時以降は数えず、次の日の8時から');
+  assert.equal(add(vn(4, 18, 0)), '11/5 9:30', '夜に登録 → 次の日8時から');
+  assert.equal(add(vn(4, 6, 0)), '11/4 9:30', '朝早く登録 → 8時から');
+  assert.equal(at(env.g.addWorkMinutes_(vn(4, 18, 0), 90, '')), '11/4 19:30', '時間帯が無ければそのまま足す');
 });
 
 console.log(`\n${passed} tests passed`);

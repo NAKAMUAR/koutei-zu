@@ -95,6 +95,7 @@ const SETTING_KEYS = {
   notifyHours: '催促する時間帯（ベトナム時間）',
   regMessage: '登録時の連絡文',
   calcMinutes: '制作時間の計算の期限（登録から・分）',
+  calcHours: '制作時間の計算に数える時間帯（ベトナム時間）',
   interpMessage: '通訳向けの連絡文',
   manualRun: '今すぐ全部連携（チェックで実行）',
   lastAuto: '最後の自動実行',
@@ -117,8 +118,9 @@ const SETTING_DEFAULTS = {
   notifyRepeat: 1,
   notifyHours: '8-20',
   regMessage: '{社内案件名}の資料を共有します。\n{サーバーリンク}\n\n{計算期限}までに制作時間の計算をお願いします。',
-  calcMinutes: 75,
-  interpMessage: '{社内案件名}（{社外案件名}）の資料の翻訳をお願いします。\n{サーバーリンク}\n視点：{視点一覧}\n{通訳へのメッセージ}\n\n翻訳が終わったら、エンジニア入力シートの「翻訳済み」にチェックしてください。',
+  calcMinutes: 90,
+  calcHours: '8-12,13-17',
+  interpMessage: '{社外案件名}案件({社内案件名})の資料を共有しますので、翻訳をお願いします。\n⇩サーバーリンク\n{サーバーリンク}\n\n制作時間の計算については{計算期限}までに記入してください。\n{通訳へのメッセージ}',
   manualRun: false,
   lastAuto: '',
 };
@@ -139,8 +141,9 @@ const SETTING_NOTES = {
   notifyFirst: '翻訳済みにチェックが入ってから、この時間たっても制作時間（White・Color・pts）が空なら知らせる',
   notifyRepeat: '1回目のあとは、この時間ごとに知らせる（15分ごとの自動実行で確かめるので、最大15分ほど遅れる）',
   regMessage: '『案件登録』の「連絡文」列とメニュー「連絡文をコピー」のひな形（エンジニア向け）。使える文字：{社内案件名} {社外案件名} {サーバーリンク} {視点一覧} {視点} {パターン} {担当者} {納期} {新規or修正} {通訳へのメッセージ} {登録日時} {計算期限}（＝登録日時＋「制作時間の計算の期限」）（セルの中の改行もそのまま使えます）',
-  calcMinutes: '連絡文の {計算期限} ＝『案件登録』の登録日時＋この分数（75 ＝ 1時間15分後）',
-  interpMessage: '『案件登録』の「通訳向け連絡文」列のひな形。使える文字は「登録時の連絡文」と同じ。{通訳へのメッセージ} には『案件登録』の「通訳へのメッセージ」が入る',
+  calcMinutes: '連絡文の {計算期限} ＝『登録一覧』の登録日時＋この分数（90 ＝ 1時間30分後）。下の「数える時間帯」の外（昼休み・終業後）は数えない',
+  calcHours: '{計算期限} を数える時間帯（ベトナム時間）。「8-12,13-17」＝ 8〜12時と13〜17時だけ数える（12〜13時の昼休みと17時以降は数えず、次の日の8時から続きを数える）。時間帯を気にせず足すなら「0-24」',
+  interpMessage: '『登録一覧』の「通訳向け連絡文」列と、『案件入力』で登録するときの確認画面のひな形。使える文字は「登録時の連絡文」と同じ。{通訳へのメッセージ} には登録のときに書いた「通訳へのメッセージ」が入る（空なら行ごと消える）',
   manualRun: 'チェックすると、その場で 案件登録→入力シート・転記・工程図への登録 をまとめて動かす（終わるとチェックは外れ、結果は「最後の自動実行」に出る）',
   notifyHours: 'この時間帯だけ知らせる（例 8-20 ＝ 8時〜20時。時刻はベトナム時間）。夜に止まっていた分は、時間帯に入ったら知らせる',
   lastAuto: '15分ごとの自動実行が最後に動いた日時と結果（自動で書き込み）',
@@ -2022,10 +2025,17 @@ function formSubmit_(sheet, m, views) {
   const check = entryFormRows_(formPayload_(d, ''));
   if (check.error) { formResult_(sheet, m, '✗ ' + check.error); return; }
   formResult_(sheet, m, '通訳へのメッセージの画面で「登録する」を押してください');
+  let preview = '';
+  try {
+    const cfg = readSettings_();
+    const now = new Date();
+    preview = renderRegMessage_(cfg.interpMessage, check.rows.map(r => Object.assign({}, r, { regDate: now, toInterp: '' })), regMessageOpts_(cfg));
+  } catch (e) { preview = ''; }
   const html = HtmlService.createHtmlOutput(formConfirmHtml_({
+    preview,
     title: joinCode_(trimStr_(d.fields.code).toUpperCase(), d.fields.number) + (trimStr_(d.fields.name) ? '（' + trimStr_(d.fields.name) + '）' : ''),
     request: trimStr_(d.fields.request), views: d.rows.map(r => formRowLabel_(r, views) + '（' + viewpointNameOf_(formCut_(r.code, r.room), r.pattern) + '）'),
-  })).setWidth(440).setHeight(460);
+  })).setWidth(480).setHeight(640);
   SpreadsheetApp.getUi().showModalDialog(html, '登録の確認');
 }
 /** 確認画面から呼ぶ：通訳へのメッセージを付けて登録する（名前が _ で終わる関数は google.script.run から呼べない） */
@@ -2035,13 +2045,27 @@ function submitFormSheet(toInterp) {
   const m = formMap_(sheet);
   const views = readMasters_(ss).views;
   const res = submitEntryForm(formPayload_(formRead_(sheet, m), toInterp));
-  if (res.ok) formClear_(sheet, m, views);
+  if (res.ok) {
+    formClear_(sheet, m, views);
+    // 『登録一覧』に入った通訳向け連絡文（確認画面でそのままコピーできるように返す）
+    try {
+      const list = ss.getSheetByName(SHEET.REG);
+      const rc = regHeaderMap_(list);
+      const vals = list.getRange(2, 1, list.getLastRow() - 1, list.getLastColumn()).getValues();
+      const hit = vals.find(v => trimStr_(v[rc.no - 1]) === res.nos[0]);
+      res.interp = hit ? String(hit[rc.interpMessage - 1] || '') : '';
+    } catch (e) { res.interp = ''; }
+  }
   formResult_(sheet, m, (res.ok ? '✓ ' : '✗ ') + res.msg);
   return res;
 }
 // 確認画面の中で動くスクリプト。中ではバッククォート・ドル記号＋波かっこ・バックスラッシュを使わない
 const FORM_CONFIRM_SCRIPT = `
 function el(id) { return document.getElementById(id); }
+var NL = String.fromCharCode(10);
+var BASE = el("preview").value;
+function refresh() { var t = el("toInterp").value.trim(); el("preview").value = t ? BASE + NL + t : BASE; }
+el("toInterp").addEventListener("input", refresh);
 el("cancel").addEventListener("click", function () { google.script.host.close(); });
 el("go").addEventListener("click", function () {
   var b = el("go");
@@ -2049,8 +2073,16 @@ el("go").addEventListener("click", function () {
   el("msg").className = ""; el("msg").textContent = "登録しています…";
   google.script.run.withSuccessHandler(function (r) {
     el("msg").className = r.ok ? "ok" : "ng"; el("msg").textContent = r.msg;
-    if (r.ok) { el("cancel").textContent = "閉じる"; el("cancel").disabled = false; setTimeout(function () { google.script.host.close(); }, 2500); }
-    else { b.disabled = false; el("cancel").disabled = false; }
+    if (r.ok) {
+      b.style.display = "none"; el("toInterp").disabled = true;
+      el("cancel").textContent = "閉じる"; el("cancel").disabled = false;
+      var p = el("preview");
+      if (r.interp) p.value = r.interp;
+      p.focus(); p.select();
+      var copied = false;
+      try { copied = document.execCommand("copy"); } catch (e) { copied = false; }
+      el("msg").textContent = r.msg + (copied ? NL + "通訳への連絡文をコピーしました。" : NL + "通訳への連絡文を選んであるので、⌘C（Windows は Ctrl+C）でコピーできます。");
+    } else { b.disabled = false; el("cancel").disabled = false; }
   }).withFailureHandler(function (e) {
     el("msg").className = "ng"; el("msg").textContent = (e && e.message) || String(e); b.disabled = false; el("cancel").disabled = false;
   }).submitFormSheet(el("toInterp").value);
@@ -2063,15 +2095,17 @@ function formConfirmHtml_(o) {
   return '<!doctype html><html><head><meta charset="utf-8"><style>' +
     'body{font-family:sans-serif;font-size:13px;margin:0;padding:12px 16px;color:#222}' +
     'h4{margin:0 0 6px;font-size:14px}ul{margin:4px 0 12px;padding-left:18px;max-height:130px;overflow:auto}' +
-    'label{display:block;font-weight:bold;margin-bottom:4px}textarea{box-sizing:border-box;width:100%;height:96px;padding:8px;border:1px solid #ccc;border-radius:4px;font-size:13px}' +
+    'label{display:block;font-weight:bold;margin-bottom:4px}textarea{box-sizing:border-box;width:100%;height:72px;padding:8px;border:1px solid #ccc;border-radius:4px;font-size:13px}.pv{height:150px;background:#f6f6f6;font-size:12px}' +
     '.n{color:#666;font-size:11px;margin-top:3px}.btns{display:flex;gap:8px;margin-top:14px}' +
     'button{flex:1;padding:10px;border-radius:4px;font-size:14px;cursor:pointer;border:1px solid #ccc;background:#fff}#go{background:#1a73e8;color:#fff;border:none;font-weight:bold}button:disabled{opacity:.6}' +
     '#msg{margin-top:10px;white-space:pre-wrap}.ok{color:#2e7d32}.ng{color:#c62828}' +
     '</style></head><body>' +
     '<h4>' + esc(o.title) + '（' + esc(o.request) + '）</h4>' +
     '<div>登録する視点（' + o.views.length + '件）</div><ul>' + o.views.map(v => '<li>' + esc(v) + '</li>').join('') + '</ul>' +
-    '<label for="toInterp">通訳へのメッセージ</label><textarea id="toInterp" placeholder="翻訳してほしい点・注意点など（無ければ空のまま）"></textarea>' +
-    '<div class="n">入力シートの「管理者からの連絡」に写り、通訳向け連絡文にも入ります</div>' +
+    '<label for="toInterp">通訳へのメッセージ（追加で伝えること）</label><textarea id="toInterp" placeholder="翻訳してほしい点・注意点など（無ければ空のまま）"></textarea>' +
+    '<div class="n">入力シートの「管理者からの連絡」に写り、下の連絡文の最後にも入ります</div>' +
+    '<label for="preview" style="margin-top:12px">通訳への連絡文（登録するとコピーできます）</label><textarea id="preview" class="pv" readonly>' + esc(o.preview || '') + '</textarea>' +
+    '<div class="n">ひな形は『設定』の「通訳向けの連絡文」。制作時間の計算の期限は、登録の時刻＋1時間30分（12〜13時と17時以降は数えない）</div>' +
     '<div class="btns"><button type="button" id="cancel">やめる</button><button type="button" id="go">登録する</button></div><div id="msg"></div>' +
     '<script>' + FORM_CONFIRM_SCRIPT + '</script></body></html>';
 }
@@ -2412,7 +2446,7 @@ function renderRegMessage_(template, rows, opts) {
   // 登録日時：まとめた行のうち一番早いもの。{計算期限} ＝ 登録日時＋calcMinutes 分
   const regs = list.map(r => parseDateTime_(r.regDate)).filter(Boolean).sort((a, b) => a - b);
   const reg = regs.length ? regs[0] : null;
-  const mins = o.calcMinutes != null && isFinite(o.calcMinutes) ? o.calcMinutes : 75;
+  const mins = o.calcMinutes != null && isFinite(o.calcMinutes) ? o.calcMinutes : 90;
   const dl = parseDateTime_(first.deadline);
   const links = [];
   list.forEach(r => { const l = trimStr_(r.link); if (l && links.indexOf(l) < 0) links.push(l); });
@@ -2429,15 +2463,50 @@ function renderRegMessage_(template, rows, opts) {
     '新規or修正': String(first.request || '').indexOf('修正') === 0 ? '修正' : '新規',
     '通訳へのメッセージ': list.map(r => trimStr_(r.toInterp)).filter((v, i, a) => v && a.indexOf(v) === i).join('\n'),
     '登録日時': reg ? fmtDT(reg) : '',
-    '計算期限': reg ? fmtDT(new Date(reg.getTime() + mins * 60000)) : '',
+    '計算期限': reg ? fmtDT(o.calcHours ? addWorkMinutes_(reg, mins, o.calcHours) : new Date(reg.getTime() + mins * 60000)) : '',
   };
   return String(template || '').replace(/\{([^{}]+)\}/g, (m, k) => (k in vals ? vals[k] : m)).replace(/\n{3,}/g, '\n\n').trim();
+}
+/** 「8-12,13-17」→ [[480,720],[780,1020]]（その日の0時からの分）。読めなければ [] */
+function parseWorkHours_(spec) {
+  const out = [];
+  String(spec || '').split(/[,、，]/).forEach(part => {
+    const m = part.trim().match(/^(\d{1,2})(?::(\d{2}))?\s*[-〜~ー]\s*(\d{1,2})(?::(\d{2}))?$/);
+    if (!m) return;
+    const a = +m[1] * 60 + (+m[2] || 0), b = +m[3] * 60 + (+m[4] || 0);
+    if (b > a) out.push([a, b]);
+  });
+  return out.sort((x, y) => x[0] - y[0]);
+}
+/**
+ * date から、決めた時間帯（ベトナム時間）の中だけを数えて mins 分たった時刻（純ロジック）。
+ * 例 '8-12,13-17' で 11:30 ＋90分 → 12時まで30分・13時から60分 → 14:00。16:30 ＋90分 → 17時まで30分・次の日8時から60分 → 9:00
+ */
+function addWorkMinutes_(date, mins, spec) {
+  const wins = parseWorkHours_(spec);
+  if (!wins.length) return new Date(date.getTime() + mins * 60000);
+  const OFF = 7 * 3600000; // ベトナム時間（UTC+7、夏時間なし）
+  const DAY = 86400000;
+  let t = date.getTime(), left = Math.max(0, mins) * 60000;
+  for (let guard = 0; guard < 400; guard++) {
+    const day0 = Math.floor((t + OFF) / DAY) * DAY - OFF; // その日（ベトナム時間）の0時
+    for (const w of wins) {
+      const s = day0 + w[0] * 60000, e = day0 + w[1] * 60000;
+      if (t >= e) continue;
+      const from = Math.max(t, s);
+      if (left <= e - from) return new Date(from + left);
+      left -= e - from;
+      t = e;
+    }
+    t = day0 + DAY;
+  }
+  return new Date(t);
 }
 
 /** 連絡文の日時はベトナム時間で「11/3 15:15」の形にする（シートのタイムゾーンの設定に関係なく） */
 function regMessageOpts_(cfg, ss) {
   const fmt = typeof Utilities !== 'undefined' ? (d) => Utilities.formatDate(d, APP_TIME_ZONE, 'M/d H:mm') : null;
-  return { calcMinutes: cfg.calcMinutes, fmt };
+  return { calcMinutes: cfg.calcMinutes, calcHours: cfg.calcHours, fmt };
 }
 
 // 連絡文ダイアログの中で動くスクリプト。
@@ -3324,6 +3393,7 @@ function readSettings_() {
   cfg.interpMessage = String(cfg.interpMessage || '').trim() ? String(cfg.interpMessage) : SETTING_DEFAULTS.interpMessage;
   cfg.calcMinutes = Math.max(0, parseFloat(cfg.calcMinutes));
   if (!isFinite(cfg.calcMinutes)) cfg.calcMinutes = SETTING_DEFAULTS.calcMinutes;
+  cfg.calcHours = trimStr_(cfg.calcHours);
   if (!cfg.fileId) throw new Error('『設定』タブの「スタッフシートのファイルID」が空です');
   return cfg;
 }
