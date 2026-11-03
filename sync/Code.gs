@@ -800,8 +800,23 @@ function sameCell_(a, b) {
   return String(na).trim() === String(nb).trim();
 }
 function pad2_(n) { return (n < 10 ? '0' : '') + n; }
-function fmtYMD_(d) { return d.getFullYear() + '-' + pad2_(d.getMonth() + 1) + '-' + pad2_(d.getDate()); }
-function fmtDateTime_(d) { return fmtYMD_(d) + ' ' + pad2_(d.getHours()) + ':' + pad2_(d.getMinutes()); }
+// 日付・時刻の文字はベトナム時間で作る（Apps Script のプロジェクトの時計の設定がずれていても同じになるように）
+function fmtYMD_(d) {
+  if (typeof Utilities !== 'undefined') return Utilities.formatDate(d, APP_TIME_ZONE, 'yyyy-MM-dd');
+  return d.getFullYear() + '-' + pad2_(d.getMonth() + 1) + '-' + pad2_(d.getDate());
+}
+function fmtDateTime_(d) {
+  if (typeof Utilities !== 'undefined') return Utilities.formatDate(d, APP_TIME_ZONE, 'yyyy-MM-dd HH:mm');
+  return fmtYMD_(d) + ' ' + pad2_(d.getHours()) + ':' + pad2_(d.getMinutes());
+}
+/** ベトナム時間での「その日の何分目か」（催促の時間帯の判定に使う） */
+function minutesOfDayVN_(d) {
+  if (typeof Utilities !== 'undefined') {
+    const hm = Utilities.formatDate(d, APP_TIME_ZONE, 'H:mm').split(':');
+    return parseInt(hm[0], 10) * 60 + parseInt(hm[1], 10);
+  }
+  return d.getHours() * 60 + d.getMinutes();
+}
 /** 日時セル → Date（日時の値 / 'YYYY-MM-DD HH:mm' の文字）。読めなければ null */
 function parseDateTime_(v) {
   if (isDate_(v)) return v;
@@ -1354,7 +1369,7 @@ function regState_(r) {
 function inNotifyHours_(now, spec) {
   const m = String(spec || '').replace(/[〜～~]/g, '-').match(/^\s*(\d{1,2})(?::(\d{2}))?\s*-\s*(\d{1,2})(?::(\d{2}))?\s*$/);
   if (!m) return true;
-  const cur = now.getHours() * 60 + now.getMinutes();
+  const cur = minutesOfDayVN_(now);
   const from = +m[1] * 60 + +(m[2] || 0);
   const to = +m[3] * 60 + +(m[4] || 0);
   return from <= to ? (cur >= from && cur < to) : (cur >= from || cur < to);
