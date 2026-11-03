@@ -200,7 +200,7 @@ function fakeFirestore(customers) {
 }
 
 function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KOUTEI_CUSTOMERS }) {
-  const env = { admin, files, alerts: [], triggers: [], fs: fakeFirestore(customers), props: {}, discord: [], discordCode: 204 };
+  const env = { admin, files, alerts: [], triggers: [], fs: fakeFirestore(customers), props: {}, discord: [], discordCode: 204, dialogs: [] };
   const ctx = { console: { log() {} } };
   ctx.SpreadsheetApp = {
     getActiveSpreadsheet: () => env.admin,
@@ -215,8 +215,9 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
         setAllowInvalid(x) { rule.allowInvalid = x; return b; }, setHelpText(t) { rule.help = t; return b; }, build() { return rule; } };
       return b;
     },
-    getUi: () => ({ alert: (m) => env.alerts.push(String(m)) }),
+    getUi: () => ({ alert: (m) => env.alerts.push(String(m)), showModalDialog: (h, title) => env.dialogs.push({ title, html: h.html }) }),
   };
+  ctx.HtmlService = { createHtmlOutput: (html) => { const o = { html, setWidth: () => o, setHeight: () => o }; return o; } };
   ctx.PropertiesService = { getScriptProperties: () => ({
     getProperty: (k) => (k in env.props ? env.props[k] : null),
     setProperty: (k, v) => { env.props[k] = v; },
@@ -246,7 +247,7 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
   };
   vm.createContext(ctx);
   const names = ['onAdminEdit', 'renderRegMessage_', 'onStaffEdit', 'syncRegistrationsNow', 'saveDiscordWebhook_', 'inNotifyHours_', 'isReminderDue_', 'regState_', 'REG_STATE', 'quickSetup', 'createStaffInputTab', 'transferFromStaffSheet', 'autoRun', 'readSettings_', 'readStaffRows_', 'collectSourceRows_', 'findStaffHeaderRow_',
-    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_COPY_SCRIPT', 'REG_DIALOG_COPY_FAIL'];
+    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY'];
   env.g = vm.runInContext(src + '\n;({' + names.join(',') + '})', ctx);
   return env;
 }
@@ -855,28 +856,68 @@ test('催促の時間帯と判定', () => {
   assert.equal(env.g.isReminderDue_({ ...base, state: env.g.REG_STATE.DONE }, now, cfg), false);
 });
 
-// 連絡文ダイアログの「コピー」ボタン：ダイアログ内のスクリプトを偽のブラウザで動かす
-async function runCopy(env, { execOk, execThrows, clipboard }) {
-  const shown = {};
-  const ta = { value: 'REN.50の資料を共有します。', focus() {}, select() {}, setSelectionRange() {} };
+// 連絡文ダイアログ：ダイアログ内のスクリプトを偽のブラウザで動かす
+async function runDialog(env, { execOk, execThrows, clipboard, click = true }) {
+  const shown = {}; const listeners = []; const picked = [];
+  const ta = (id) => ({ id, value: id + 'の文', focus() {}, select() { picked.push(id); }, setSelectionRange() {} });
+  const els = { eng: ta('eng'), int: ta('int') };
+  const btn = (act, id) => ({ getAttribute: (k) => (k === 'data-act' ? act : id), addEventListener: (ev, fn) => listeners.push({ act, id, fn }) });
   const doc = {
-    getElementById: (id) => (id === 'eng' ? ta : { set textContent(v) { shown[id] = v; } }),
+    getElementById: (id) => els[id] || (id.endsWith('m') ? { set textContent(v) { shown[id.slice(0, -1)] = v; } } : null),
+    querySelectorAll: () => [btn('copy', 'eng'), btn('copy', 'int')],
     execCommand: () => { if (execThrows) throw new Error('blocked'); return execOk; },
   };
   const nav = clipboard === 'none' ? {} : { clipboard: { writeText: () => (clipboard === 'ok' ? Promise.resolve() : Promise.reject(new Error('NotAllowedError'))) } };
   const c = vm.createContext({ document: doc, navigator: nav });
-  vm.runInContext(env.g.REG_DIALOG_COPY_SCRIPT + ';copyText("eng")', c);
+  vm.runInContext(env.g.REG_DIALOG_SCRIPT, c);
+  const atOpen = { msg: shown.eng, picked: picked.slice(), listeners: listeners.length };
+  if (click) listeners.find(l => l.id === 'eng').fn();
   await new Promise(r => setTimeout(r, 0));
-  return shown.engm;
+  return { atOpen, after: shown.eng };
 }
 await (async () => {
   const env = env0();
   const NG = env.g.REG_DIALOG_COPY_FAIL;
-  assert.equal(await runCopy(env, { execOk: true, clipboard: 'none' }), 'コピーしました', 'clipboard が無くても execCommand でコピー');
-  assert.equal(await runCopy(env, { execOk: false, clipboard: 'ok' }), 'コピーしました', 'execCommand がだめなら clipboard API');
-  assert.equal(await runCopy(env, { execOk: false, clipboard: 'deny' }), NG, '両方だめなら ⌘C を案内');
-  assert.equal(await runCopy(env, { execThrows: true, clipboard: 'none' }), NG, '例外でも案内が出る');
+  const open = await runDialog(env, { click: false, clipboard: 'none' });
+  assert.equal(open.atOpen.msg, env.g.REG_DIALOG_READY, '開いた時点で ⌘C の案内');
+  same(open.atOpen.picked, ['eng'], '開いた時点でエンジニア向けの文を選んでおく');
+  assert.equal(open.atOpen.listeners, 2, 'ボタンはスクリプトから付ける（onclick 属性に頼らない）');
+  assert.equal((await runDialog(env, { execOk: true, clipboard: 'none' })).after, 'コピーしました', 'clipboard が無くても execCommand でコピー');
+  assert.equal((await runDialog(env, { execOk: false, clipboard: 'ok' })).after, 'コピーしました', 'execCommand がだめなら clipboard API');
+  assert.equal((await runDialog(env, { execOk: false, clipboard: 'deny' })).after, NG, '両方だめなら ⌘C を案内');
+  assert.equal((await runDialog(env, { execThrows: true, clipboard: 'none' })).after, NG, '例外でも案内が出る');
 })();
-test('連絡文のコピー：入れ子のダイアログで clipboard が無くても・拒否されても、黙って止まらない', () => {});
+test('連絡文の画面：開いたら文を選んでおき、コピーは clipboard が無くても・拒否されても黙って止まらない', () => {});
+
+test('『案件登録』の「コピー」列：チェックするとその行の連絡文の画面が開き、チェックは外れる（連携は動かさない）', () => {
+  const admin = adminSheet();
+  const eng = engineerFile();
+  const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
+  env.g.quickSetup();
+  const reg = admin.getSheetByName('案件登録');
+  const rh = reg.header();
+  const ci = rh.indexOf('コピー') + 1;
+  assert.ok(ci > 0, '「コピー」列がある');
+  assert.equal(rh[ci - 2], '通訳向け連絡文', '連絡文の列のすぐ右');
+  assert.equal(ruleAt(reg, 2, ci).type, 'checkbox');
+  const setR = (row, name, v) => reg.set(row, rh.indexOf(name) + 1, v);
+  setR(2, '会社コード', 'REN'); setR(2, '案件番号', 50); setR(2, '社外案件名', '戸建て'); setR(2, '新規or修正', '新規 / Mới'); setR(2, '視点', 'EX1'); setR(2, 'サーバーリンク', LINK);
+  env.g.onAdminEdit({ range: reg.getRange(2, 1, 1, rh.length) });
+  const copiedBefore = eng.getSheetByName('入力シート').rows.length;
+  setR(2, 'コピー', true);
+  env.g.onAdminEdit({ range: reg.getRange(2, ci) });
+  assert.equal(reg.rows[1][ci - 1], false, 'チェックは外れる');
+  assert.equal(env.dialogs.length, 1, '画面が1つ開く');
+  assert.equal(env.dialogs[0].title, '連絡文');
+  assert.ok(env.dialogs[0].html.includes('REN.50の資料を共有します。'), 'その行の連絡文');
+  assert.ok(env.dialogs[0].html.includes('data-act="copy"') && !env.dialogs[0].html.includes('onclick='), 'ボタンは onclick 属性を使わない');
+  assert.equal(eng.getSheetByName('入力シート').rows.length, copiedBefore, '入力シートには何も書かない');
+  // 記入途中の行にチェック → 画面は出さず案内だけ
+  setR(3, '会社コード', 'REN'); setR(3, 'コピー', true);
+  env.g.onAdminEdit({ range: reg.getRange(3, ci) });
+  assert.equal(reg.rows[2][ci - 1], false);
+  assert.equal(env.dialogs.length, 1);
+  assert.ok(env.alerts.some(a => a.includes('そろった行がありません')), env.alerts.join('/'));
+});
 
 console.log(`\n${passed} tests passed`);

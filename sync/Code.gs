@@ -1264,10 +1264,10 @@ const REG_H = {
   translated: '翻訳済み', translatedAt: '翻訳日時', transNote: '翻訳メモ', white: 'White', color: 'Color', other: 'pts', total: '合計', split: '作業の分け方',
   estimator: '時間入力者', estimatedAt: '時間入力日時',
   regDate: '登録日時', delivery: '納品名', message: '連絡文',
-  manual: '今すぐ連携', toInterp: '通訳へのメッセージ', interpMessage: '通訳向け連絡文', copiedAt: '入力シートへ写した日時', notifiedAt: '最後の催促', notifyCount: '催促回数',
+  manual: '今すぐ連携', copy: 'コピー', toInterp: '通訳へのメッセージ', interpMessage: '通訳向け連絡文', copiedAt: '入力シートへ写した日時', notifiedAt: '最後の催促', notifyCount: '催促回数',
 };
 const REG_ORDER = ['no', 'state', 'manual', 'regDate', 'code', 'number', 'name', 'internal', 'assignee', 'request', 'cut', 'pattern', 'link', 'deadline', 'order', 'memo', 'toInterp',
-  'translated', 'translatedAt', 'transNote', 'white', 'color', 'other', 'total', 'split', 'estimator', 'estimatedAt', 'copiedAt', 'notifiedAt', 'notifyCount', 'delivery', 'message', 'interpMessage'];
+  'translated', 'translatedAt', 'transNote', 'white', 'color', 'other', 'total', 'split', 'estimator', 'estimatedAt', 'copiedAt', 'notifiedAt', 'notifyCount', 'delivery', 'message', 'interpMessage', 'copy'];
 // 管理者が書く列（ほかの列は自動で入る）
 const REG_INPUT = ['code', 'number', 'name', 'assignee', 'request', 'cut', 'pattern', 'link', 'deadline', 'order', 'memo', 'toInterp'];
 // エンジニア入力シートへ写す列（案件登録 → 入力シート。担当者・納期・注文書・管理者メモは写さない）
@@ -1288,6 +1288,7 @@ const REG_NOTES = {
   regDate: '自動：書き始めた日時。会社コード・案件番号・視点・新規or修正がそろって入力シートへ写した（登録Noが付いた）ときにその日時に直す。連絡文の {登録日時} {計算期限} のもと',
   copiedAt: '自動：入力シートへ写した（直した）日時', notifiedAt: '自動：最後に Discord で催促した日時', notifyCount: '自動：催促した回数',
   manual: 'チェックすると、その行をすぐ入力シートへ写す（手動連携。終わるとチェックは外れる）',
+  copy: 'チェックすると、その行の連絡文（エンジニア向け・通訳向け）の画面が開く。文章は選んだ状態なので ⌘C（Windows は Ctrl+C）でコピーできる。チェックはすぐ外れる',
   toInterp: '通訳へのメッセージ（翻訳してほしい点・注意点など）。入力シートの「管理者からの連絡」に写り、「通訳向け連絡文」にも入る',
   interpMessage: '自動：通訳に送る連絡文（ひな形は『設定』の「通訳向けの連絡文」）。メニュー「連絡文をコピー」でコピー・Discord へ送信もできる',
   message: '自動：エンジニア・通訳に送る連絡文（ひな形は『設定』の「登録時の連絡文」）。同じ社内案件名・同じ入力日の行は1通にまとめる。メニュー「連絡文をコピー」でコピー・Discord へ送信もできる',
@@ -1332,7 +1333,7 @@ function formatRegSheet_(sheet, masters, codes) {
   REG_ORDER.forEach(k => {
     const head = sheet.getRange(1, rc[k]);
     // 人が書く列＝黄色、自動の列＝灰色（『連携』と同じ色分け）
-    head.setNote(REG_NOTES[k] || '').setFontWeight('bold').setBackground(REG_INPUT.indexOf(k) >= 0 || k === 'manual' ? '#fff2cc' : '#e6e6e6');
+    head.setNote(REG_NOTES[k] || '').setFontWeight('bold').setBackground(REG_INPUT.indexOf(k) >= 0 || k === 'manual' || k === 'copy' ? '#fff2cc' : '#e6e6e6');
   });
   // 社内案件名（会社コード＋案件番号）と合計（White＋Color＋pts）は式。値はスクリプトから書かない
   const C = (k) => 'RC' + rc[k];
@@ -1340,6 +1341,7 @@ function formatRegSheet_(sheet, masters, codes) {
   const hrs = C('white') + ',' + C('color') + ',' + C('other');
   sheet.getRange(2, rc.total, n - 1, 1).setFormulaR1C1('=IF(COUNT(' + hrs + ')=0,"",SUM(' + hrs + '))');
   sheet.getRange(2, rc.manual, n - 1, 1).setDataValidation(dv().requireCheckbox().build());
+  sheet.getRange(2, rc.copy, n - 1, 1).setDataValidation(dv().requireCheckbox().build());
   if (codes && codes.length) sheet.getRange(2, rc.code, n - 1, 1).setDataValidation(list(codes, true));
   sheet.getRange(2, rc.number, n - 1, 1).setDataValidation(dv().requireNumberBetween(1, 99999).setAllowInvalid(false).build());
   sheet.getRange(2, rc.request, n - 1, 1).setDataValidation(list(REQUEST_OPTIONS, false));
@@ -1679,30 +1681,42 @@ function regMessageOpts_(cfg, ss) {
   return { calcMinutes: cfg.calcMinutes, fmt };
 }
 
-// 連絡文ダイアログの「コピー」ボタン（ダイアログの中で動くスクリプト）。
-// Apps Script のダイアログは入れ子の iframe なので、navigator.clipboard が無い・拒否されることがある
-// （2026-11-03、押しても何も起きなかった）。押した操作の中で同期的に execCommand("copy") を先に試し、
-// だめなら clipboard API、それもだめなら文章を選んだまま ⌘C／Ctrl+C を案内する。例外で黙って止まらない。
+// 連絡文ダイアログの中で動くスクリプト。
+// Apps Script のダイアログは入れ子の iframe で、クリップボードへの書き込みの許可が無い（allow に clipboard-write が無い）。
+// 2026-11-03：「コピー」を押しても何も起きなかった。そこで
+//   ・ボタンは onclick 属性ではなく、読み込み後に addEventListener で付ける
+//   ・開いた時点でエンジニア向けの文章を選んだ状態にし、⌘C／Ctrl+C だけでコピーできるようにする（ボタンが効かなくても使える）
+//   ・コピーは押した操作の中で execCommand("copy") → clipboard API の順に試し、だめなら ⌘C を案内する（黙って止まらない）
 const REG_DIALOG_COPY_FAIL = '自動でコピーできませんでした。文章を選んだ状態にしたので ⌘C（Windows は Ctrl+C）でコピーしてください';
-const REG_DIALOG_COPY_SCRIPT =
-  'function msg(id,t){document.getElementById(id+"m").textContent=t;}' +
+const REG_DIALOG_READY = '文章を選んだ状態です。⌘C（Windows は Ctrl+C）でもコピーできます';
+const REG_DIALOG_SCRIPT =
+  'function msg(id,t){var m=document.getElementById(id+"m");if(m)m.textContent=t;}' +
+  'function pick(t){try{t.focus();t.select();t.setSelectionRange(0,t.value.length);}catch(e){}}' +
   'function copyText(id){var t=document.getElementById(id);var ng=' + JSON.stringify(REG_DIALOG_COPY_FAIL) + ';' +
-  'try{t.focus();t.select();t.setSelectionRange(0,t.value.length);}catch(e){}' +
-  'var ok=false;try{ok=document.execCommand("copy");}catch(e){ok=false;}' +
+  'pick(t);var ok=false;try{ok=document.execCommand("copy");}catch(e){ok=false;}' +
   'if(ok){msg(id,"コピーしました");return;}' +
   'try{if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t.value).then(function(){msg(id,"コピーしました");},function(){msg(id,ng);});return;}}catch(e){}' +
-  'msg(id,ng);}';
+  'msg(id,ng);}' +
+  'function sendText(id){msg(id,"送信中…");google.script.run.withSuccessHandler(function(){msg(id,"Discord に送りました");})' +
+  '.withFailureHandler(function(e){msg(id,e.message||e);}).sendTextToDiscord(document.getElementById(id).value);}' +
+  'var bs=document.querySelectorAll("button[data-act]");for(var i=0;i<bs.length;i++){(function(b){b.addEventListener("click",function(){' +
+  'var id=b.getAttribute("data-id");if(b.getAttribute("data-act")==="copy"){copyText(id);}else{sendText(id);}});})(bs[i]);}' +
+  'var e0=document.getElementById("eng");if(e0){pick(e0);msg("eng",' + JSON.stringify(REG_DIALOG_READY) + ');}';
 
 /** メニュー：『案件登録』で選んだ行の連絡文を出す（コピー・Discord へ送信） */
 function showRegMessage() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getActiveSheet();
   if (!sheet || sheet.getName() !== SHEET.REG) { alertOrLog_('『' + SHEET.REG + '』タブで、連絡文を出したい行（複数可）を選んでから押してください。'); return; }
-  const cfg = readSettings_();
-  const rc = regHeaderMap_(sheet);
   const range = sheet.getActiveRange();
   const r1 = Math.max(2, range.getRow()), r2 = range.getLastRow();
   if (r2 < r1) { alertOrLog_('見出しより下の行を選んでください。'); return; }
+  showRegMessageRows_(ss, sheet, r1, r2);
+}
+/** 『案件登録』の r1〜r2 行の連絡文の画面を出す（メニュー「連絡文をコピー」と「コピー」列のチェックから呼ぶ） */
+function showRegMessageRows_(ss, sheet, r1, r2) {
+  const cfg = readSettings_();
+  const rc = regHeaderMap_(sheet);
   const vals = sheet.getRange(r1, 1, r2 - r1 + 1, sheet.getLastColumn()).getValues();
   const groups = new Map();
   vals.forEach(v => {
@@ -1724,18 +1738,14 @@ function showRegMessage() {
     '<div style="margin-bottom:12px"><div style="font-weight:bold;margin-bottom:4px">' + title + '</div>' +
     '<textarea id="' + id + '" style="width:100%;height:150px;font-size:13px">' + esc(body) + '</textarea>' +
     '<div style="margin-top:6px;display:flex;gap:8px">' +
-    '<button onclick="copyText(\'' + id + '\')">コピー</button>' +
-    (hasDiscord ? '<button onclick="sendText(\'' + id + '\')">Discord へ送る</button>' : '') +
+    '<button type="button" data-act="copy" data-id="' + id + '">コピー</button>' +
+    (hasDiscord ? '<button type="button" data-act="send" data-id="' + id + '">Discord へ送る</button>' : '') +
     '<span id="' + id + 'm" style="color:#2e7d32;align-self:center"></span></div></div>';
   const html = HtmlService.createHtmlOutput(
     '<div style="font-family:sans-serif;font-size:13px">' +
     box('eng', 'エンジニア向け', text) + box('int', '通訳向け', interp) +
     '<p style="color:#666;font-size:12px">ひな形は『設定』の「登録時の連絡文」「通訳向けの連絡文」で変えられます。ここで直してからコピー・送信してもかまいません。</p></div>' +
-    '<script>' +
-    REG_DIALOG_COPY_SCRIPT +
-    'function sendText(id){msg(id,"送信中…");google.script.run.withSuccessHandler(function(){msg(id,"Discord に送りました");})' +
-    '.withFailureHandler(function(e){msg(id,e.message||e);}).sendTextToDiscord(document.getElementById(id).value);}' +
-    '</script>'
+    '<script>' + REG_DIALOG_SCRIPT + '</script>'
   ).setWidth(560).setHeight(520);
   SpreadsheetApp.getUi().showModalDialog(html, '連絡文');
 }
@@ -1770,6 +1780,16 @@ function onAdminEdit(e) {
     const rc = regHeaderMap_(sheet);
     const r1 = Math.max(2, e.range.getRow()), r2 = e.range.getLastRow();
     const vals = sheet.getRange(r1, 1, r2 - r1 + 1, sheet.getLastColumn()).getValues();
+    // 「コピー」にチェックした行 → チェックを外して連絡文の画面を出す（ロックも連携も要らない）
+    if (rc.copy && e.range.getColumn() <= rc.copy && e.range.getLastColumn() >= rc.copy) {
+      const copyRows = [];
+      vals.forEach((v, i) => { if (isChecked_(v[rc.copy - 1])) copyRows.push(r1 + i); });
+      if (copyRows.length) {
+        copyRows.forEach(r => sheet.getRange(r, rc.copy).setValue(false));
+        showRegMessageRows_(e.source || SpreadsheetApp.getActiveSpreadsheet(), sheet, copyRows[0], copyRows[copyRows.length - 1]);
+        return;
+      }
+    }
     // 「今すぐ連携」にチェックした行（手動連携）
     const manualRows = [];
     vals.forEach((v, i) => { if (isChecked_(v[rc.manual - 1])) manualRows.push(r1 + i); });
