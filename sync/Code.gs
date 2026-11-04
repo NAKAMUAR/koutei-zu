@@ -1501,6 +1501,15 @@ function ensureRegSheet_(ss, masters) {
   if (masters) formatRegSheet_(sheet, masters, readCompanyCodes_(ss));
   return sheet;
 }
+/** 『登録一覧』の式（R1C1）：社内案件名（会社コード＋案件番号）と合計（White＋Color＋pts） */
+function regFormulas_(rc) {
+  const C = (k) => 'RC' + rc[k];
+  const hrs = C('white') + ',' + C('color') + ',' + C('other');
+  return {
+    internal: '=IF(' + C('code') + '="","",IF(OR(' + C('number') + '="",REGEXMATCH(' + C('code') + '&"","\\d")),' + C('code') + ',' + C('code') + '&"."&' + C('number') + '))',
+    total: '=IF(COUNT(' + hrs + ')=0,"",SUM(' + hrs + '))',
+  };
+}
 function formatRegSheet_(sheet, masters, codes) {
   const rc = regHeaderMap_(sheet);
   const n = Math.max(sheet.getMaxRows(), 1000); // 式を入れるので「最後の行＋α」にはしない（押すたびに広がらないように）
@@ -1514,10 +1523,9 @@ function formatRegSheet_(sheet, masters, codes) {
     head.setNote(REG_NOTES[k] || '').setFontWeight('bold').setBackground(REG_INPUT.indexOf(k) >= 0 || k === 'extName' || k === 'manual' || k === 'copy' ? '#fff2cc' : '#e6e6e6');
   });
   // 社内案件名（会社コード＋案件番号）と合計（White＋Color＋pts）は式。値はスクリプトから書かない
-  const C = (k) => 'RC' + rc[k];
-  sheet.getRange(2, rc.internal, n - 1, 1).setFormulaR1C1('=IF(' + C('code') + '="","",IF(OR(' + C('number') + '="",REGEXMATCH(' + C('code') + '&"","\\d")),' + C('code') + ',' + C('code') + '&"."&' + C('number') + '))');
-  const hrs = C('white') + ',' + C('color') + ',' + C('other');
-  sheet.getRange(2, rc.total, n - 1, 1).setFormulaR1C1('=IF(COUNT(' + hrs + ')=0,"",SUM(' + hrs + '))');
+  const fm = regFormulas_(rc);
+  sheet.getRange(2, rc.internal, n - 1, 1).setFormulaR1C1(fm.internal);
+  sheet.getRange(2, rc.total, n - 1, 1).setFormulaR1C1(fm.total);
   sheet.getRange(2, rc.manual, n - 1, 1).setDataValidation(dv().requireCheckbox().build());
   sheet.getRange(2, rc.copy, n - 1, 1).setDataValidation(dv().requireCheckbox().build());
   if (codes && codes.length) sheet.getRange(2, rc.code, n - 1, 1).setDataValidation(list(codes, true));
@@ -1623,6 +1631,45 @@ function intakeEntries_(ss, list, rc) {
   appendToRegList_(list, rc, move);
   return { moved: move.length, rejected };
 }
+/**
+ * 『登録一覧』に行を足す。同じ案件（会社コード＋案件番号）・同じ視点（パターン違い）の行が既にあれば、その最後の行のすぐ下に差し込む
+ * （修正で枚数が増えたとき EX1-A・EX1-B・EX1-C が並ぶように）。無ければ最後に書き足す。書いた行番号の配列を返す
+ */
+function insertRegRows_(list, rc, rows) {
+  const lv = list.getLastRow() >= 2 ? list.getRange(2, 1, list.getLastRow() - 1, list.getLastColumn()).getValues() : [];
+  const keyOf = (code, number, cut) => normCode_(joinCode_(code, number)) + '::' + normCut_(trimStr_(cut));
+  const lastBy = new Map();
+  lv.forEach((v, i) => { if (trimStr_(v[rc.cut - 1])) lastBy.set(keyOf(v[rc.code - 1], v[rc.number - 1], v[rc.cut - 1]), i + 2); });
+  const tail = [], groups = new Map();
+  rows.forEach((row, i) => {
+    const a = lastBy.get(keyOf(row.code, row.number, row.cut));
+    if (a) { if (!groups.has(a)) groups.set(a, []); groups.get(a).push(i); } else tail.push(i);
+  });
+  const at = new Array(rows.length);
+  if (tail.length) {
+    const start = appendToRegList_(list, rc, tail.map(i => rows[i]));
+    tail.forEach((i, j) => { at[i] = start + j; });
+  }
+  const keys = rc.extName ? REG_INPUT.concat(['extName']) : REG_INPUT;
+  const fm = regFormulas_(rc);
+  const box = SpreadsheetApp.newDataValidation().requireCheckbox().build();
+  // 下の差し込み位置から順に（上の行番号がずれないように）
+  Array.from(groups.keys()).sort((a, b) => b - a).forEach(a => {
+    const idx = groups.get(a);
+    list.insertRowsAfter(a, idx.length);
+    const r1 = a + 1, n = idx.length;
+    const width = list.getLastColumn();
+    const block = idx.map(i => { const line = new Array(width).fill(''); keys.forEach(k => { if (rc[k] && rows[i][k] !== undefined) line[rc[k] - 1] = rows[i][k]; }); return line; });
+    keys.filter(k => rc[k]).forEach(k => list.getRange(r1, rc[k], n, 1).setValues(block.map(line => [line[rc[k] - 1]])));
+    list.getRange(r1, rc.internal, n, 1).setFormulaR1C1(fm.internal);
+    list.getRange(r1, rc.total, n, 1).setFormulaR1C1(fm.total);
+    ['manual', 'copy'].forEach(k => { if (rc[k]) list.getRange(r1, rc[k], n, 1).setDataValidation(box).setValues(idx.map(() => [false])); });
+    idx.forEach((i, j) => { at[i] = r1 + j; });
+    // 先に書いた（下にある）行の番号は、差し込んだぶんだけずれる
+    for (let i = 0; i < at.length; i++) if (at[i] && at[i] > a && idx.indexOf(i) < 0) at[i] += n;
+  });
+  return at;
+}
 /** 『登録一覧』の中身がある最後の行の下へ、管理者が書く列だけを書き足す。書いた最初の行番号を返す（チェックボックス・式だけの行は数えない） */
 function appendToRegList_(list, rc, rows) {
   const lv = list.getLastRow() >= 2 ? list.getRange(2, 1, list.getLastRow() - 1, list.getLastColumn()).getValues() : [];
@@ -1630,7 +1677,9 @@ function appendToRegList_(list, rc, rows) {
   lv.forEach((v, i) => { if (trimStr_(v[rc.no - 1]) !== '' || REG_INPUT.some(k => trimStr_(v[rc[k] - 1]) !== '')) lastData = i + 2; });
   ensureSize_(list, lastData + rows.length, list.getLastColumn());
   const keys = rc.extName ? REG_INPUT.concat(['extName']) : REG_INPUT;
-  rows.forEach((row, i) => keys.forEach(k => { if (row[k] !== undefined && trimStr_(row[k]) !== '') list.getRange(lastData + 1 + i, rc[k]).setValue(row[k]); }));
+  // 列ごとにまとめて書く（1マスずつ書くと遅い）
+  keys.filter(k => rc[k] && rows.some(row => row[k] !== undefined && trimStr_(row[k]) !== '')).forEach(k =>
+    list.getRange(lastData + 1, rc[k], rows.length, 1).setValues(rows.map(row => [row[k] === undefined ? '' : row[k]])));
   return lastData + 1;
 }
 
@@ -1679,9 +1728,9 @@ function submitEntryForm(p) {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const list = ensureRegSheet_(ss, null);
     const rc = regHeaderMap_(list);
-    const start = appendToRegList_(list, rc, res.rows);
+    const at = insertRegRows_(list, rc, res.rows);
     const r = syncRegistrations_(new Date());
-    const nos = list.getRange(start, rc.no, res.rows.length, 1).getValues().map(x => trimStr_(x[0]));
+    const nos = at.map(row => trimStr_(list.getRange(row, rc.no).getValue()));
     return { ok: true, nos, msg: '登録しました：' + nos.join('・') + '（' + joinCode_(res.rows[0].code, res.rows[0].number) + '）。『登録一覧』とエンジニア入力シートに載りました' + (r && r.msg ? '\n' + r.msg : '') };
   } finally {
     lock.releaseLock();
@@ -1722,9 +1771,9 @@ function updateEntryForm(p) {
       if (changed.some(k => ['assignee', 'deadline'].indexOf(k) >= 0)) toApp.push(r.no);
     });
     const added = res.rows.filter(r => !r.no);
-    const start = added.length ? appendToRegList_(list, rc, added) : 0;
+    const at = added.length ? insertRegRows_(list, rc, added) : [];
     const r = syncRegistrations_(new Date());
-    const newNos = added.length ? list.getRange(start, rc.no, added.length, 1).getValues().map(x => trimStr_(x[0])) : [];
+    const newNos = at.map(row => trimStr_(list.getRange(row, rc.no).getValue()));
     const lines = [(fixed.length ? '直しました：' + fixed.join('・') : '変わった項目はありませんでした') + (newNos.length ? '／足しました：' + newNos.join('・') : '') +
       '（' + joinCode_(res.rows[0].code, res.rows[0].number) + '）。エンジニア入力シートも直しました'];
     if (r && r.msg) lines.push(r.msg);
@@ -2634,11 +2683,29 @@ function syncRegistrations_(now) {
   // 入力シートへの書き込み（追加は最後に中身がある行の下へ）
   staffUpdates.forEach(u => u.sheet.getRange(u.row, u.col).setValue(u.value));
   if (appends.length) {
-    // 写す列と登録Noだけを書く（行ごと書くと、合計などの式を消してしまう）
-    const start = lastData + 1;
-    ensureSize_(staff, start + appends.length - 1, width);
-    const cols = REG_COPY.map(k => sc[k]).concat([sc.regNo, sc.delivery]).filter(Boolean);
-    appends.forEach((arr, i) => cols.forEach(c => { if (arr[c - 1] !== '') staff.getRange(start + i, c).setValue(arr[c - 1]); }));
+    // 写す列と登録Noだけを書く（行ごと書くと、合計などの式を消してしまう）。続いた列はまとめて書く
+    const cols = REG_COPY.map(k => sc[k]).concat([sc.regNo, sc.delivery]).filter(Boolean).sort((a, b) => a - b);
+    const segs = [];
+    cols.forEach(c => { const g = segs[segs.length - 1]; if (g && g[g.length - 1] === c - 1) g.push(c); else segs.push([c]); });
+    const writeRows = (start, list) => list.forEach((arr, i) => segs.forEach(g => {
+      if (g.every(c => arr[c - 1] === '')) return;
+      staff.getRange(start + i, g[0], 1, g.length).setValues([g.map(c => arr[c - 1])]);
+    }));
+    // 同じ案件・同じ視点（パターン違い）の行が入力前にあれば、そのすぐ下に差し込む（A・B・C が並ぶように）。無ければ最後へ
+    const keyOf = (v) => normCode_(joinCode_(v[sc.code - 1], sc.number ? v[sc.number - 1] : '')) + '::' + normCut_(trimStr_(v[sc.cut - 1]));
+    const lastBy = new Map();
+    before.vals.forEach((v, i) => { if (trimStr_(v[sc.cut - 1])) lastBy.set(keyOf(v), hr + 1 + i); });
+    const tail = [], groups = new Map();
+    appends.forEach(arr => { const a = lastBy.get(keyOf(arr)); if (a) { if (!groups.has(a)) groups.set(a, []); groups.get(a).push(arr); } else tail.push(arr); });
+    if (tail.length) { ensureSize_(staff, lastData + tail.length, width); writeRows(lastData + 1, tail); }
+    const totalF = staffTotalFormula_(sc);
+    Array.from(groups.keys()).sort((a, b) => b - a).forEach(a => {
+      const list = groups.get(a);
+      staff.insertRowsAfter(a, list.length);
+      writeRows(a + 1, list);
+      if (totalF && sc.total) staff.getRange(a + 1, sc.total, list.length, 1).setFormulaR1C1(totalF);
+      if (sc.translated) staff.getRange(a + 1, sc.translated, list.length, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build()).setValues(list.map(() => [false]));
+    });
   }
 
   // 催促（Discord）
@@ -2655,7 +2722,15 @@ function syncRegistrations_(now) {
       remindNote = 'Discord で催促 ' + reminded + '件';
     }
   }
-  regUpdates.forEach(u => reg.getRange(u.row, u.col).setValue(u.value));
+  // 『登録一覧』は列ごとにまとめて書く（変えた行の範囲だけ。1マスずつ書くと遅い）
+  const byCol = new Map();
+  regUpdates.forEach(u => { if (!byCol.has(u.col)) byCol.set(u.col, []); byCol.get(u.col).push(u.row); });
+  byCol.forEach((rowsOfCol, col) => {
+    const r1 = Math.min.apply(null, rowsOfCol), r2 = Math.max.apply(null, rowsOfCol);
+    const vals = [];
+    for (let r = r1; r <= r2; r++) vals.push([data[r - 1][col - 1]]);
+    reg.getRange(r1, col, vals.length, 1).setValues(vals);
+  });
 
   const msg = (intake.moved ? '登録 ' + intake.moved + '件・' : '') + (intake.rejected ? '登録できない行 ' + intake.rejected + '件（足りない項目あり）・' : '') +
     '入力シートへ写した ' + copied + '件・直した ' + updated + '件・時間計算待ち ' + estimate + '件' +
@@ -3319,6 +3394,12 @@ function ensureStaffExtraColumns_(sheet, headerRow) {
   return mapStaffColumns_(sheet.getRange(headerRow, 1, 1, lastCol + missing.length).getValues()[0]);
 }
 
+/** 入力シートの合計の式（R1C1）：White躯体＋White家具＋Color＋pts（分ける前は White＋Color＋pts）。列が足りなければ '' */
+function staffTotalFormula_(sc) {
+  if (!(sc.whiteBody || sc.white) || !sc.color || !sc.other) return '';
+  const refs = (sc.whiteBody ? 'RC' + sc.whiteBody + ',RC' + sc.whiteFurn : 'RC' + sc.white) + ',RC' + sc.color + ',RC' + sc.other;
+  return '=IF(COUNT(' + refs + ')=0,"",SUM(' + refs + '))';
+}
 /** そのタブに、今の列構成（会社コード・案件番号・視点・White など）の見出し行があるか */
 function hasStaffInputHeaders_(sheet) {
   const row = findStaffHeaderRow_(sheet);
@@ -3395,10 +3476,7 @@ function formatStaffInputTab_(sheet, headerRow, choices) {
     if (rule) sheet.getRange(start, c, n, 1).setDataValidation(rule);
     if (def.hours) sheet.getRange(start, c, n, 1).setNumberFormat('0.##');
     // 合計は式（White＋Color＋pts）。値はスクリプトから書かない
-    if (def.key === 'total' && (sc.whiteBody || sc.white) && sc.color && sc.other) {
-      const refs = (sc.whiteBody ? 'RC' + sc.whiteBody + ',RC' + sc.whiteFurn : 'RC' + sc.white) + ',RC' + sc.color + ',RC' + sc.other;
-      sheet.getRange(start, c, n, 1).setFormulaR1C1('=IF(COUNT(' + refs + ')=0,"",SUM(' + refs + '))');
-    }
+    if (def.key === 'total' && staffTotalFormula_(sc)) sheet.getRange(start, c, n, 1).setFormulaR1C1(staffTotalFormula_(sc));
     if (def.datetime) sheet.getRange(start, c, n, 1).setNumberFormat('yyyy-mm-dd hh:mm');
   });
   if (isCurrent) sheet.setRowHeight(headerRow, 42);

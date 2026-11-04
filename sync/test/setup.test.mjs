@@ -59,7 +59,8 @@ class FakeSheet {
   }
   getMaxRows() { return this.maxRows; }
   getMaxColumns() { return this.maxCols; }
-  insertRowsAfter(after, n) { this.maxRows += n; return this; }
+  // 行を差し込む（下の行を n 行ずつ下へずらす。シートの最後に足すときは大きさが増えるだけ）
+  insertRowsAfter(after, n) { this.maxRows += n; if (this.rows.length > after) this.rows.splice(after, 0, ...Array.from({ length: n }, () => [])); return this; }
   insertColumnsAfter(after, n) { this.maxCols += n; return this; }
   // 列を差し込む（右の値を1つずつ右へずらす）
   deleteRow(r) { this.rows.splice(r - 1, 1); return this; }
@@ -1355,6 +1356,34 @@ test('制作時間の計算の期限：8〜12時・13〜17時（ベトナム時�
   assert.equal(add(vn(4, 18, 0)), '11/5 9:30', '夜に登録 → 次の日8時から');
   assert.equal(add(vn(4, 6, 0)), '11/4 9:30', '朝早く登録 → 8時から');
   assert.equal(at(env.g.addWorkMinutes_(vn(4, 18, 0), 90, '')), '11/4 19:30', '時間帯が無ければそのまま足す');
+});
+
+test('修正で枚数が増えたとき：足した EX1-C は『登録一覧』と入力シートで EX1-A・EX1-B のすぐ下に入る（別の案件・視点の行の後ろに離れない）', () => {
+  const admin = adminSheet();
+  const eng = engineerFile();
+  const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
+  env.g.quickSetup();
+  const base = { code: 'REN', number: '50', name: 'マンション', assignee: '', link: LINK, deadline: '', order: '', memo: '', toInterp: '' };
+  const v = (cut, pattern, no) => ({ cut, pattern, request: '新規 / Mới', no: no || '' });
+  let res = env.g.submitEntryForm({ ...base, views: [v('EX1', 'A'), v('EX1', 'B'), v('IN1', '')] });
+  same(res.nos, ['R0001', 'R0002', 'R0003']);
+  res = env.g.submitEntryForm({ ...base, number: '51', views: [v('EX1', '')] });
+  same(res.nos, ['R0004']);
+  // REN.50 を直して EX1-C を足す
+  res = env.g.updateEntryForm({ ...base, views: [v('EX1', 'A', 'R0001'), v('EX1', 'B', 'R0002'), v('IN1', '', 'R0003'), v('EX1', 'C')] });
+  assert.equal(res.ok, true, res.msg);
+  same(res.nos.slice(-1), ['R0005']);
+  const reg = admin.getSheetByName('登録一覧');
+  const rh = reg.header();
+  const list = reg.rows.slice(1).filter(r => r[rh.indexOf('登録No')]).map(r => r[rh.indexOf('登録No')] + ' ' + r[rh.indexOf('案件番号')] + ' ' + r[rh.indexOf('視点')] + (r[rh.indexOf('パターン')] ? '-' + r[rh.indexOf('パターン')] : ''));
+  same(list, ['R0001 50 EX1-A', 'R0002 50 EX1-B', 'R0005 50 EX1-C', 'R0003 50 IN1', 'R0004 51 EX1'], '『登録一覧』で A・B・C が並ぶ');
+  const ci = rh.indexOf('社内案件名') + 1;
+  assert.ok(reg.formulas.some(f => f.col === ci && f.row === 4), '差し込んだ行にも社内案件名の式');
+  const tab = eng.getSheetByName('入力前');
+  const sh = tab.header(2).map(h => h.split('\n')[0]);
+  const staff = tab.rows.slice(2).filter(r => r[sh.indexOf('登録No')]).map(r => r[sh.indexOf('登録No')] + ' ' + r[sh.indexOf('視点')] + (r[sh.indexOf('パターン')] ? '-' + r[sh.indexOf('パターン')] : ''));
+  same(staff, ['R0001 EX1-A', 'R0002 EX1-B', 'R0005 EX1-C', 'R0003 IN1', 'R0004 EX1'], '入力シートでも A・B・C が並ぶ');
+  assert.equal(tab.rows[4][sh.indexOf('納品名')], 'マンション_外観目線視点①_パターンC_YYMMDD');
 });
 
 console.log(`\n${passed} tests passed`);
