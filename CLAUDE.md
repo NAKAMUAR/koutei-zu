@@ -81,7 +81,7 @@ src/
   - テスト: `node sync/test/logic.test.mjs`（判定・レコード生成の純ロジック）と `node sync/test/setup.test.mjs`（偽のシート環境で「かんたん初期設定」と転記を通す。Apps Script は手元で動かせないため、シートの大きさの上限も再現している）
   - Apps Script への反映は貼り付けのほか、`npm run gas:push`（clasp。`.claspignore` で Code.gs と appsscript.json だけ送る）でもできる。初回は `.clasp.json.example` を `.clasp.json` にしてスクリプトIDを入れ、`npm run gas:login`（手順は docs/08 の 2-9）。**`.clasp.json`・`.clasprc.json` はリポジトリに入れない**（`.gitignore` 済み）。
 
-- 帳票の雛形（スプレッドシート「雛形」の見積書・発注書・請求書）で書いて PDF で発行するスクリプトは `sync/billing/Billing.gs`（雛形のファイルに貼る。Code.gs とは別のプロジェクト）。工程図の案件から明細を読み込み、発行すると Drive の「工程図_帳票PDF」に保存・『発行一覧』に記録・工程図の帳票一覧（`data/bill_*`、`pdfUrl`）に登録・請求書は作業を請求済みにする。書き込む位置は `BL_LAYOUTS`。手順は `docs/10_帳票の雛形とPDF発行.md`、テストは `node sync/test/billing.test.mjs`。
+- 帳票の雛形（スプレッドシート「雛形」の見積書・発注書・請求書）で書いて PDF で発行するスクリプトは `sync/billing/Billing.gs`（雛形のファイルに貼る。Code.gs とは別のプロジェクト）。工程図の案件から明細を読み込み、発行すると Drive の「工程図_帳票PDF」に保存・『発行一覧』に記録・工程図の帳票一覧（`data/bill_*`、`pdfUrl`）に登録・請求書は作業を請求済みにする。書き込む位置は `BL_LAYOUTS`。売上総合報告書は『売上総合報告書（雛形）』タブから月のタブを作り、アプリの売上登録表（`data/sales_YYYY-MM`）の行を見出しで見つけた区分へ流し込む（`blDetectSections_`・`blSectionFor_`）。手順は `docs/10_帳票の雛形とPDF発行.md`、テストは `node sync/test/billing.test.mjs`。
 
 ## 確認のしかた
 

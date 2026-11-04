@@ -214,4 +214,166 @@ test('偽のシート：雛形でないタブ・明細が空なら発行しな�
   assert.ok(g2.formulas.M30 && g2.formulas.M31);
 });
 
+
+// ---- 売上総合報告書 ----
+// 本物の雛形の見出しの書き方をまねた B・C 列（区分ごとに行数を小さくしたもの）
+const HEADERS = [
+  '　1. オフショア国内売上（消費税有、本社取分有）',
+  '　2. ラボ国内売上（ソーシャルインテリア社/消費税有、本社取分有/税込275,000円）',
+  '　３.ラボ国内売上（玉善/消費税有、本社取分有/税込605,000円）',
+  '　４. オフショア国際売上（消費税無、本社取分無）',
+  '　5. ラボ国際売上（田中建設/消費税無/本社取分無）　',
+  '　6. ラボ国際売上（リノべるRinoveru/消費税無/本社取分無）',
+  '　7. ラボ国際売上（オフィスコム社_パース制作）',
+  '　7. ラボ国際売上（オフィスコム社_図面作成）',
+  '　8. ラボ国際売上（CG工房社）',
+];
+function salesBC(rowsPer = 3) {
+  const bc = [['', ''], ['2026年6月分 売上総合', ''], ['', ''], ['', ''], ['', ''], ['', ''], ['売上基本情報', ''], ['区分', '番号'], ['', '']];
+  HEADERS.forEach((h, i) => {
+    bc.push([h, '']);
+    for (let n = 1; n <= rowsPer; n++) bc.push([n === 1 ? '\nオ\nフ' : '', String(n)]);
+    bc.push(['合計金額', i === 7 ? '' : '']);
+    bc.push(['', '']);
+  });
+  return bc;
+}
+
+test('報告書：見出しから区分と書く行を探す', () => {
+  const secs = g.blDetectSections_(salesBC(3), 1);
+  assert.equal(secs.length, 9);
+  assert.equal(secs[0].cat, 'offshore_dom');
+  assert.equal(secs[0].headerRow, 10);
+  assert.equal(secs[0].from, 11);
+  assert.equal(secs[0].to, 13);
+  assert.deepEqual([...secs.map(s => s.cat)], ['offshore_dom', 'lab_dom', 'lab_dom', 'offshore_intl', 'lab_intl', 'lab_intl', 'lab_intl', 'lab_intl', 'lab_intl']);
+  assert.equal(g.blHeaderCompany_(HEADERS[0]), '');
+  assert.equal(g.blHeaderCompany_(HEADERS[2]), '玉善');
+  assert.equal(g.blHeaderCompany_(HEADERS[6]), 'オフィスコム社');
+});
+
+test('報告書：売上の行を入れる区分（会社名・図面作成・会社名の無い区分）', () => {
+  const secs = g.blDetectSections_(salesBC(3), 1);
+  const idx = (r) => { const s = g.blSectionFor_(r, secs); return s ? secs.indexOf(s) : -1; };
+  assert.equal(idx({ category: 'offshore_dom', company: 'リノべる株式会社' }), 0, 'リノべるでもオフショア国内はオフショア国内');
+  assert.equal(idx({ category: 'lab_intl', company: 'リノべる株式会社' }), 5);
+  assert.equal(idx({ category: 'lab_dom', company: '玉善' }), 2);
+  assert.equal(idx({ category: 'lab_dom', company: 'ソーシャルインテリア' }), 1);
+  assert.equal(idx({ category: 'lab_intl', company: '田中建設株式会社' }), 4);
+  assert.equal(idx({ category: 'lab_intl', company: 'オフィスコム社', prodType: '外観目線' }), 6);
+  assert.equal(idx({ category: 'lab_intl', company: 'オフィスコム', prodName: '図面作成_1F' }), 7);
+  assert.equal(idx({ category: 'lab_intl', company: 'ＣＧ工房社' }), 8);
+  assert.equal(idx({ category: 'offshore_intl', company: 'X' }), 3);
+  assert.equal(idx({ category: 'lab_intl', company: '新しい会社' }), -1, '会社名の区分が無いラボは入れない');
+});
+
+test('報告書：制作種類・制作名を雛形の選択肢に合わせる', () => {
+  assert.equal(g.blProdKind_({ prodType: '外観目線', prodName: '有明_外観目線視点①_初稿' }), '建築パース');
+  assert.equal(g.blProdKind_({ prodName: 'ブランズ大塚VR' }), '建築ＶＲ');
+  assert.equal(g.blProdKind_({ prodType: '外観モデル' }), 'モデリング');
+  assert.equal(g.blProdKind_({ prodType: '内観写真合成' }), '写真合成');
+  assert.equal(g.blProdName_({ prodName: '有明_2F内観目線視点③_パターンA_修正1' }), '内観目線③');
+  assert.equal(g.blProdName_({ prodName: 'X_外観鳥瞰視点②' }), '外観鳥瞰②');
+  assert.equal(g.blProdName_({ prodName: 'モデル' }), '');
+  const list = ['＜内観目線パース (cut tầm mắt nội thất)＞', '内観目線③ (cut tầm mắt nội thất ③)', '建築パース(Phối cảnh kiến trúc)', '建築ＶＲ(Kiến trúc VR)'];
+  assert.equal(g.blFitList_('内観目線③', list), '内観目線③ (cut tầm mắt nội thất ③)');
+  assert.equal(g.blFitList_('建築パース', list), '建築パース(Phối cảnh kiến trúc)');
+  assert.equal(g.blFitList_('建築ＶＲ', list), '建築ＶＲ(Kiến trúc VR)');
+  assert.equal(g.blFitList_('内観目線⑨', list), null, '選択肢に無い');
+  assert.equal(g.blFitList_('自由', null), '自由', '選択肢の無い欄はそのまま');
+  assert.equal(g.blFitList_('', list), '');
+});
+
+test('報告書：行が足りない・区分が無い行は分けて返す。1行の値（日付・金額・完了・備考）', () => {
+  const secs = g.blDetectSections_(salesBC(2), 1);
+  const rows = [
+    { category: 'lab_dom', company: '玉善', projectName: 'A', prodAmount: '10000', deliveryDate: '2026-10-03' },
+    { category: 'lab_dom', company: '玉善', projectName: 'B', prodAmount: '10000', deliveryDate: '2026-10-01' },
+    { category: 'lab_dom', company: '玉善', projectName: 'C', prodAmount: '10000', deliveryDate: '2026-10-05' },
+    { category: 'lab_intl', company: '新しい会社', projectName: 'D' },
+  ];
+  const plan = g.blPlanSales_(rows, secs);
+  assert.deepEqual([...plan.placed.map(p => p.row.projectName)], ['B', 'A'], '納品日の順');
+  assert.equal(plan.placed[0].sheetRow, secs[2].from);
+  assert.equal(plan.overflow[0].projectName, 'C');
+  assert.equal(plan.unplaced[0].projectName, 'D');
+  const v = g.blSalesValues_({ company: 'リノべる株式会社', person: '井上様', projectName: '有明', prodType: '内観目線', prodName: '有明_内観目線視点⑬_初稿', prodAmount: '28000', outsourceVND: '', orderDate: '2026-09-04', deliveryDate: '2026-09-11', note: 'メモ' }, (col, value) => (col === 8 && value ? null : value));
+  assert.equal(v[4], 'リノべる株式会社');
+  assert.equal(v[7], '建築パース');
+  assert.equal(v[12], 28000);
+  assert.equal(v[11], '');
+  assert.equal(v[15].getMonth(), 8);
+  assert.equal(v[17].getDate(), 11);
+  assert.equal(v[18], '納品済');
+  assert.equal(v[16], '', '予定日が無ければ空');
+  assert.ok(v[28].includes('メモ') && v[28].includes('制作名：有明_内観目線視点⑬_初稿'), '選択肢に無い制作名は備考へ');
+  const v2 = g.blSalesValues_({ company: '知らない会社', prodName: '外観目線視点①' }, (col, value) => (col === 4 ? null : value));
+  assert.equal(v2[4], '');
+  assert.ok(v2[28].includes('会社名：知らない会社'));
+  assert.equal(g.blSalesTabName_('2026-11'), '売上総合報告書(2026.11月分)');
+  assert.equal(g.blSalesTitle_('2026-01'), '2026年1月分 売上総合');
+});
+
+test('偽のシート：雛形から月の報告書を作り、売上登録表の行を流し込む', () => {
+  const bc = salesBC(3);
+  const grid = {}; // 'r,c' → 値（雛形）
+  bc.forEach((r, i) => { grid[(i + 1) + ',2'] = r[0]; grid[(i + 1) + ',3'] = r[1]; });
+  grid['11,4'] = '古い会社'; grid['11,12'] = 99999; grid['11,13'] = '=L11*0.1'; // 雛形に残っていた記入と計算式
+  const lists = { 4: ['リノべる株式会社', '玉善'], 8: ['内観目線① (cut tầm mắt nội thất ①)'], 18: ['確認待ち', '納品済'] };
+  function makeSheet(name, cells) {
+    const sh = {
+      name, cells,
+      getName: () => sh.name, setName(n) { sh.name = n; return sh; }, getSheetId: () => 1,
+      getLastRow: () => bc.length,
+      copyTo(ss) { const c = makeSheet(sh.name + ' のコピー', { ...sh.cells }); ss.sheets.push(c); return c; },
+      getRange(r, c, nr = 1, nc = 1) {
+        if (typeof r === 'string') { const m = r.match(/^([A-Z]+)(\d+)$/); return sh.getRange(Number(m[2]), g.blCol_(m[1])); }
+        return {
+          getValues: () => Array.from({ length: nr }, (_, i) => Array.from({ length: nc }, (_, j) => sh.cells[(r + i) + ',' + (c + j)] ?? '')),
+          setValues: (vals) => vals.forEach((row, i) => row.forEach((v, j) => { sh.cells[(r + i) + ',' + (c + j)] = v; })),
+          setValue: (v) => { sh.cells[r + ',' + c] = v; },
+          clearContent: () => { for (let i = 0; i < nr; i++) for (let j = 0; j < nc; j++) delete sh.cells[(r + i) + ',' + (c + j)]; },
+          getDataValidation: () => (lists[c] ? { getCriteriaType: () => 'VALUE_IN_LIST', getCriteriaValues: () => [lists[c], true] } : null),
+        };
+      },
+    };
+    return sh;
+  }
+  const tpl = makeSheet('売上総合報告書（雛形）', grid);
+  const ss = { sheets: [tpl], getSheetByName(n) { return this.sheets.find(x => x.name === n) || null; }, deleteSheet(x) { this.sheets = this.sheets.filter(y => y !== x); }, setActiveSheet() {} };
+  const month = { rows: [
+    { category: 'offshore_dom', company: 'リノべる株式会社', person: '井上様', projectName: 'ロイヤルパークス有明', prodType: '内観目線', prodName: '有明_内観目線視点①_初稿', prodAmount: '28000', orderDate: '2026-10-04', deliveryDate: '2026-10-11' },
+    { category: 'lab_dom', company: '玉善', projectName: '守山区', prodAmount: '', deliveryDate: '' },
+    { category: 'lab_intl', company: '新しい会社', projectName: 'X' },
+  ] };
+  const env = load({
+    SpreadsheetApp: { DataValidationCriteria: { VALUE_IN_LIST: 'VALUE_IN_LIST' } },
+    ScriptApp: { getOAuthToken: () => 'T' },
+    UrlFetchApp: { fetch: (url) => ({ getResponseCode: () => (url.endsWith('sales_2026-10') ? 200 : 404), getContentText: () => JSON.stringify({ fields: { value: { stringValue: JSON.stringify(month) } } }) }) },
+  });
+  const msg = env.blBuildSalesReport_(ss, tpl, '2026-10', () => true);
+  const sh = ss.getSheetByName('売上総合報告書(2026.10月分)');
+  assert.ok(sh, msg);
+  assert.equal(sh.cells['2,2'], '2026年10月分 売上総合');
+  assert.ok(sh.cells['4,24'] instanceof Date, '最終更新日時（X4）');
+  assert.equal(sh.cells['4,23'], false, '最終チェック（W4）は外す');
+  assert.equal(sh.cells['11,4'], 'リノべる株式会社', '雛形の古い記入は消して書く');
+  assert.equal(sh.cells['11,12'], 28000);
+  assert.equal(sh.cells['11,13'], '=L11*0.1', '計算式の列は残す');
+  assert.equal(sh.cells['11,8'], '内観目線① (cut tầm mắt nội thất ①)');
+  assert.equal(sh.cells['11,18'], '納品済');
+  assert.equal(sh.cells['12,4'], undefined, '2行目以降は空');
+  const tamaRow = g.blDetectSections_(bc, 1)[2].from;
+  assert.equal(sh.cells[tamaRow + ',4'], '玉善');
+  assert.equal(sh.cells[tamaRow + ',18'], '確認待ち');
+  assert.equal(tpl.cells['11,4'], '古い会社', '雛形そのものは変えない');
+  assert.ok(msg.includes('3行のうち 2行'), msg);
+  assert.ok(msg.includes('入れる区分が見つからなかった 1行'), msg);
+  // 作り直し：確認で「いいえ」なら何もしない
+  assert.equal(env.blBuildSalesReport_(ss, tpl, '2026-10', () => false), '');
+  // データの無い月は空の報告書
+  const msg2 = env.blBuildSalesReport_(ss, tpl, '2026-12', () => true);
+  assert.ok(msg2.includes('データがありません'), msg2);
+});
+
 console.log(`billing: ${passed} tests passed`);

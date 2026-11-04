@@ -7,6 +7,9 @@
  *   2. PDFで発行 … NO（E/O/I-YYYYMM-NN）と発行日を入れ、今のタブを PDF にして Drive の「工程図_帳票PDF」に保存。
  *      『発行一覧』に記録し、工程図の帳票一覧にも登録する（請求書は読み込んだ作業を「請求済み」にする）
  *   3. 入力を空にする … 書いた所だけ消す（計算式・発行元・振込先はそのまま）
+ *   売上総合報告書 … 「雛形を取り込む」（最初に1回。月の報告書をコピーし、記入を消して『売上総合報告書（雛形）』に）→
+ *      「月を選んで作る」（工程図の売上登録表 data/sales_YYYY-MM の行を、区分ごとに雛形の行へ流し込んだ新しいタブを作る）→
+ *      そのタブで「2. PDFで発行」（横向き）
  *
  * 住所・振込先などは雛形のシートにだけあり、このコードには書かない（リポジトリが公開のため）。
  * 工程図（Firestore）への読み書きは、実行したアカウント（工程図のオーナー kei.n412）の権限で行う。
@@ -19,6 +22,8 @@ const BL = {
   folderName: '工程図_帳票PDF',
   logSheet: '発行一覧',
   timeZone: 'Asia/Ho_Chi_Minh',
+  salesTemplate: '売上総合報告書（雛形）',
+  salesTabPrefix: '売上総合報告書',
 };
 
 /**
@@ -48,6 +53,9 @@ function onOpen() {
   SpreadsheetApp.getUi().createMenu('帳票')
     .addItem('1. 工程図から読み込む（今のタブ）', 'blOpenImport')
     .addItem('2. PDFで発行（今のタブ）', 'blIssuePdf')
+    .addSeparator()
+    .addItem('売上総合報告書：月を選んで作る', 'blMakeSalesReport')
+    .addItem('売上総合報告書：雛形を取り込む（最初に1回）', 'blSetupSalesTemplate')
     .addSeparator()
     .addItem('入力を空にする（今のタブ）', 'blClearInputs')
     .addItem('発行一覧を開く', 'blOpenLog')
@@ -337,6 +345,8 @@ function blImportProject(key, includeBilled) {
 
 // ============ メニュー：2. PDFで発行 ============
 function blIssuePdf() {
+  const sh = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  if (blIsSalesTab_(sh.getName())) { blIssueSalesPdf_(sh); return; }
   const a = blActive_();
   const L = BL_LAYOUTS[a.type];
   const ui = SpreadsheetApp.getUi();
@@ -401,9 +411,9 @@ function blFolder_(ss) {
   return it.hasNext() ? it.next() : parent.createFolder(BL.folderName);
 }
 /** そのタブだけを A4 縦・幅に合わせて PDF にする */
-function blExportPdf_(ss, sheet, fileName) {
+function blExportPdf_(ss, sheet, fileName, landscape) {
   const url = 'https://docs.google.com/spreadsheets/d/' + ss.getId() + '/export?format=pdf&gid=' + sheet.getSheetId() +
-    '&size=A4&portrait=true&fitw=true&gridlines=false&printtitle=false&sheetnames=false&pagenum=UNDEFINED&fzr=false' +
+    '&size=A4&portrait=' + (landscape ? 'false' : 'true') + '&fitw=true&gridlines=false&printtitle=false&sheetnames=false&pagenum=UNDEFINED&fzr=false' +
     '&top_margin=0.4&bottom_margin=0.4&left_margin=0.4&right_margin=0.4&horizontal_alignment=CENTER';
   const res = UrlFetchApp.fetch(url, { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, muteHttpExceptions: true });
   if (res.getResponseCode() >= 300) throw new Error('PDF にできませんでした（' + res.getResponseCode() + '）');
@@ -430,4 +440,270 @@ function blClearInputs() {
 function blOpenLog() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   ss.setActiveSheet(blLogSheet_(ss));
+}
+
+// ============ 売上総合報告書 ============
+// 雛形の列（1始まり）。M・N・X・Y・Z などの計算式の列には書かない
+const BL_SALES_COLS = {
+  company: 4, person: 5, projectName: 6, prodType: 7, prodName: 8, inHouse: 9, external: 10, vnd: 11, amount: 12,
+  orderDate: 15, dueDate: 16, deliveryDate: 17, completed: 18, invoiceSent: 19, paid: 20, billRound: 23, hqStatus: 27, note: 28,
+};
+const BL_SALES_INPUT_RANGES = [[4, 12], [15, 23], [27, 28]]; // 雛形にするときに消す列（D〜L・O〜W・AA〜AB）
+const BL_SALES_CATS = [
+  { id: 'offshore_dom', word: 'オフショア国内' }, { id: 'offshore_intl', word: 'オフショア国際' },
+  { id: 'lab_dom', word: 'ラボ国内' }, { id: 'lab_intl', word: 'ラボ国際' },
+];
+function blIsSalesTab_(name) { return String(name || '').indexOf(BL.salesTabPrefix) === 0 || String(name || '').indexOf('売上総合') >= 0; }
+
+/**
+ * 区分を探す（純ロジック）。bc：B列・C列の値の配列（startRow 行目から）。
+ * 見出し＝B列が「1.」「３.」などで始まる行。その下の、C列が番号の行が続く範囲を書く行にする。
+ * 戻り値：[{ header, headerRow, from, to, cat }]
+ */
+function blDetectSections_(bc, startRow) {
+  const out = [];
+  const isNo = (v) => v !== '' && v !== null && /^\s*\d+\s*$/.test(String(v));
+  for (let i = 0; i < bc.length; i++) {
+    const b = String(bc[i][0] || '');
+    if (!/^[\s　]*[0-9０-９]+[\s　]*[.．]/.test(b)) continue;
+    let j = i + 1;
+    while (j < bc.length && j <= i + 2 && !isNo(bc[j][1])) j++;
+    if (j >= bc.length || !isNo(bc[j][1])) continue;
+    let k = j;
+    while (k + 1 < bc.length && isNo(bc[k + 1][1])) k++;
+    const cat = BL_SALES_CATS.find(c => b.replace(/[\s　]/g, '').indexOf(c.word) >= 0);
+    out.push({ header: b.trim(), headerRow: startRow + i, from: startRow + j, to: startRow + k, cat: cat ? cat.id : '' });
+    i = k;
+  }
+  return out;
+}
+/** 会社名の比べる部分（「株式会社」「社」・空白を除く） */
+function blCompanyWord_(name) {
+  return String(name || '').normalize('NFKC').replace(/株式会社|有限会社|\(株\)|[\s　]/g, '').replace(/社$/, '');
+}
+/** 売上の行 → 入れる区分（同じ区分で、見出しに会社名があればそこ。オフィスコムの図面作成は「図面」の見出し） */
+function blSectionFor_(row, sections) {
+  const cands = sections.filter(s => s.cat === (row.category || 'offshore_dom'));
+  if (!cands.length) return null;
+  const w = blCompanyWord_(row.company);
+  const norm = (h) => String(h).normalize('NFKC').replace(/[\s　]/g, '');
+  let hit = w.length >= 2 ? cands.filter(s => norm(s.header).indexOf(w) >= 0) : [];
+  if (!hit.length) {
+    // 見出しに会社名が無い：会社名の付いていない見出し（オフショアなど）があればそこ
+    hit = cands.filter(s => !blHeaderCompany_(s.header));
+    if (!hit.length) return null;
+  }
+  if (hit.length > 1) {
+    const zu = /図面/.test(String(row.prodType || '') + String(row.prodName || ''));
+    const pick = hit.filter(s => (/図面/.test(s.header)) === zu);
+    if (pick.length) return pick[0];
+  }
+  return hit[0];
+}
+/** 見出しのかっこ内の会社名（「（玉善/消費税有…）」→ 玉善）。「（消費税有、…）」のように会社名が無ければ '' */
+function blHeaderCompany_(header) {
+  const m = String(header || '').normalize('NFKC').match(/[(]([^)]*)/);
+  if (!m) return '';
+  const first = m[1].split(/[/、,_]/)[0].trim();
+  return /^消費税|^本社/.test(first) ? '' : first;
+}
+/** 制作種類（雛形の選択肢の言葉） */
+function blProdKind_(row) {
+  const t = String(row.prodType || '') + ' ' + String(row.prodName || '');
+  if (/図面/.test(t)) return '図面作成';
+  if (/モデル/.test(t)) return 'モデリング';
+  if (/VR|ＶＲ/i.test(t)) return '建築ＶＲ';
+  if (/動画|VIDEO/i.test(t)) return '建築動画';
+  if (/外構/.test(t)) return '外構修正写真';
+  if (/写真/.test(t)) return '写真合成';
+  return '建築パース';
+}
+/** 制作名（雛形の選択肢の言葉）：「内観目線視点①」→「内観目線①」。分からなければ '' */
+function blProdName_(row) {
+  const t = String(row.prodName || '') + ' ' + String(row.prodType || '');
+  const m = t.match(/(外観|内観)[\s　]*(目線|鳥瞰)(?:視点)?[\s　]*([①-⑳])/);
+  return m ? m[1] + m[2] + m[3] : '';
+}
+/** 選択肢に合わせる：同じ／選択肢が値で始まる（「内観目線①」→「内観目線① (cut …)」）。合わなければ null。選択肢が無ければ値のまま */
+function blFitList_(value, list) {
+  const v = String(value == null ? '' : value).trim();
+  if (!list || !list.length) return v;
+  if (!v) return '';
+  if (list.indexOf(v) >= 0) return v;
+  const head = (x) => String(x).split(/[\s　]*[(（]/)[0].normalize('NFKC').replace(/[\s　]/g, '');
+  const hv = head(v);
+  const hit = list.filter(x => head(x) === hv || (hv.length >= 2 && head(x).indexOf(hv) === 0));
+  return hit.length ? hit[0] : null;
+}
+function blDateCell_(s) {
+  const m = String(s || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : '';
+}
+/**
+ * 売上の行 → 雛形のどの行に何を書くか（純ロジック。選択肢合わせは書くときにする）。
+ * 戻り値：{ placed: [{ sheetRow, row, section }], overflow: [row], unplaced: [row] }
+ */
+function blPlanSales_(rows, sections) {
+  const used = {};
+  const placed = [], overflow = [], unplaced = [];
+  const sorted = (rows || []).slice().sort((a, b) => String(a.deliveryDate || a.orderDate || '').localeCompare(String(b.deliveryDate || b.orderDate || '')));
+  sorted.forEach(r => {
+    const sec = blSectionFor_(r, sections);
+    if (!sec) { unplaced.push(r); return; }
+    const n = used[sec.headerRow] || 0;
+    if (sec.from + n > sec.to) { overflow.push(r); return; }
+    used[sec.headerRow] = n + 1;
+    placed.push({ sheetRow: sec.from + n, row: r, section: sec });
+  });
+  return { placed, overflow, unplaced };
+}
+/** 1行分の値（列番号 → 値）。fit(col, value) で選択肢に合わせ、合わないときは備考へ回す */
+function blSalesValues_(r, fit) {
+  const C = BL_SALES_COLS;
+  const v = {};
+  const notes = [];
+  const put = (col, value, label) => {
+    const f = fit ? fit(col, value) : value;
+    if (f === null) { if (value) notes.push(label + '：' + value); v[col] = ''; } else v[col] = f;
+  };
+  put(C.company, r.company || '', '会社名');
+  v[C.person] = r.person || '';
+  v[C.projectName] = r.projectName || '';
+  put(C.prodType, blProdKind_(r), '制作種類');
+  // 制作名：選択肢の言葉（内観目線①）にできて選択肢にあれば入れる。できなければ納品名を備考へ
+  const pn = blProdName_(r);
+  const pnFit = pn ? (fit ? fit(C.prodName, pn) : pn) : null;
+  v[C.prodName] = pnFit || '';
+  if (!pnFit && r.prodName) notes.push('制作名：' + r.prodName);
+  v[C.inHouse] = r.inHouseOutsourcer || '';
+  v[C.external] = r.externalOutsourcer || '';
+  v[C.vnd] = blNum_(r.outsourceVND) || '';
+  v[C.amount] = blNum_(r.prodAmount) || '';
+  v[C.orderDate] = blDateCell_(r.orderDate);
+  v[C.dueDate] = blDateCell_(r.dueDate);
+  v[C.deliveryDate] = blDateCell_(r.deliveryDate);
+  put(C.completed, (r.completed || r.deliveryDate) ? '納品済' : '確認待ち', '完了');
+  v[C.invoiceSent] = blDateCell_(r.invoiceSentDate);
+  v[C.paid] = blDateCell_(r.paymentConfirmedDate);
+  put(C.billRound, r.billRound || '', '請求対象回');
+  put(C.hqStatus, r.hqStatus || '', '本社への請求状態');
+  v[C.note] = [r.note || ''].concat(notes).filter(Boolean).join(' ／ ');
+  return v;
+}
+/** 'YYYY-MM' → タブ名・表題 */
+function blSalesTabName_(ym) { const [y, m] = ym.split('-'); return BL.salesTabPrefix + '(' + y + '.' + Number(m) + '月分)'; }
+function blSalesTitle_(ym) { const [y, m] = ym.split('-'); return y + '年' + Number(m) + '月分 売上総合'; }
+
+// ---- シートの操作 ----
+function blSalesSections_(sheet) {
+  const last = sheet.getLastRow();
+  return blDetectSections_(sheet.getRange(1, 2, last, 2).getValues(), 1);
+}
+/** 区分の行の入力欄を空にする（計算式の列は触らない） */
+function blClearSalesRows_(sheet, sections) {
+  sections.forEach(sec => BL_SALES_INPUT_RANGES.forEach(([c1, c2]) => sheet.getRange(sec.from, c1, sec.to - sec.from + 1, c2 - c1 + 1).clearContent()));
+}
+
+/** メニュー：月の報告書（コピー）を雛形として取り込む */
+function blSetupSalesTemplate() {
+  const ui = SpreadsheetApp.getUi();
+  const ans = ui.prompt('売上総合報告書の雛形を取り込む', '雛形にする月の報告書（スプレッドシート）の URL を貼ってください。\n1つ目のタブをこのファイルにコピーし、案件の記入を消して『' + BL.salesTemplate + '』にします（元のファイルは変えません）。', ui.ButtonSet.OK_CANCEL);
+  if (ans.getSelectedButton() !== ui.Button.OK) return;
+  const m = String(ans.getResponseText() || '').match(/\/d\/([A-Za-z0-9_-]{20,})/);
+  if (!m) { ui.alert('URL が読めませんでした。'); return; }
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const src = SpreadsheetApp.openById(m[1]).getSheets()[0];
+  const old = ss.getSheetByName(BL.salesTemplate);
+  if (old) {
+    if (ui.alert('『' + BL.salesTemplate + '』はもうあります。置き換えますか？', ui.ButtonSet.YES_NO) !== ui.Button.YES) return;
+    ss.deleteSheet(old);
+  }
+  const t = src.copyTo(ss).setName(BL.salesTemplate);
+  const sections = blSalesSections_(t);
+  blClearSalesRows_(t, sections);
+  t.getRange('B2').setValue('（月を選んで作ると、ここに「YYYY年M月分 売上総合」が入ります）');
+  t.getRange('X4').clearContent(); // 最終更新日時
+  t.getRange('W4').setValue(false); // 佐渡 最終チェック
+  ss.setActiveSheet(t);
+  ui.alert('『' + BL.salesTemplate + '』を作りました。区分 ' + sections.length + 'つ：\n' + sections.map(s => '・' + s.header + '（' + (s.to - s.from + 1) + '行）').join('\n'));
+}
+
+/** 工程図の売上登録表（data/sales_YYYY-MM）。無ければ null */
+function blReadSalesMonth_(ym) {
+  const url = blBase_() + '/workspaces/' + BL.workspaceId + '/data/sales_' + ym;
+  const res = UrlFetchApp.fetch(url, { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, muteHttpExceptions: true });
+  if (res.getResponseCode() === 404) return null;
+  if (res.getResponseCode() >= 300) throw new Error('工程図の売上登録表を読めませんでした（' + res.getResponseCode() + '）：' + res.getContentText().slice(0, 200));
+  const f = blDecodeFields_(JSON.parse(res.getContentText()).fields);
+  return f.value ? JSON.parse(f.value) : null;
+}
+
+/** メニュー：月を選んで報告書を作る */
+function blMakeSalesReport() {
+  const ui = SpreadsheetApp.getUi();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const tpl = ss.getSheetByName(BL.salesTemplate);
+  if (!tpl) { ui.alert('先にメニュー「売上総合報告書：雛形を取り込む」を押してください。'); return; }
+  const def = Utilities.formatDate(new Date(), BL.timeZone, 'yyyy-MM');
+  const ans = ui.prompt('売上総合報告書を作る', '何月分ですか？（例 ' + def + '。空なら ' + def + '）\n工程図の「売上登録表」のその月の行を、区分ごとに流し込みます。', ui.ButtonSet.OK_CANCEL);
+  if (ans.getSelectedButton() !== ui.Button.OK) return;
+  const raw = String(ans.getResponseText() || '').trim().replace(/[年./]/g, '-').replace(/月.*$/, '');
+  const mm = (raw || def).match(/^(\d{4})-(\d{1,2})/);
+  if (!mm) { ui.alert('「2026-11」のように書いてください。'); return; }
+  const ym = mm[1] + '-' + ('0' + mm[2]).slice(-2);
+  const res = blBuildSalesReport_(ss, tpl, ym, () => ui.alert('「' + blSalesTabName_(ym) + '」はもうあります。作り直しますか？', ui.ButtonSet.YES_NO) === ui.Button.YES);
+  if (res) ui.alert(res);
+}
+/** 報告書を作る本体（テストからも呼ぶ）。confirmReplace() が false なら何もしない。結果の文を返す */
+function blBuildSalesReport_(ss, tpl, ym, confirmReplace) {
+  const name = blSalesTabName_(ym);
+  const old = ss.getSheetByName(name);
+  if (old) { if (!confirmReplace()) return ''; ss.deleteSheet(old); }
+  const month = blReadSalesMonth_(ym);
+  const rows = (month && Array.isArray(month.rows)) ? month.rows : [];
+  const sh = tpl.copyTo(ss).setName(name);
+  sh.getRange('B2').setValue(blSalesTitle_(ym));
+  sh.getRange('X4').setValue(new Date()); // 最終更新日時
+  sh.getRange('W4').setValue(false); // 佐渡 最終チェック（まだ）
+  const sections = blSalesSections_(sh);
+  blClearSalesRows_(sh, sections);
+  const plan = blPlanSales_(rows, sections);
+  // 選択肢（プルダウン）は区分の最初の行から読む
+  const lists = {};
+  const listOf = (sec, col) => {
+    const k = sec.headerRow + ':' + col;
+    if (!(k in lists)) {
+      const dv = sh.getRange(sec.from, col).getDataValidation();
+      const vals = dv && dv.getCriteriaType() === SpreadsheetApp.DataValidationCriteria.VALUE_IN_LIST ? dv.getCriteriaValues()[0] : null;
+      lists[k] = vals ? vals.map(String) : null;
+    }
+    return lists[k];
+  };
+  plan.placed.forEach(p => {
+    const v = blSalesValues_(p.row, (col, value) => blFitList_(value, listOf(p.section, col)));
+    BL_SALES_INPUT_RANGES.forEach(([c1, c2]) => {
+      const vals = [];
+      for (let c = c1; c <= c2; c++) vals.push(c in v ? v[c] : '');
+      sh.getRange(p.sheetRow, c1, 1, c2 - c1 + 1).setValues([vals]);
+    });
+  });
+  ss.setActiveSheet(sh);
+  const lines = ['「' + name + '」を作りました。工程図の売上登録表 ' + rows.length + '行のうち ' + plan.placed.length + '行を入れました。'];
+  if (!month) lines.push('（工程図の売上登録表に ' + ym + ' のデータがありません。空の報告書です）');
+  const lab = (r) => '・' + [r.company, r.projectName, r.prodName].filter(Boolean).join(' ') + (r.prodAmount ? ' ¥' + blNum_(r.prodAmount).toLocaleString() : '');
+  if (plan.overflow.length) lines.push('区分の行が足りず入らなかった ' + plan.overflow.length + '行（雛形の行を増やすか、手で足してください）：\n' + plan.overflow.slice(0, 15).map(lab).join('\n'));
+  if (plan.unplaced.length) lines.push('入れる区分が見つからなかった ' + plan.unplaced.length + '行（会社名の見出しが無い区分）：\n' + plan.unplaced.slice(0, 15).map(lab).join('\n'));
+  lines.push('確認したら「2. PDFで発行」で PDF にできます。');
+  return lines.join('\n\n');
+}
+/** 報告書のタブを横向きの PDF にする */
+function blIssueSalesPdf_(sheet) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ui = SpreadsheetApp.getUi();
+  if (sheet.getName() === BL.salesTemplate) { ui.alert('雛形のタブです。メニュー「売上総合報告書：月を選んで作る」で月のタブを作ってから押してください。'); return; }
+  SpreadsheetApp.flush();
+  const pdf = blExportPdf_(ss, sheet, sheet.getName().trim().replace(/[\\/:*?"<>|]/g, '') + '.pdf', true);
+  const url = pdf.getUrl();
+  blLogSheet_(ss).appendRow([new Date(), '売上総合報告書', '', '', '', sheet.getName().trim(), '', url, sheet.getName(), '', '']);
+  ui.showModalDialog(HtmlService.createHtmlOutput('<div style="font-family:sans-serif;font-size:13px;line-height:1.8">PDF にしました。<br><a href="' + url + '" target="_blank">PDF を開く</a></div>').setWidth(360).setHeight(140), 'PDFで発行');
 }
