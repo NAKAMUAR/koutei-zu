@@ -257,7 +257,7 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
   };
   vm.createContext(ctx);
   const names = ['onAdminEdit', 'renderRegMessage_', 'onStaffEdit', 'syncRegistrationsNow', 'saveDiscordWebhook_', 'inNotifyHours_', 'isReminderDue_', 'calcDeadlineOf_', 'regState_', 'REG_STATE', 'quickSetup', 'createStaffInputTab', 'transferFromStaffSheet', 'autoRun', 'readSettings_', 'readStaffRows_', 'collectSourceRows_', 'findStaffHeaderRow_',
-    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_'];
+    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'FORM_NO_COL', 'updateEntryForm', 'normRegNo_', 'formRegGroup_', 'formEnsureEditRow_', 'FORM_L', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_'];
   env.g = vm.runInContext(src + '\n;({' + names.join(',') + '})', ctx);
   return env;
 }
@@ -1231,6 +1231,98 @@ test('『案件入力』タブ（縦型フォーム）：①日本語の区分�
   assert.equal(cell(m.fields.name, 2), '戸建', '社外案件名も前回から');
   assert.equal(cell(ex, 2), true, '①にもチェックが入る');
   assert.equal(cell(m.prev, 2), false);
+});
+
+test('『案件入力』：登録Noで呼び出して直す → 『登録一覧』を上書き・足した視点は新しく登録・エンジニア入力シートも直る', () => {
+  const admin = adminSheet();
+  const eng = engineerFile();
+  const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
+  env.g.quickSetup();
+  const f = admin.getSheetByName('案件入力');
+  const m = JSON.parse(JSON.stringify(env.g.formMap_(f)));
+  const LC = JSON.parse(JSON.stringify(env.g.FORM_LC)); const KEY = env.g.FORM_KEY_COL; const NO = env.g.FORM_NO_COL;
+  const cell = (r, c) => (f.rows[r - 1] || [])[c - 1];
+  assert.ok(m.edit && m.prev < m.edit && m.edit < m.pick, '「登録Noで直す」の行は「前回の視点を呼び出す」と①の間');
+  assert.ok((f.hidden || []).includes(NO), '登録Noの列は隠す');
+  const edit = (r, c, v) => { f.set(r, c, v); env.g.onAdminEdit({ range: f.getRange(r, c), source: admin }); };
+  const list = () => { const out = []; for (let r = m.list1; r <= m.list2; r++) if (cell(r, KEY)) out.push({ r, code: cell(r, KEY), pattern: cell(r, LC.pattern) || '', no: cell(r, NO) || '' }); return out; };
+  const ex = m.grid.find(g => g.keyword === 'EX').row, inn = m.grid.find(g => g.keyword === 'IN').row;
+  // まず普通に登録（R0001・R0002）
+  f.set(m.fields.code, 2, 'REN'); f.set(m.fields.number, 2, 70); f.set(m.fields.name, 2, '戸建'); f.set(m.fields.link, 2, LINK);
+  f.set(m.fields.assignee, 2, 'Quynh');
+  edit(ex, 2, true); edit(ex, 3, true);
+  const r1 = env.g.submitFormSheet('昼景で');
+  assert.equal(r1.ok, true, r1.msg);
+  assert.equal(list().length, 0);
+  const reg = admin.getSheetByName('登録一覧');
+  const rh = reg.header();
+  const R = (no, name) => { const row = reg.rows.find(x => x[rh.indexOf('登録No')] === no); return row ? row[rh.indexOf(name)] : undefined; };
+  const staff = inTab(eng);
+  const sh = staff.header(2).map(h => String(h).split('\n')[0]);
+  const S = (no, name) => { const row = staff.rows.find(x => x.includes(no)); return row ? row[sh.indexOf(name)] : undefined; };
+  assert.equal(S('R0002', '社外案件名'), '戸建');
+  // 登録No を書き方違いで入れて呼び出す（同じ日に登録した2件が入る）
+  edit(m.edit, 2, 'r1');
+  assert.equal(cell(m.edit, 2), 'R0001', '登録Noの書き方をそろえる');
+  same(list().map(x => x.code + ':' + x.no), ['EX1:R0001', 'EX2:R0002']);
+  assert.equal(cell(m.fields.name, 2), '戸建');
+  assert.equal(cell(m.fields.assignee, 2), 'Quynh');
+  assert.ok(String(cell(m.result, 2)).startsWith('R0001 の登録を呼び出しました'), cell(m.result, 2));
+  assert.ok(String(cell(m.sum, 2)).includes('〔R0001〕'), cell(m.sum, 2));
+  // 直す：社外案件名・担当者、EX2 にパターン（＋ → A・B。B は新しく足す行）、IN1 を足す
+  f.set(m.fields.name, 2, '戸建（2期）');
+  f.set(m.fields.assignee, 2, 'Tú Mĩ');
+  edit(list().find(x => x.code === 'EX2').r, LC.plus, true);
+  same(list().map(x => x.code + '-' + x.pattern + ':' + x.no), ['EX1-:R0001', 'EX2-A:R0002', 'EX2-B:'], '＋で足したパターンは新しく足す行');
+  edit(inn, 2, true);
+  same(list().map(x => x.code + ':' + x.no), ['EX1:R0001', 'EX2:R0002', 'EX2:', 'IN1:'], '①で足した視点も新しく足す行');
+  env.dialogs.length = 0;
+  edit(m.submit, 2, true);
+  const html = String(env.dialogs[0].html || env.dialogs[0]);
+  assert.ok(html.includes('【修正】') && html.includes('〔R0001 を上書き〕') && html.includes('〔追加〕') && html.includes('上書きする'), html.slice(0, 400));
+  const r2 = env.g.submitFormSheet('');
+  assert.equal(r2.ok, true, r2.msg);
+  assert.ok(r2.msg.startsWith('直しました：R0001・R0002／足しました：R0003・R0004（REN.70）'), r2.msg);
+  assert.ok(r2.msg.includes('R0002 は会社コード・案件番号・視点・パターンを変えました'), r2.msg);
+  assert.ok(r2.msg.includes('担当者・納期は、工程図に登録済みなら'), r2.msg);
+  assert.equal(R('R0001', '社外案件名'), '戸建（2期）');
+  assert.equal(R('R0001', '担当者'), 'Tú Mĩ');
+  assert.equal(R('R0001', '通訳へのメッセージ'), '昼景で', '通訳へのメッセージは空なら前のまま');
+  assert.equal(R('R0002', 'パターン'), 'A');
+  same([R('R0003', '視点'), R('R0003', 'パターン')], ['EX2', 'B']);
+  assert.equal(R('R0004', '視点'), 'IN1');
+  assert.equal(reg.rows.slice(1).filter(x => x[rh.indexOf('登録No')]).length, 4, '上書きなので行は増えない（足した2件だけ増える）');
+  assert.equal(S('R0001', '社外案件名'), '戸建（2期）', 'エンジニア入力シートも直る');
+  assert.equal(S('R0002', 'パターン'), 'A');
+  assert.ok(staff.rows.some(x => x.includes('R0004')), '足した視点は入力シートにも載る');
+  assert.equal(list().length, 0, '終わったらフォームは空');
+  assert.equal(cell(m.edit, 2), '', '登録Noの欄も空に戻る');
+  // 見つからない登録No
+  edit(m.edit, 2, 'R0099');
+  assert.ok(String(cell(m.result, 2)).startsWith('✗ 登録No「R0099」が『登録一覧』に見つかりません'));
+  // 呼び出したあと登録Noを消すと新規に戻る
+  edit(m.edit, 2, 'R0004');
+  assert.ok(list().every(x => x.no));
+  edit(m.edit, 2, '');
+  assert.ok(list().length && list().every(x => !x.no), '新規の登録に戻る');
+  // 書き方
+  assert.equal(env.g.normRegNo_('12'), 'R0012');
+  assert.equal(env.g.normRegNo_('R00123'), 'R0123');
+  assert.equal(env.g.normRegNo_('abc'), '');
+});
+
+test('前の版の『案件入力』（登録Noで直す の行が無い）には、空いた行に足す', () => {
+  const admin = adminSheet();
+  const eng = engineerFile();
+  const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
+  env.g.quickSetup();
+  const f = admin.getSheetByName('案件入力');
+  const m = JSON.parse(JSON.stringify(env.g.formMap_(f)));
+  f.set(m.edit, 1, ''); f.set(m.edit, 3, '');
+  assert.equal(env.g.formMap_(f).edit, 0);
+  env.g.quickSetup();
+  assert.equal(env.g.formMap_(f).edit, m.edit, 'もう一度初期設定すると足される');
+  assert.equal(f.rows[m.edit - 1][0], env.g.FORM_L.edit);
 });
 
 test('『登録一覧』に社外視点名の列が無い（前の版）ときは、パターンの右に差し込む', () => {
