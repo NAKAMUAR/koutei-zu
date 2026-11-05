@@ -247,8 +247,10 @@ const VIEW_VI = {
 // 視点のプルダウンに並べる番号の数（IN は多いので 20、ほかは 10。リストに無い番号も入力はできる）
 const VIEW_OPTION_COUNT = { IN: 20 };
 const VIEW_OPTION_COUNT_DEFAULT = 10;
-// 時間：0〜10 は 0.5 刻み、11〜40 は 1 刻み（リストに無い数字も入力はできる）
-const HOUR_OPTIONS = Array.from({ length: 21 }, (_, i) => String(i / 2)).concat(Array.from({ length: 30 }, (_, i) => String(i + 11)));
+// 時間：0〜3 は 0.25 刻み、3.5〜10 は 0.5 刻み、11〜40 は 1 刻み（リストに無い数字も入力はできる。2026-11-05 に 3 までを 0.25 刻みに）
+const HOUR_OPTIONS = Array.from({ length: 13 }, (_, i) => String(i / 4))
+  .concat(Array.from({ length: 14 }, (_, i) => String(3.5 + i / 2)))
+  .concat(Array.from({ length: 30 }, (_, i) => String(i + 11)));
 
 // 『会社マスタ』『視点マスタ』が空のときに「初期設定」で入れる初期値（シート上で自由に直してよい。2026-09-28 時点の管理者シートと同じ）
 // [案件コードの英字部分, 工程図の会社名, 備考, 入力シートに出さない（表記ゆれの行は TRUE ＝エンジニアのプルダウンに出さない）]
@@ -2148,7 +2150,13 @@ function formMap_(sheet) {
 /** 『案件入力』タブを作る。rebuild なら中身を消して作り直す（視点マスタを変えたとき） */
 function ensureFormSheet_(ss, masters, rebuild) {
   let sheet = ss.getSheetByName(SHEET.FORM);
-  if (sheet && !rebuild && trimStr_(sheet.getRange(1, 1).getValue()) === FORM_TITLE) { formEnsureEditRow_(sheet); return sheet; }
+  if (sheet && !rebuild && trimStr_(sheet.getRange(1, 1).getValue()) === FORM_TITLE) {
+    formEnsureEditRow_(sheet);
+    // ② の W・X（時間）の見出しとプルダウンを今の選択肢にそろえる
+    const listRow = sheet.getRange(1, 1, Math.min(sheet.getMaxRows(), 300), 1).getValues().map(r => trimStr_(r[0])).indexOf(FORM_L.list) + 1;
+    if (listRow && sheet.getMaxColumns() >= FORM_LC.color) formHoursHeader_(sheet, listRow);
+    return sheet;
+  }
   if (!sheet) sheet = ss.insertSheet(SHEET.FORM, 0);
   const views = viewsOrDefault_(masters.views);
   const keywords = viewKeywords_(masters.views);
@@ -4193,8 +4201,8 @@ const STAFF_RULES_LINES = [
     '・Chỉ nhập vào các cột màu vàng. Các cột màu xám (Mã công ty, Số dự án, Góc nhìn, Phương án, Mã đăng ký, Tên file giao…) do quản lý đăng ký hoặc tự động điền, không được sửa.'],
   ['', '・管理者が登録すると『入力前』タブに1視点＝1行で入ります。行を足したり消したりしないでください。',
     '・Khi quản lý đăng ký, mỗi góc nhìn = 1 dòng sẽ xuất hiện ở tab『入力前』. Không thêm hoặc xóa dòng.'],
-  ['', '・時間は h（時間）で、リストから選びます（0.5 刻み）。リストに無い時間は数字を直接入力できます。',
-    '・Thời gian tính bằng giờ (h), chọn từ danh sách (bước 0.5). Nếu không có trong danh sách thì nhập số trực tiếp.'],
+  ['', '・時間は h（時間）で、リストから選びます（3時間までは 0.25 刻み、それより上は 0.5 刻み）。リストに無い時間は数字を直接入力できます。',
+    '・Thời gian tính bằng giờ (h), chọn từ danh sách (đến 3 giờ: bước 0.25, trên 3 giờ: bước 0.5). Nếu không có trong danh sách thì nhập số trực tiếp.'],
   ['h', '■ タブの流れ', '■ Luồng các tab'],
   ['', '『入力前』：翻訳・制作時間を入れる視点。時間がそろって15分たつと、工程図に登録されて『制作中』へ自動で移ります。',
     '『入力前』(Chưa nhập xong): góc nhìn cần dịch và nhập số giờ. Khi đủ số giờ 15 phút, sẽ tự động đăng ký vào 工程図 và chuyển sang『制作中』.'],

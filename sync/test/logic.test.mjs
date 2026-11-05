@@ -195,6 +195,9 @@ test('視点マスタ → エンジニアの視点プルダウン・記入ルー
   // 視点マスタが空のときは初期値（今の管理者シートと同じ）
   assert.ok(g.viewCodeOptions_([]).includes('EXCB1'));
   assert.equal(g.HOUR_OPTIONS[0], '0'); assert.ok(g.HOUR_OPTIONS.includes('0.5') && g.HOUR_OPTIONS.includes('40'));
+  eq(g.HOUR_OPTIONS.slice(0, 14), ['0', '0.25', '0.5', '0.75', '1', '1.25', '1.5', '1.75', '2', '2.25', '2.5', '2.75', '3', '3.5']);
+  assert.ok(!g.HOUR_OPTIONS.includes('3.25') && g.HOUR_OPTIONS.includes('10') && !g.HOUR_OPTIONS.includes('10.5') && g.HOUR_OPTIONS.includes('11'));
+  assert.equal(new Set(g.HOUR_OPTIONS).size, g.HOUR_OPTIONS.length, '重なりなし');
 });
 
 test('行の判定と状態', () => {
