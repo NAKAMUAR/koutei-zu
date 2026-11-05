@@ -90,6 +90,7 @@ class FakeSheet {
   setColumnWidth() { return this; }
   setRowHeight() { return this; }
   hideColumns(c, n) { this.hidden = (this.hidden || []).concat(Array.from({ length: n || 1 }, (_, i) => c + i)); return this; }
+  showColumns(c, n) { const hide = Array.from({ length: n || 1 }, (_, i) => c + i); this.hidden = (this.hidden || []).filter(x => !hide.includes(x)); return this; }
   clearContents() { this.rows = []; return this; }
   clear() { this.rows = []; this.notes = {}; this.validations = []; this.formats = []; return this; }
   header(row = 1) { return (this.rows[row - 1] || []).map(v => (empty(v) ? '' : String(v))); }
@@ -1560,6 +1561,51 @@ test('管理者が『登録一覧』に White・Color を書く → 入力シー
   tab.set(r1, sh.indexOf('White家具') + 1, 1);
   env.g.syncRegistrationsNow();
   assert.equal(R(2, 'White'), 4, '躯体3＋家具1');
+});
+
+test('『案件入力』の W・X に White・Color を書いて登録 →『登録一覧』と入力シートに時間が入る／前の版（登録No が W）は Z へ移す', () => {
+  const admin = adminSheet();
+  const eng = engineerFile();
+  const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
+  env.g.quickSetup();
+  const f = admin.getSheetByName('案件入力');
+  const m = JSON.parse(JSON.stringify(env.g.formMap_(f)));
+  const LC = JSON.parse(JSON.stringify(env.g.FORM_LC));
+  assert.equal(LC.white, 23); assert.equal(LC.color, 24); assert.equal(env.g.FORM_NO_COL, 26);
+  const cell = (r, c) => (f.rows[r - 1] || [])[c - 1];
+  same([cell(m.list, 23), cell(m.list, 24)], ['White（h）', 'Color（h）']);
+  assert.ok((f.hidden || []).includes(26) && !(f.hidden || []).includes(23), '登録No は Z（隠し列）、W・X は見える');
+  const edit = (r, c, v) => { f.set(r, c, v); env.g.onAdminEdit({ range: f.getRange(r, c), source: admin }); };
+  const ex = m.grid.find(g => g.keyword === 'EX').row;
+  edit(ex, 2, true); edit(ex, 3, true);
+  f.set(m.list1, 23, 3); f.set(m.list1, 24, 2.5);
+  f.set(m.fields.code, 2, 'REN'); f.set(m.fields.number, 2, 60); f.set(m.fields.name, 2, '戸建'); f.set(m.fields.link, 2, LINK);
+  edit(m.list1 + 1, LC.room, ''); // ②を触っても時間は消えない
+  same([cell(m.list1, 23), cell(m.list1, 24)], [3, 2.5]);
+  const res = env.g.submitFormSheet('');
+  assert.equal(res.ok, true, res.msg);
+  const reg = admin.getSheetByName('登録一覧');
+  const rh = reg.header();
+  same([reg.rows[1][rh.indexOf('White')], reg.rows[1][rh.indexOf('Color')], reg.rows[1][rh.indexOf('状態')]], [3, 2.5, '時間入力済み']);
+  assert.equal(reg.rows[2][rh.indexOf('White')], '', '書かなかった視点は空');
+  const tab = inTab(eng);
+  const sh = tab.header(2).map(h => h.split('\n')[0]);
+  const row = tab.rows.find(v => v[sh.indexOf('登録No')] === 'R0001');
+  same([row[sh.indexOf('White躯体')], row[sh.indexOf('Color')]], [3, 2.5]);
+  // 登録Noで呼び出すと時間も出る → 直して登録すると入力シートも直る
+  edit(m.edit, 2, 'R1');
+  same([cell(m.list1, 23), cell(m.list1, 24), cell(m.list1, 26)], [3, 2.5, 'R0001']);
+  f.set(m.list1, 23, 5);
+  assert.equal(env.g.submitFormSheet('').ok, true);
+  assert.equal(tab.rows.find(v => v[sh.indexOf('登録No')] === 'R0001')[sh.indexOf('White躯体')], 5);
+  assert.equal(reg.rows[1][rh.indexOf('White')], 5);
+  // 前の版：登録No が W（見出し「登録No（隠し列）」）→ 触ると Z へ移し、W・X は時間の欄に
+  f.set(1, 26, ''); f.set(1, 23, '登録No（隠し列）');
+  f.set(m.list1, 23, 'R0002'); f.set(m.list1, 26, '');
+  f.hidden = [22, 23];
+  edit(m.fields.memo, 2, 'x');
+  same([cell(1, 23), cell(1, 26), cell(m.list1, 23), cell(m.list1, 26), cell(m.list, 23)], ['', '登録No（隠し列）', '', 'R0002', 'White（h）']);
+  assert.ok(f.hidden.includes(26) && !f.hidden.includes(23));
 });
 
 console.log(`\n${passed} tests passed`);

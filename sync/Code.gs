@@ -1705,7 +1705,7 @@ function insertRegRows_(list, rc, rows) {
     const start = appendToRegList_(list, rc, tail.map(i => rows[i]));
     tail.forEach((i, j) => { at[i] = start + j; });
   }
-  const keys = rc.extName ? REG_INPUT.concat(['extName']) : REG_INPUT;
+  const keys = regWriteKeys_(rc);
   const fm = regFormulas_(rc);
   const box = SpreadsheetApp.newDataValidation().requireCheckbox().build();
   // 下の差し込み位置から順に（上の行番号がずれないように）
@@ -1725,13 +1725,17 @@ function insertRegRows_(list, rc, rows) {
   });
   return at;
 }
+/** 登録のときに『登録一覧』へ書く列：管理者が書く列＋社外視点名＋White・Color（『案件入力』の W・X） */
+function regWriteKeys_(rc) {
+  return REG_INPUT.concat(['extName', 'white', 'color'].filter(k => rc[k]));
+}
 /** 『登録一覧』の中身がある最後の行の下へ、管理者が書く列だけを書き足す。書いた最初の行番号を返す（チェックボックス・式だけの行は数えない） */
 function appendToRegList_(list, rc, rows) {
   const lv = list.getLastRow() >= 2 ? list.getRange(2, 1, list.getLastRow() - 1, list.getLastColumn()).getValues() : [];
   let lastData = 1;
   lv.forEach((v, i) => { if (trimStr_(v[rc.no - 1]) !== '' || REG_INPUT.some(k => trimStr_(v[rc[k] - 1]) !== '')) lastData = i + 2; });
   ensureSize_(list, lastData + rows.length, list.getLastColumn());
-  const keys = rc.extName ? REG_INPUT.concat(['extName']) : REG_INPUT;
+  const keys = regWriteKeys_(rc);
   // 列ごとにまとめて書く（1マスずつ書くと遅い）
   keys.filter(k => rc[k] && rows.some(row => row[k] !== undefined && trimStr_(row[k]) !== '')).forEach(k =>
     list.getRange(lastData + 1, rc[k], rows.length, 1).setValues(rows.map(row => [row[k] === undefined ? '' : row[k]])));
@@ -1771,7 +1775,7 @@ function entryFormRows_(p) {
     code: trimStr_(p.code).toUpperCase(), number: parseInt(num, 10), name: trimStr_(p.name), assignee: trimStr_(p.assignee),
     link: trimStr_(p.link), deadline, order: trimStr_(p.order), memo: trimStr_(p.memo), toInterp: trimStr_(p.toInterp),
   };
-  return { rows: views.map(v => Object.assign({}, base, { cut: trimStr_(v.cut).toUpperCase(), pattern: normPattern_(v.pattern), request: trimStr_(v.request), extName: trimStr_(v.extName), no: trimStr_(v.no) })) };
+  return { rows: views.map(v => Object.assign({}, base, { cut: trimStr_(v.cut).toUpperCase(), pattern: normPattern_(v.pattern), request: trimStr_(v.request), extName: trimStr_(v.extName), no: trimStr_(v.no) }, v.white !== undefined ? { white: toHours_(v.white) || '' } : {}, v.color !== undefined ? { color: toHours_(v.color) || '' } : {})) };
 }
 /** 入力画面から呼ぶ：登録して { ok, msg, nos } を返す（名前が _ で終わる関数は google.script.run から呼べない） */
 function submitEntryForm(p) {
@@ -1809,8 +1813,8 @@ function updateEntryForm(p) {
     vals.forEach((v, i) => { const no = trimStr_(v[rc.no - 1]); if (no) rowOf.set(no, i); });
     const missing = res.rows.filter(r => r.no && !rowOf.has(r.no)).map(r => r.no);
     if (missing.length) return { ok: false, msg: '『登録一覧』に無い登録No があります：' + missing.join('・') + '（登録Noを入れ直して呼び出してください）' };
-    const keys = (rc.extName ? REG_INPUT.concat(['extName']) : REG_INPUT);
-    const fixed = [], moved = [], toApp = [];
+    const keys = regWriteKeys_(rc);
+    const fixed = [], moved = [], toApp = [], hours = [];
     res.rows.filter(r => r.no).forEach(r => {
       const i = rowOf.get(r.no);
       const cur = vals[i];
@@ -1818,13 +1822,17 @@ function updateEntryForm(p) {
       keys.forEach(k => {
         if (!rc[k]) return;
         if (k === 'toInterp' && trimStr_(r.toInterp) === '') return; // 通訳へのメッセージは空なら前のまま
+        if ((k === 'white' || k === 'color') && r[k] === undefined) return;
         const want = r[k] === undefined ? '' : r[k];
         if (!sameCell_(cur[rc[k] - 1], want)) { list.getRange(i + 2, rc[k]).setValue(want); changed.push(k); }
       });
+      if (changed.some(k => k === 'white' || k === 'color')) hours.push({ no: r.no, white: r.white, color: r.color, other: cur[rc.other - 1] });
       if (changed.length) fixed.push(r.no);
       if (changed.some(k => ['code', 'number', 'cut', 'pattern'].indexOf(k) >= 0)) moved.push(r.no);
       if (changed.some(k => ['assignee', 'deadline'].indexOf(k) >= 0)) toApp.push(r.no);
     });
+    // 時間を直した行は、入力シートの時間も直す（入力シートが正なので、同期の前に入れる）
+    if (hours.length) pushRegHoursToStaff_(hours);
     const added = res.rows.filter(r => !r.no);
     const at = added.length ? insertRegRows_(list, rc, added) : [];
     const r = syncRegistrations_(new Date());
@@ -1995,11 +2003,12 @@ const FORM_L = {
 };
 const FORM_COLS = 21; // A＝項目名、B〜U＝入力（視点の番号は 1〜20）
 const FORM_KEY_COL = 22; // V（隠し列）：視点コード（EXE・EXE1 など）
-const FORM_NO_COL = 23; // W（隠し列）：「登録Noで直す」で呼び出した行の登録No（空＝新しく足す行）
+const FORM_NO_COL = 26; // Z（隠し列）：「登録Noで直す」で呼び出した行の登録No（空＝新しく足す行）。2026-11-05 に W から移した（W・X は時間）
+const FORM_NO_COL_OLD = 23; // 前の版の登録No の列（W）
 const FORM_EDIT_NOTE = '← 登録No（R0002 など。数字だけでも可）を入れると、その登録（同じ日に登録した同じ案件の視点）を呼び出します。直して「登録」にチェックすると上書きし、エンジニア入力シートも直ります。空にすると新規の登録に戻ります';
 const FORM_LIST_ROWS = 40;
 // ② の列：A 視点（日本語）、B:D 部屋名、E:F パターン、G ＋、H 外す、I:U 社外視点名、V 視点コード
-const FORM_LC = { label: 1, room: 2, pattern: 5, plus: 7, del: 8, ext: 9 };
+const FORM_LC = { label: 1, room: 2, pattern: 5, plus: 7, del: 8, ext: 9, white: 23, color: 24 }; // W・X：White・Color の時間（管理者が決めたときだけ）
 const FORM_FIELD_NOTES = {
   code: '必須。REN・RIC など', number: '必須。数字だけ（例 50）', assignee: '工程図の担当者（入力シートには写さない）',
   request: '必須。この案件の視点すべてに同じものが入る', deadline: '入力シートには写さない（工程図の納期に入る）',
@@ -2052,7 +2061,7 @@ function formNormalizeRows_(rows, views) {
       seen.add(key);
       const ext = formIsAutoExt_(r.ext, code, views) ? formAutoExt_(code, room, pattern, views) : trimStr_(r.ext);
       // 登録No（呼び出した行）は、部屋名で分けたときは最初の部屋だけが持つ（ほかは新しく足す行）
-      out.push({ code, room, pattern, ext, no: ri === 0 ? trimStr_(r.no) : '' });
+      out.push({ code, room, pattern, ext, no: ri === 0 ? trimStr_(r.no) : '', white: r.white || '', color: r.color || '' });
     });
   });
   return out;
@@ -2190,6 +2199,7 @@ function ensureFormSheet_(ss, masters, rebuild) {
     wide(i, FORM_LC.ext);
   }
   sheet.getRange(listRow + 1, FORM_LC.pattern, FORM_LIST_ROWS, 1).setDataValidation(list(PATTERN_OPTIONS, true));
+  formHoursHeader_(sheet, listRow);
   sheet.getRange(1, FORM_KEY_COL).setValue('視点コード（隠し列）');
   sheet.hideColumns(FORM_KEY_COL);
   sheet.getRange(1, FORM_NO_COL).setValue('登録No（隠し列）');
@@ -2203,16 +2213,38 @@ function ensureFormSheet_(ss, masters, rebuild) {
 function formEnsureEditRow_(sheet) {
   const n = Math.min(sheet.getMaxRows(), 300);
   const a = sheet.getRange(1, 1, n, 1).getValues().map(r => trimStr_(r[0]));
-  if (sheet.getMaxColumns() < FORM_NO_COL) {
+  if (formNeedsColumns_(sheet)) {
+    const oldCols = sheet.getMaxColumns();
     ensureSize_(sheet, sheet.getMaxRows(), FORM_NO_COL);
     sheet.getRange(1, FORM_NO_COL).setValue('登録No（隠し列）');
     sheet.hideColumns(FORM_NO_COL);
+    // 前の版：登録No は W（隠し列）にあった → Z へ移し、W・X を White・Color の欄にする
+    const listRow = a.indexOf(FORM_L.list) + 1;
+    if (listRow && oldCols >= FORM_NO_COL_OLD) {
+      const old = sheet.getRange(listRow + 1, FORM_NO_COL_OLD, FORM_LIST_ROWS, 1).getValues();
+      sheet.getRange(listRow + 1, FORM_NO_COL, FORM_LIST_ROWS, 1).setValues(old);
+      sheet.getRange(listRow + 1, FORM_LC.white, FORM_LIST_ROWS, 2).setValues(old.map(() => ['', '']));
+      sheet.getRange(1, FORM_NO_COL_OLD).setValue('');
+    }
+    sheet.showColumns(FORM_LC.white, 2);
+    if (listRow) formHoursHeader_(sheet, listRow);
   }
   if (a.indexOf(FORM_L.edit) >= 0) return;
   const prev = a.indexOf(FORM_L.prev) + 1;
   if (!prev || a[prev] !== '') return; // 空いた行が無い形は「作り直す」で直す
   sheet.getRange(prev + 1, 1).setValue(FORM_L.edit).setFontWeight('bold').setBackground('#fce5cd');
   sheet.getRange(prev + 1, 3).setValue(FORM_EDIT_NOTE).setFontColor('#666666');
+}
+/** 前の版（登録No が W の隠し列・列が足りない）なら true */
+function formNeedsColumns_(sheet) {
+  if (sheet.getMaxColumns() < FORM_NO_COL) return true;
+  return trimStr_(sheet.getRange(1, FORM_NO_COL_OLD).getValue()) === '登録No（隠し列）';
+}
+/** ② の W・X（White・Color の時間）の見出しとプルダウン */
+function formHoursHeader_(sheet, listRow) {
+  sheet.getRange(listRow, FORM_LC.white, 1, 2).setValues([['White（h）', 'Color（h）']]).setFontWeight('bold').setBackground('#d9ead3');
+  sheet.getRange(listRow, FORM_LC.white).setNote('自分で時間を決めたときだけ書く（空ならエンジニアが入力シートで書く）。登録すると『登録一覧』とエンジニア入力シートの White躯体・Color に入る');
+  sheet.getRange(listRow + 1, FORM_LC.white, FORM_LIST_ROWS, 2).setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(HOUR_OPTIONS, true).setAllowInvalid(true).build());
 }
 /** 『案件入力』の項目・①・② を読む */
 function formRead_(sheet, m) {
@@ -2229,7 +2261,8 @@ function formRead_(sheet, m) {
     const code = trimStr_(cell(r, FORM_KEY_COL)).toUpperCase();
     if (!code) continue;
     rows.push({ code, room: trimStr_(cell(r, FORM_LC.room)), pattern: normPattern_(cell(r, FORM_LC.pattern)), ext: trimStr_(cell(r, FORM_LC.ext)),
-      plus: isChecked_(cell(r, FORM_LC.plus)), del: isChecked_(cell(r, FORM_LC.del)), no: trimStr_(cell(r, FORM_NO_COL)) });
+      plus: isChecked_(cell(r, FORM_LC.plus)), del: isChecked_(cell(r, FORM_LC.del)), no: trimStr_(cell(r, FORM_NO_COL)),
+      white: toHours_(cell(r, FORM_LC.white)) || '', color: toHours_(cell(r, FORM_LC.color)) || '' });
   }
   return { fields, codes, rows, edit };
 }
@@ -2239,7 +2272,7 @@ function formRowLabel_(r, views) {
 }
 function formWriteList_(sheet, m, rows, views) {
   const n = m.list2 - m.list1 + 1;
-  const out = [], keys = [], nos = [];
+  const out = [], keys = [], nos = [], hrs = [];
   for (let i = 0; i < n; i++) {
     const v = rows[i];
     const line = new Array(FORM_COLS).fill('');
@@ -2254,6 +2287,7 @@ function formWriteList_(sheet, m, rows, views) {
     out.push(line);
     keys.push([v ? v.code : '']);
     nos.push([v ? (v.no || '') : '']);
+    hrs.push(v ? [v.white || '', v.color || ''] : ['', '']);
   }
   const k = Math.min(rows.length, n);
   const boxes = sheet.getRange(m.list1, FORM_LC.plus, n, 2);
@@ -2262,6 +2296,7 @@ function formWriteList_(sheet, m, rows, views) {
   sheet.getRange(m.list1, 1, n, FORM_COLS).setValues(out);
   sheet.getRange(m.list1, FORM_KEY_COL, n, 1).setValues(keys);
   if ((m.width || 0) >= FORM_NO_COL) sheet.getRange(m.list1, FORM_NO_COL, n, 1).setValues(nos);
+  if ((m.width || 0) >= FORM_LC.color) sheet.getRange(m.list1, FORM_LC.white, n, 2).setValues(hrs);
   const fixing = rows.some(r => r.no);
   sheet.getRange(m.sum, 2).setValue(rows.length
     ? rows.map(r => formRowLabel_(r, views) + (fixing ? (r.no ? '〔' + r.no + '〕' : '〔追加〕') : '')).join('・') + '（' + rows.length + '件）' + (fixing ? '　※〔登録No〕は上書き・〔追加〕は新しく登録' : '')
@@ -2399,7 +2434,7 @@ function formLoadByNo_(ss, sheet, m, views) {
     if (k === 'deadline' && v instanceof Date) v = fmtYMD_(v);
     sheet.getRange(m.fields[k], 2).setValue(v === undefined || v === null ? '' : v);
   });
-  const rows = formNormalizeRows_(g.rows.map(r => { const sp = formSplitCut_(r.cut); return { code: sp.code, room: sp.room, pattern: r.pattern, ext: r.extName, no: trimStr_(r.no) }; }), views);
+  const rows = formNormalizeRows_(g.rows.map(r => { const sp = formSplitCut_(r.cut); return { code: sp.code, room: sp.room, pattern: r.pattern, ext: r.extName, no: trimStr_(r.no), white: toHours_(r.white) || '', color: toHours_(r.color) || '' }; }), views);
   formSetGrid_(sheet, m, rows.map(r => r.code));
   formWriteList_(sheet, m, rows, views);
   formResult_(sheet, m, no + ' の登録を呼び出しました（' + joinCode_(trimStr_(h.code).toUpperCase(), h.number) + '・' + g.date + ' 登録の ' + rows.length + '件：' + rows.map(r => r.no).join('・') + '）。\n' +
@@ -2411,7 +2446,7 @@ function formPayload_(d, toInterp) {
   const deadline = f.deadline instanceof Date ? fmtYMD_(f.deadline) : trimStr_(f.deadline).replace(/\//g, '-');
   return {
     code: f.code, number: f.number, name: f.name, assignee: f.assignee, link: f.link, deadline, order: f.order, memo: f.memo, toInterp: trimStr_(toInterp),
-    views: d.rows.map(r => ({ cut: formCut_(r.code, r.room), pattern: r.pattern, request: f.request, extName: r.ext, no: r.no || '' })),
+    views: d.rows.map(r => ({ cut: formCut_(r.code, r.room), pattern: r.pattern, request: f.request, extName: r.ext, no: r.no || '', white: r.white || '', color: r.color || '' })),
   };
 }
 /** 「登録」にチェック：足りなければ結果に出す。そろっていれば通訳へのメッセージを書く画面を出す */
@@ -2511,7 +2546,7 @@ function formConfirmHtml_(o) {
 /** 『案件入力』タブを編集したとき（onAdminEdit から） */
 function onFormEdit_(ss, sheet, range) {
   // 前の版のタブ（「登録Noで直す」の行・登録No の隠し列が無い）は、ここで足す（列が無いと上書きのつもりが新規になるため）
-  if (sheet.getMaxColumns() < FORM_NO_COL) formEnsureEditRow_(sheet);
+  if (formNeedsColumns_(sheet)) formEnsureEditRow_(sheet);
   const m = formMap_(sheet);
   if (!m.edit) { formEnsureEditRow_(sheet); Object.assign(m, formMap_(sheet)); }
   const r1 = range.getRow(), r2 = range.getLastRow();
