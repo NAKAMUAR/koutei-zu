@@ -197,6 +197,24 @@ function fakeFirestore(customers) {
     const db = decodeURIComponent(url.split('/databases/')[1].split('/')[0]);
     if (db !== 'default') return res(404, { error: { code: 404, message: 'The database ' + db + ' does not exist for project koutei-zu', status: 'NOT_FOUND' } });
     const p = decodeURIComponent(url.split('/documents/')[1].split('?')[0]);
+    if (p.endsWith(':runQuery')) {
+      // where（fieldFilter の EQUAL・IN・範囲、compositeFilter の AND）だけ
+      const q = JSON.parse(opt.payload).structuredQuery;
+      const base = p.replace(/:runQuery$/, '') + '/' + q.from[0].collectionId + '/';
+      const val = (v) => ('stringValue' in v ? v.stringValue : 'integerValue' in v ? Number(v.integerValue) : 'booleanValue' in v ? v.booleanValue : null);
+      const test = (f, doc) => {
+        if (f.compositeFilter) return f.compositeFilter.filters.every(x => test(x, doc));
+        const ff = f.fieldFilter; const cur = doc[ff.field.fieldPath] ? val(doc[ff.field.fieldPath]) : undefined;
+        if (ff.op === 'IN') return ff.value.arrayValue.values.map(val).includes(cur);
+        if (cur === undefined) return false;
+        const w = val(ff.value);
+        return ff.op === 'EQUAL' ? cur === w : ff.op === 'GREATER_THAN_OR_EQUAL' ? cur >= w : ff.op === 'LESS_THAN' ? cur < w : false;
+      };
+      const hits = Object.keys(fs.docs).filter(k => k.indexOf(base) === 0 && !k.slice(base.length).includes('/') && test(q.where, fs.docs[k]));
+      fs.queries = (fs.queries || 0) + 1;
+      fs.queryReads = (fs.queryReads || 0) + hits.length;
+      return res(200, hits.length ? hits.map(k => ({ document: { name: k, fields: fs.docs[k] } })) : [{ readTime: 'x' }]);
+    }
     if (method === 'get') {
       if (/\/tasks$/.test(p)) return res(200, { documents: Object.keys(fs.docs).filter(k => k.indexOf(p + '/') === 0).map(k => ({ name: k, fields: fs.docs[k] })) });
       return fs.docs[p] ? res(200, { name: p, fields: fs.docs[p] }) : res(404, { error: 'NOT_FOUND' });
@@ -657,7 +675,12 @@ test('15分ごとの自動実行：転記 → 15分たった「未送信」だ�
   // 工程図で RIC.34 EX1（1回目）のタスクがすべて完了 → 『制作済み』へ。2回目（修正）は制作中のまま
   env.fs.tasks().filter(t => String(t.externalId).indexOf('RIC34::EX1::1::') === 0).forEach(t => env.fs.setTask(t.id, { status: 'done' }));
   r = env.g.autoRun();
+  assert.ok(r.indexOf('制作済みへ') < 0, '工程図の完了を見るのは1時間に1回（Firestore の読み取りを減らす）：' + r);
+  delete env.props.DONE_CHECKED_AT; // 1時間たった
+  const q0 = env.fs.queries || 0;
+  r = env.g.autoRun();
   assert.ok(r.indexOf('制作済みへ1件') >= 0, r);
+  assert.ok((env.fs.queries || 0) > q0, '全タスクではなく、制作中の案件のタスクだけを読む（runQuery）');
   same(filled(eng.getSheetByName('制作済み')), ['RIC.34 EX1']);
   same(filled(doing), ['REN.72 EXM1', 'NEWCO.1 IN1', 'RIC.34 EX1']);
   r = env.g.autoRun();

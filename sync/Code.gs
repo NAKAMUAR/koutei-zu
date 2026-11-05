@@ -1275,14 +1275,54 @@ function moveStaffRows_(cfg) {
     [STATUS.SENT, STATUS.UPDATED].indexOf(status.get(keyByLoc.get(String(r.srcRow)))) >= 0);
   let toDone = [];
   const doingRows = rows.filter(r => r.tab === STAFF_TAB_DOING && keyByLoc.has(String(r.srcRow)));
-  if (doingRows.length) {
-    const tasks = fsListAll_(getAuth_(), cfg, 'workspaces/' + cfg.workspaceId + '/tasks');
+  // 工程図の完了を見るのは1時間に1回、制作中の案件のタスクだけ（全タスクを毎回読むと Firestore の無料枠＝1日の読み取り回数を使い切る。2026-11-05）
+  const props = PropertiesService.getScriptProperties();
+  const lastCheck = Number(props.getProperty(PROP_DONE_CHECKED_AT) || 0);
+  if (doingRows.length && Date.now() - lastCheck >= DONE_CHECK_INTERVAL_MS) {
+    props.setProperty(PROP_DONE_CHECKED_AT, String(Date.now()));
+    const codes = [];
+    doingRows.forEach(r => { if (r.code && codes.indexOf(r.code) < 0) codes.push(r.code); });
+    const tasks = fsTasksByProjects_(getAuth_(), cfg, codes);
     const doneKeys = staffDoneKeys_(tasks);
     toDone = doingRows.filter(r => doneKeys.has(keyByLoc.get(String(r.srcRow))));
   }
   out.toDoing = moveStaffTabRows_(before, doing, toDoing.map(r => r.row));
   out.toDone = moveStaffTabRows_(doing, done, toDone.map(r => r.row));
   return out;
+}
+const PROP_DONE_CHECKED_AT = 'DONE_CHECKED_AT';
+const DONE_CHECK_INTERVAL_MS = 55 * 60000; // 15分ごとの自動実行のうち、1時間に1回だけ
+/** 社内案件名（RIC.34 など）のタスクだけを読む（projectNameInternal で絞る。30件ずつ） */
+function fsTasksByProjects_(auth, cfg, codes) {
+  const out = [];
+  for (let i = 0; i < codes.length; i += 30) {
+    const chunk = codes.slice(i, i + 30);
+    fsRunQuery_(auth, cfg, { fieldFilter: { field: { fieldPath: 'projectNameInternal' }, op: 'IN', value: { arrayValue: { values: chunk.map(c => ({ stringValue: c })) } } } })
+      .forEach(d => out.push(d));
+  }
+  return out;
+}
+/** 取込キーで始まる externalId のタスクだけを読む（キーごとに範囲で絞る） */
+function fsTasksByKeys_(auth, cfg, keys) {
+  const out = [];
+  keys.forEach(k => {
+    const lo = k + '::';
+    fsRunQuery_(auth, cfg, { compositeFilter: { op: 'AND', filters: [
+      { fieldFilter: { field: { fieldPath: 'externalId' }, op: 'GREATER_THAN_OR_EQUAL', value: { stringValue: lo } } },
+      { fieldFilter: { field: { fieldPath: 'externalId' }, op: 'LESS_THAN', value: { stringValue: lo + '\uf8ff' } } },
+    ] } }).forEach(d => out.push(d));
+  });
+  return out;
+}
+/** workspaces/{wid}/tasks を where で絞って読む（デコード済み。_id にドキュメントID） */
+function fsRunQuery_(auth, cfg, where) {
+  const url = fsBase_(cfg) + '/workspaces/' + cfg.workspaceId + ':runQuery';
+  const res = fsFetch_(auth, url, 'post', { structuredQuery: { from: [{ collectionId: 'tasks' }], where } }) || [];
+  return (Array.isArray(res) ? res : []).filter(x => x && x.document).map(x => {
+    const d = fsDecodeDoc_(x.document);
+    d._id = String(x.document.name || '').split('/').pop();
+    return d;
+  });
 }
 /** 工程図のタスク → すべて完了になった取込キー（純ロジック）。externalId ＝ 取込キー::ステップ */
 function staffDoneKeys_(tasks) {
@@ -3316,11 +3356,12 @@ function processPendingDeletes_(cfg) {
   if (!keys.length) return 0;
   const auth = getAuth_();
   const hit = (ext) => keys.some(k => String(ext || '').indexOf(k + '::') === 0);
-  const tasks = fsListAll_(auth, cfg, 'workspaces/' + cfg.workspaceId + '/tasks');
+  const tasks = fsTasksByKeys_(auth, cfg, keys);
   let n = 0;
   tasks.forEach(t => {
-    if (!t.id || !hit(t.externalId)) return;
-    fsFetch_(auth, fsBase_(cfg) + '/workspaces/' + cfg.workspaceId + '/tasks/' + encodeURIComponent(t.id), 'delete');
+    const id = t._id || t.id;
+    if (!id || !hit(t.externalId)) return;
+    fsFetch_(auth, fsBase_(cfg) + '/workspaces/' + cfg.workspaceId + '/tasks/' + encodeURIComponent(id), 'delete');
     n++;
   });
   const deleted = parseJsonArray_(fsGetValueString_(auth, cfg, 'deletedExternalIds'));
