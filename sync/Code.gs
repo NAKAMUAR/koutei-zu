@@ -4627,6 +4627,11 @@ function readSettings_() {
   cfg.notify = !/^(しない|いいえ|off|no|false)$/i.test(trimStr_(cfg.notify));
   cfg.notifyFirst = Math.max(0, parseFloat(cfg.notifyFirst) || 0) || 2;
   cfg.notifyRepeat = Math.max(0.5, parseFloat(cfg.notifyRepeat) || 1);
+  // 「8-18」はシートが日付（8月18日）に変えてしまうことがある（2026-11-05 に発生）→ 月-日 を 時-時 として読む
+  if (Object.prototype.toString.call(cfg.notifyHours) === '[object Date]') {
+    const d = cfg.notifyHours;
+    cfg.notifyHours = typeof Utilities !== 'undefined' ? Utilities.formatDate(d, APP_TIME_ZONE, 'M-d') : (d.getMonth() + 1) + '-' + d.getDate();
+  }
   cfg.notifyHours = trimStr_(cfg.notifyHours);
   cfg.regMessage = String(cfg.regMessage || '').trim() ? String(cfg.regMessage) : SETTING_DEFAULTS.regMessage;
   cfg.interpMessage = String(cfg.interpMessage || '').trim() ? String(cfg.interpMessage) : SETTING_DEFAULTS.interpMessage;

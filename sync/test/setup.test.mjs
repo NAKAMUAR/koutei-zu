@@ -1714,6 +1714,9 @@ test('Discord は知らせる時間帯（既定 8-18）の中だけ。外の通�
   const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
   env.g.quickSetup();
   assert.equal(env.g.readSettings_().notifyHours, '0-24');
+  env.setHours(new Date(2026, 7, 18)); // シートが「8-18」を日付にしてしまったとき
+  assert.equal(env.g.readSettings_().notifyHours, '8-18', '日付になっても 8-18 として読む');
+  env.setHours('0-24');
   env.g.saveDiscordWebhook_('https://discord.com/api/webhooks/123/abc-DEF');
   const reg = admin.getSheetByName('登録一覧');
   const rh = reg.header();
