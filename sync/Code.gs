@@ -2260,6 +2260,46 @@ function formLoadPrevious_(ss, sheet, m, views) {
   ['name', 'link', 'assignee'].forEach(k => { if (m.fields[k] && !trimStr_(f[k]) && trimStr_(first[k])) sheet.getRange(m.fields[k], 2).setValue(first[k]); });
   formResult_(sheet, m, '前回（' + prev.date + ' 登録）の視点を入れました：' + rows.map(r => formRowLabel_(r, views)).join('・') + '（' + rows.length + '件）。新規or修正は「修正」にしました');
 }
+/**
+ * 過去に登録した案件の社外案件名・担当者（純ロジック）。『登録一覧』の一番新しい登録を優先し、
+ * 無い項目は『連携』の行（下ほど新しい）から探す。見つからない項目は ''
+ */
+function formKnownProject_(regRows, linkRows, code, number) {
+  const key = normCode_(joinCode_(code, number));
+  const out = { name: '', assignee: '' };
+  if (!trimStr_(code) || !trimStr_(number)) return out;
+  const mine = (regRows || []).filter(r => normCode_(joinCode_(r.code, r.number)) === key)
+    .map((r, i) => ({ r, i, g: regGroupKey_(r) }))
+    .sort((a, b) => (a.g < b.g ? 1 : a.g > b.g ? -1 : b.i - a.i));
+  const links = (linkRows || []).filter(r => normCode_(r.code) === key).reverse();
+  ['name', 'assignee'].forEach(k => {
+    const hit = mine.find(x => trimStr_(x.r[k]));
+    if (hit) { out[k] = trimStr_(hit.r[k]); return; }
+    const l = links.find(r => trimStr_(r[k]));
+    if (l) out[k] = trimStr_(l[k]);
+  });
+  return out;
+}
+/** 会社コード・案件番号を入れたとき：過去に登録した案件なら、空の社外案件名・担当者を入れる */
+function formFillKnown_(ss, sheet, m) {
+  const f = formRead_(sheet, m).fields;
+  if (!trimStr_(f.code) || !trimStr_(f.number)) return;
+  const empty = ['name', 'assignee'].filter(k => m.fields[k] && !trimStr_(f[k]));
+  if (!empty.length) return;
+  let linkRows = [];
+  const link = ss.getSheetByName(SHEET.LINK);
+  if (link && link.getLastRow() >= 2) {
+    try {
+      const col = headerMap_(link);
+      linkRows = link.getRange(2, 1, link.getLastRow() - 1, link.getLastColumn()).getValues()
+        .map(v => ({ code: v[col.code - 1], name: v[col.name - 1], assignee: v[col.assignee - 1] }));
+    } catch (e) { linkRows = []; }
+  }
+  const known = formKnownProject_(formRegRows_(ss), linkRows, f.code, f.number);
+  const filled = [];
+  empty.forEach(k => { if (known[k]) { sheet.getRange(m.fields[k], 2).setValue(known[k]); filled.push(REG_H[k] + '「' + known[k] + '」'); } });
+  if (filled.length) formResult_(sheet, m, '過去に登録した案件（' + joinCode_(trimStr_(f.code).toUpperCase(), f.number) + '）なので、' + filled.join('・') + 'を入れました');
+}
 /** 登録No の書き方をそろえる（'r2'・'2'・'R0002' → 'R0002'）。読めなければ '' */
 function normRegNo_(v) {
   const m = trimStr_(v).toUpperCase().match(/^R?\s*0*(\d{1,6})$/);
@@ -2425,6 +2465,7 @@ function onFormEdit_(ss, sheet, range) {
   if (hit(m.submit) && isChecked_(sheet.getRange(m.submit, 2).getValue())) { formSubmit_(sheet, m, views); return; }
   if (hit(m.prev) && isChecked_(sheet.getRange(m.prev, 2).getValue())) { formLoadPrevious_(ss, sheet, m, views); return; }
   if (m.edit && hit(m.edit) && range.getColumn() <= 2 && range.getLastColumn() >= 2) { formLoadByNo_(ss, sheet, m, views); return; }
+  if ((hit(m.fields.code) || hit(m.fields.number)) && range.getColumn() <= 2 && range.getLastColumn() >= 2) { formFillKnown_(ss, sheet, m); return; }
   if (m.grid.some(g => hit(g.row))) {
     const d = formRead_(sheet, m);
     formWriteList_(sheet, m, formListMerge_(d.codes, d.rows, views), views);

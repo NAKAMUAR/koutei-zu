@@ -1196,7 +1196,7 @@ test('『案件入力』タブ（縦型フォーム）：①日本語の区分�
   assert.equal(env.dialogs.length, 0);
   assert.equal(cell(m.submit, 2), false, '登録のチェックは外れる');
   // そろえて「登録」→ 通訳へのメッセージの画面
-  f.set(m.fields.code, 2, 'REN'); f.set(m.fields.number, 2, 60); f.set(m.fields.name, 2, '戸建'); f.set(m.fields.link, 2, LINK);
+  f.set(m.fields.code, 2, 'REN'); f.set(m.fields.number, 2, 60); f.set(m.fields.name, 2, '戸建'); f.set(m.fields.link, 2, LINK); f.set(m.fields.assignee, 2, '田中');
   f.set(m.fields.deadline, 2, new Date(2030, 10, 20));
   edit(m.submit, 2, true);
   assert.equal(env.dialogs.length, 1, '確認の画面が出る');
@@ -1232,6 +1232,19 @@ test('『案件入力』タブ（縦型フォーム）：①日本語の区分�
   assert.equal(cell(m.fields.name, 2), '戸建', '社外案件名も前回から');
   assert.equal(cell(ex, 2), true, '①にもチェックが入る');
   assert.equal(cell(m.prev, 2), false);
+  // 会社コード・案件番号を入れると、過去に登録した案件なら社外案件名・担当者が自動で入る（入っている欄はそのまま）
+  f.set(m.fields.name, 2, ''); f.set(m.fields.assignee, 2, ''); f.set(m.fields.code, 2, ''); f.set(m.fields.number, 2, '');
+  edit(m.fields.code, 2, 'ren');
+  assert.equal(cell(m.fields.name, 2), '', '案件番号がまだ無いときは入れない');
+  edit(m.fields.number, 2, 60);
+  same([cell(m.fields.name, 2), cell(m.fields.assignee, 2)], ['戸建', '田中']);
+  assert.ok(String(cell(m.result, 2)).includes('過去に登録した案件（REN.60）'), cell(m.result, 2));
+  f.set(m.fields.name, 2, '別の名前'); f.set(m.fields.assignee, 2, '');
+  edit(m.fields.number, 2, 60);
+  same([cell(m.fields.name, 2), cell(m.fields.assignee, 2)], ['別の名前', '田中'], '入っている社外案件名は上書きしない');
+  f.set(m.fields.name, 2, ''); f.set(m.fields.assignee, 2, '');
+  edit(m.fields.number, 2, 99);
+  same([cell(m.fields.name, 2), cell(m.fields.assignee, 2)], ['', ''], '登録したことの無い案件は何も入れない');
 });
 
 test('『案件入力』：登録Noで呼び出して直す → 『登録一覧』を上書き・足した視点は新しく登録・エンジニア入力シートも直る', () => {
