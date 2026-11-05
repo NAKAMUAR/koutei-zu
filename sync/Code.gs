@@ -1492,7 +1492,7 @@ const REG_NOTES = {
   link: '保存先フォルダのリンク', deadline: '納期（入力シートには写さない。工程図の納期に入る）', order: '注文書のファイルのリンクなど（入力シートには写さない）',
   memo: '管理者だけのメモ（入力シートには写さない）',
   translated: '自動：入力シートで通訳がチェックしたら「済」', translatedAt: '自動：入力シートで翻訳済みにチェックした日時。ここから催促の時間を数える',
-  transNote: '自動：入力シートの翻訳メモ', white: '自動：入力シートの White', color: '自動：入力シートの Color', other: '自動：入力シートの pts',
+  transNote: '自動：入力シートの翻訳メモ', white: '入力シートの White（躯体＋家具）。管理者が自分で時間を決めたときはここに書くと、入力シートの White躯体へすぐ入る（入力シートで直したら、こちらも入力シートの値になる）', color: '入力シートの Color。管理者が書くと入力シートへすぐ入る', other: '入力シートの pts。管理者が書くと入力シートへすぐ入る',
   total: '自動：White＋Color＋pts', split: '自動：入力シートの作業の分け方',
   estimator: '自動：入力シートの時間入力者（制作時間を決めた人）', estimatedAt: '自動：入力シートに制作時間が書かれた日時',
   regDate: '自動：書き始めた日時。会社コード・案件番号・視点・新規or修正がそろって入力シートへ写した（登録Noが付いた）ときにその日時に直す。連絡文の {登録日時} {計算期限} のもと',
@@ -1572,7 +1572,7 @@ function formatRegSheet_(sheet, masters, codes) {
     if (!rc[k]) return;
     const head = sheet.getRange(1, rc[k]);
     // 人が書く列＝黄色、自動の列＝灰色（『連携』と同じ色分け）
-    head.setNote(REG_NOTES[k] || '').setFontWeight('bold').setBackground(REG_INPUT.indexOf(k) >= 0 || k === 'extName' || k === 'manual' || k === 'copy' || k === 'del' ? '#fff2cc' : '#e6e6e6');
+    head.setNote(REG_NOTES[k] || '').setFontWeight('bold').setBackground(REG_INPUT.indexOf(k) >= 0 || k === 'extName' || k === 'manual' || k === 'copy' || k === 'del' || k === 'white' || k === 'color' || k === 'other' ? '#fff2cc' : '#e6e6e6');
   });
   // 社内案件名（会社コード＋案件番号）と合計（White＋Color＋pts）は式。値はスクリプトから書かない
   const fm = regFormulas_(rc);
@@ -2702,6 +2702,8 @@ function syncRegistrations_(now) {
       REG_COPY.forEach(k => { if (sc[k]) arr[sc[k] - 1] = k === 'pattern' ? normPattern_(row[k]) : (k === 'number' ? row[k] : trimStr_(row[k])); });
       arr[sc.regNo - 1] = no;
       if (sc.delivery) arr[sc.delivery - 1] = deliveryNameOf_(row, views);
+      // 管理者が『登録一覧』に時間を書いていれば、入力シートにも入れる（White は White躯体へ）
+      regHoursCols_(sc).forEach(x => { const h = toHours_(row[x.k]); if (h > 0) arr[x.c - 1] = h; });
       appends.push(arr);
       srow = arr;
       copied++;
@@ -2724,6 +2726,10 @@ function syncRegistrations_(now) {
       const sv = (k) => (ssc[k] ? srow[ssc[k] - 1] : '');
       const hit = byNo.has(no) ? byNo.get(no) : null; // 入力シートの行（今回追加した行は null）
       const putStaff = (k, value) => { if (hit && ssc[k] && !sameCell_(srow[ssc[k] - 1], value)) staffUpdates.push({ sheet: hit.sheet, row: hit.row, col: ssc[k], value }); };
+      // 管理者が『登録一覧』に時間を書き、入力シートの時間がまだ空なら、入力シートへ入れる（入っていれば入力シートが正）
+      if (hit && staffWhite_(srow, ssc) + toHours_(sv('color')) + toHours_(sv('other')) === 0) {
+        regHoursCols_(ssc).forEach(x => { const h = toHours_(row[x.k]); if (h > 0) { staffUpdates.push({ sheet: hit.sheet, row: hit.row, col: x.c, value: h }); srow[x.c - 1] = h; } });
+      }
       const st = readStaffStamps_(srow, ssc, now);
       row.translated = st.translated;
       row.white = staffWhite_(srow, ssc); row.color = sv('color'); row.other = sv('other');
@@ -2787,7 +2793,7 @@ function syncRegistrations_(now) {
   staffUpdates.forEach(u => u.sheet.getRange(u.row, u.col).setValue(u.value));
   if (appends.length) {
     // 写す列と登録Noだけを書く（行ごと書くと、合計などの式を消してしまう）。続いた列はまとめて書く
-    const cols = REG_COPY.map(k => sc[k]).concat([sc.regNo, sc.delivery]).filter(Boolean).sort((a, b) => a - b);
+    const cols = REG_COPY.map(k => sc[k]).concat([sc.regNo, sc.delivery], regHoursCols_(sc).map(x => x.c)).filter(Boolean).sort((a, b) => a - b);
     const segs = [];
     cols.forEach(c => { const g = segs[segs.length - 1]; if (g && g[g.length - 1] === c - 1) g.push(c); else segs.push([c]); });
     const writeRows = (start, list) => list.forEach((arr, i) => segs.forEach(g => {
@@ -3131,6 +3137,12 @@ function onAdminEdit(e) {
         return;
       }
     }
+    // White・Color・pts を管理者が書いた → 入力シートの行へすぐ書く（このあとの同期で『登録一覧』と入力シートがそろう）
+    const hourCols = ['white', 'color', 'other'].map(k => rc[k]).filter(Boolean);
+    if (hourCols.some(c => c >= e.range.getColumn() && c <= e.range.getLastColumn())) {
+      try { pushRegHoursToStaff_(vals.map(v => ({ no: v[rc.no - 1], white: v[rc.white - 1], color: v[rc.color - 1], other: v[rc.other - 1] }))); }
+      catch (err) { console.log('pushRegHoursToStaff_: ' + (err && err.message || err)); }
+    }
     // 「削除」にチェックした行 → チェックを外して確認の画面を出す（「削除する」を押すまで何も消さない）
     if (rc.del && e.range.getColumn() <= rc.del && e.range.getLastColumn() >= rc.del) {
       const delRows = [];
@@ -3226,6 +3238,37 @@ function planRegDeletion_(entries, nos) {
     else ok.push({ no, key: w.base + '::' + w.n });
   });
   return { ok, blocked };
+}
+/** 『登録一覧』の White・Color・pts → 入力シートの列（White は White躯体。分ける前の入力シートは White） */
+function regHoursCols_(sc) {
+  return [{ k: 'white', c: sc.whiteBody || sc.white }, { k: 'color', c: sc.color }, { k: 'other', c: sc.other }].filter(x => x.c);
+}
+/**
+ * 管理者が『登録一覧』の White・Color・pts を書いた（直した）とき：その登録の入力シートの行へすぐ書く（White家具は空にする）。
+ * rows＝[{ no, white, color, other }]。書いた行数
+ */
+function pushRegHoursToStaff_(rows) {
+  const list = (rows || []).filter(r => trimStr_(r.no));
+  if (!list.length) return 0;
+  const cfg = readSettings_();
+  const file = SpreadsheetApp.openById(cfg.fileId);
+  let n = 0;
+  staffTabNames_(cfg).map(name => file.getSheetByName(name)).filter(Boolean).forEach(sheet => {
+    const hr = findStaffHeaderRow_(sheet);
+    if (hr < 0 || sheet.getLastRow() <= hr) return;
+    const sc = mapStaffColumns_(sheet.getRange(hr, 1, 1, sheet.getLastColumn()).getValues()[0]);
+    if (!sc.regNo) return;
+    const nos = sheet.getRange(hr + 1, sc.regNo, sheet.getLastRow() - hr, 1).getValues().map(v => trimStr_(v[0]));
+    list.forEach(r => {
+      const i = nos.indexOf(trimStr_(r.no));
+      if (i < 0) return;
+      const row = hr + 1 + i;
+      regHoursCols_(sc).forEach(x => sheet.getRange(row, x.c).setValue(toHours_(r[x.k]) || ''));
+      if (sc.whiteBody && sc.whiteFurn) sheet.getRange(row, sc.whiteFurn).setValue('');
+      n++;
+    });
+  });
+  return n;
 }
 /** 削除依頼の Discord 文（純ロジック） */
 function delRequestMessage_(lines) {

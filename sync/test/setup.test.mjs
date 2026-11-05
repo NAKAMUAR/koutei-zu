@@ -1504,4 +1504,36 @@ test('登録の削除：エンジニアの削除依頼 →『登録一覧』に�
     ok: [{ no: 'R3', key: 'B::Y::1' }, { no: 'R9', key: '' }], blocked: [{ no: 'R1', reason: 'あとの回（2回目）があるので、先にそちらを消してください' }] });
 });
 
+test('管理者が『登録一覧』に White・Color を書く → 入力シートの White躯体・Color へすぐ入る（登録前に書いた時間も写す）→ 時間入力済み', () => {
+  const admin = adminSheet();
+  const eng = engineerFile();
+  const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
+  env.g.quickSetup();
+  const reg = admin.getSheetByName('登録一覧');
+  const rh = reg.header();
+  const R = (r, name) => reg.rows[r - 1][rh.indexOf(name)];
+  const setR = (r, name, v) => reg.set(r, rh.indexOf(name) + 1, v);
+  const put = (r, vals) => ['会社コード', '案件番号', '社外案件名', '新規or修正', '視点', 'サーバーリンク'].forEach((h, j) => setR(r, h, vals[j]));
+  put(2, ['RIC', 34, 'マンション', NEWR, 'EX1', LINK]);
+  put(3, ['RIC', 34, 'マンション', NEWR, 'EX2', LINK]);
+  setR(3, 'White', 4); setR(3, 'Color', 2); // 登録の前に書いた時間
+  env.g.syncRegistrationsNow();
+  const tab = inTab(eng);
+  const sh = tab.header(2).map(h => h.split('\n')[0]);
+  const S = (no, name) => tab.rows[tab.rows.findIndex(v => v[sh.indexOf('登録No')] === no)][sh.indexOf(name)];
+  same([S('R0002', 'White躯体'), S('R0002', 'Color')], [4, 2], '登録のときに入力シートへ写す');
+  assert.equal(R(3, '状態'), '時間入力済み');
+  assert.equal(R(3, 'White'), 4);
+  // 登録したあとで書く → 編集の瞬間に入力シートへ
+  setR(2, 'White', 3); setR(2, 'Color', 1.5);
+  env.g.onAdminEdit({ range: reg.getRange(2, rh.indexOf('White') + 1, 1, 2), source: admin });
+  same([S('R0001', 'White躯体'), S('R0001', 'White家具'), S('R0001', 'Color')], [3, '', 1.5]);
+  assert.equal(R(2, '状態'), '時間入力済み');
+  // 入力シートで直したら、入力シートが正
+  const r1 = tab.rows.findIndex(v => v[sh.indexOf('登録No')] === 'R0001') + 1;
+  tab.set(r1, sh.indexOf('White家具') + 1, 1);
+  env.g.syncRegistrationsNow();
+  assert.equal(R(2, 'White'), 4, '躯体3＋家具1');
+});
+
 console.log(`\n${passed} tests passed`);
