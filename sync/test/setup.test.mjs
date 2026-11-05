@@ -282,6 +282,10 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
   const names = ['onAdminEdit', 'renderRegMessage_', 'onStaffEdit', 'syncRegistrationsNow', 'saveDiscordWebhook_', 'inNotifyHours_', 'isReminderDue_', 'calcDeadlineOf_', 'regState_', 'REG_STATE', 'quickSetup', 'createStaffInputTab', 'transferFromStaffSheet', 'autoRun', 'readSettings_', 'readStaffRows_', 'collectSourceRows_', 'findStaffHeaderRow_',
     'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'FORM_NO_COL', 'updateEntryForm', 'normRegNo_', 'formRegGroup_', 'formEnsureEditRow_', 'FORM_L', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_', 'deleteRegistrations', 'cancelDeleteRegistrations', 'planRegDeletion_', 'deleteDialogHtml_', 'DELETE_DIALOG_SCRIPT'];
   env.g = vm.runInContext(src + '\n;({' + names.join(',') + '})', ctx);
+  // テストは時刻に関係なく Discord を送る（知らせる時間帯を 0-24 に）。時間帯のテストは env.setHours で変える
+  env.setHours = (h) => { const st = env.admin.getSheetByName('設定'); const r = st && st.rows.findIndex(x => x[0] === '催促する時間帯（ベトナム時間）'); if (r >= 0) st.set(r + 1, 2, h); };
+  const qs = env.g.quickSetup;
+  env.g = Object.assign({}, env.g, { quickSetup: () => { const r = qs(); env.setHours('0-24'); return r; } });
   return env;
 }
 const settingsOf = (admin) => Object.fromEntries(admin.getSheetByName('設定').rows.slice(1).map(r => [r[0], r[1]]));
@@ -1702,6 +1706,36 @@ test('エンジニアが入力シート『入力前』で足した行（登録No
   env.g.syncRegistrationsNow();
   assert.equal(reg.rows.filter(v => v[rh.indexOf('パターン')] === 'C').length, 1);
   assert.equal(tab.rows.filter(v => v[C('パターン') - 1] === 'C').length, 1);
+});
+
+test('Discord は知らせる時間帯（既定 8-18）の中だけ。外の通知は貯めて、時間帯に入ったら自動実行でまとめて送る', () => {
+  const admin = adminSheet();
+  const eng = engineerFile();
+  const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
+  env.g.quickSetup();
+  assert.equal(env.g.readSettings_().notifyHours, '0-24');
+  env.g.saveDiscordWebhook_('https://discord.com/api/webhooks/123/abc-DEF');
+  const reg = admin.getSheetByName('登録一覧');
+  const rh = reg.header();
+  const setR = (r, name, v) => reg.set(r, rh.indexOf(name) + 1, v);
+  ['会社コード', '案件番号', '社外案件名', '新規or修正', '視点', 'サーバーリンク'].forEach((h, j) => setR(2, h, ['RIC', 34, 'マンション', NEWR, 'EX1', LINK][j]));
+  env.g.syncRegistrationsNow();
+  env.setHours('0-0'); // 時間帯の外
+  const tab = inTab(eng);
+  const sh = tab.header(2).map(h => h.split('\n')[0]);
+  tab.set(3, sh.indexOf('削除依頼') + 1, true);
+  const n0 = env.discord.length;
+  const msg = env.g.syncRegistrationsNow();
+  assert.equal(env.discord.length, n0, '時間帯の外は送らない');
+  assert.ok(msg.includes('時間帯に入ったら'), msg);
+  assert.equal(JSON.parse(env.props.DISCORD_QUEUE).length, 1);
+  env.g.autoRun();
+  assert.equal(env.discord.length, n0, 'まだ時間帯の外');
+  env.setHours('0-24');
+  const r = env.g.autoRun();
+  assert.ok(r.includes('時間帯の外の通知 1件'), r);
+  assert.ok(env.discord[env.discord.length - 1].includes('削除依頼'), '貯めた通知を送る');
+  assert.ok(!('DISCORD_QUEUE' in env.props));
 });
 
 console.log(`\n${passed} tests passed`);

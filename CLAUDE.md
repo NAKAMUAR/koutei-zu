@@ -81,6 +81,7 @@ src/
   - 2026-11-05 から、削除した登録は管理者用シートの『削除済み』タブに残る（`trashAppend_`・工程図の作業は `trashAttachTasks_`）。「復帰」にチェックで元に戻す（`restoreDeleted_`。同じ視点のあとの回が増えていたら戻さない）。登録No は削除済みの番号も使い回さない。
   - 2026-11-05 から、連携スクリプトは全タスクを読まない（送るときも案件のタスクだけ `fsTasksForRows_`）。Firestore が 429 を返したら `FS_QUOTA_UNTIL`（太平洋時間0時＋5分）まで工程図を読みに行かず、Discord で1回知らせる（`notifyQuotaOnce_`）。
   - 2026-11-05 から、エンジニアが『入力前』に自分で足した行（登録No なし・翻訳済み か 時間あり）は同期で『登録一覧』に取り込む（`adoptStaffRows_`。申請なし・同じ視点の下・登録No を入力シートにも書く）。
+  - 2026-11-05 から、視点の番号はどの区分も20まで（`VIEW_OPTION_COUNT_DEFAULT`）。Discord 通知はすべて『設定』の時間帯（既定 8-18）だけ、外の分は `DISCORD_QUEUE` に貯めて時間帯に入ったら送る（`notifyDiscord_`・`flushDiscordQueue_`）。
   - 実際のシートへのスクリプトの設置・初期設定・動作確認の引き継ぎは `docs/09_引き継ぎ_連携スクリプトの設置.md`（設置と承認は kei.n412@gmail.com で行う）。
   - 工程図への書き込みは Firestore REST API。認証は実行アカウント（Firebase オーナー）の OAuth トークン、または サービスアカウント鍵（スクリプトプロパティに保存。**鍵ファイルはリポジトリに入れない**、`.gitignore` 済み）。Firestore ルールはこの経路に適用されないので、ルール変更は不要。
   - 同期で作るタスクは `externalId`（`案件コード::視点名(パターン込み)::n回目::ステップ種類`）を持ち、`stepRoundType`（新規→initial・追加→add・修正/変更→fix）と `viewpointNameExternal`（外観視点①_パターンA）を自動で入れる。アプリ側で削除すると `data/deletedExternalIds` に記録され、再送信しても復活しない（App.jsx の既存挙動）。

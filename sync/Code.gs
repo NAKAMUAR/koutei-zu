@@ -126,7 +126,7 @@ const SETTING_DEFAULTS = {
   notify: 'する',
   notifyFirst: 2,
   notifyRepeat: 1,
-  notifyHours: '8-20',
+  notifyHours: '8-18',
   regMessage: '{社内案件名}の資料を共有します。\n{サーバーリンク}\n\n{計算期限}までに制作時間の計算をお願いします。',
   calcMinutes: 90,
   calcHours: '8-12,13-17',
@@ -155,7 +155,7 @@ const SETTING_NOTES = {
   calcHours: '{計算期限} を数える時間帯（ベトナム時間）。「8-12,13-17」＝ 8〜12時と13〜17時だけ数える（12〜13時の昼休みと17時以降は数えず、次の日の8時から続きを数える）。時間帯を気にせず足すなら「0-24」',
   interpMessage: '『登録一覧』の「通訳向け連絡文」列と、『案件入力』で登録するときの確認画面のひな形。使える文字は「登録時の連絡文」と同じ。{通訳へのメッセージ} には登録のときに書いた「通訳へのメッセージ」が入る（空なら行ごと消える）',
   manualRun: 'チェックすると、その場で 案件登録→入力シート・転記・工程図への登録 をまとめて動かす（終わるとチェックは外れ、結果は「最後の自動実行」に出る）',
-  notifyHours: 'この時間帯だけ知らせる（例 8-20 ＝ 8時〜20時。時刻はベトナム時間）。夜に止まっていた分は、時間帯に入ったら知らせる',
+  notifyHours: 'Discord で知らせるのはこの時間帯だけ（例 8-18 ＝ 8時〜18時。時刻はベトナム時間）。催促・登録後の変更・削除依頼・読み取り上限のお知らせすべて。時間外の分は、時間帯に入ったら知らせる',
   lastAuto: '15分ごとの自動実行が最後に動いた日時と結果（自動で書き込み）',
 };
 
@@ -1389,6 +1389,7 @@ function autoRun() {
   try {
     const cfg = readSettings_();
     let waitingKeys = [];
+    try { const fq = flushDiscordQueue_(cfg); if (fq) parts.push('時間帯の外の通知 ' + fq + '件を Discord で送った'); } catch (e) { parts.push('Discord 送信エラー：' + String(e && e.message || e)); }
     // 工程図の1日の読み取り上限：止まっている間は工程図を読まない（シートの同期・転記は続ける）。Discord で1回だけ知らせる
     if (fsQuotaBlocked_()) parts.push('工程図の読み取り上限のため、工程図への登録・削除・完了の確認は ' + fmtDateTime_(new Date(fsQuotaUntil_())) + ' ごろまで待ちます');
     try {
@@ -1411,7 +1412,7 @@ function autoRun() {
         const url = PropertiesService.getScriptProperties().getProperty(PROP_DISCORD);
         if (!url) parts.push('登録後の変更 ' + t.changedAfterSend.length + '件（Discord の Webhook が未設定のため、『連携』の「更新あり」を確認）');
         else {
-          try { sendDiscord_(url, changedMessage_(t.changedAfterSend)); parts.push('登録後の変更 ' + t.changedAfterSend.length + '件を Discord で確認依頼'); }
+          try { parts.push('登録後の変更 ' + t.changedAfterSend.length + '件を Discord で確認依頼' + (notifyDiscord_(url, changedMessage_(t.changedAfterSend), cfg) ? '' : '（時間帯の外なので、時間帯に入ったら送る）')); }
           catch (e) { parts.push('登録後の変更の Discord 送信エラー：' + String(e && e.message || e)); }
         }
       }
@@ -1455,7 +1456,7 @@ function notifyQuotaOnce_() {
   const url = props.getProperty(PROP_DISCORD);
   if (!url) return;
   try {
-    sendDiscord_(url, '⚠ 工程図（Firestore）の1日の読み取り上限に達しました。' + fmtDateTime_(new Date(until)) + ' ごろ（ベトナム時間）に戻るまで、工程図アプリが開けない・連携シートから工程図への登録が止まることがあります。シートへの入力はそのまま続けて大丈夫です（戻ったら自動で登録します）');
+    notifyDiscord_(url, '⚠ 工程図（Firestore）の1日の読み取り上限に達しました。' + fmtDateTime_(new Date(until)) + ' ごろ（ベトナム時間）に戻るまで、工程図アプリが開けない・連携シートから工程図への登録が止まることがあります。シートへの入力はそのまま続けて大丈夫です（戻ったら自動で登録します）');
   } catch (e) { /* 知らせられなくても続ける */ }
 }
 /** メニュー：自動実行を今すぐ1回動かして結果を出す */
@@ -2926,7 +2927,7 @@ function syncRegistrations_(now) {
   if (delReqs.length) {
     const url = PropertiesService.getScriptProperties().getProperty(PROP_DISCORD);
     if (url && cfg.notify) {
-      try { sendDiscord_(url, delRequestMessage_(delReqs)); remindNote += (remindNote ? '・' : '') + '削除依頼 ' + delReqs.length + '件を Discord で知らせた'; }
+      try { const sent = notifyDiscord_(url, delRequestMessage_(delReqs), cfg); remindNote += (remindNote ? '・' : '') + '削除依頼 ' + delReqs.length + '件を Discord で' + (sent ? '知らせた' : '知らせる（時間帯に入ったら）'); }
       catch (e) { remindNote += (remindNote ? '・' : '') + '削除依頼の Discord 送信エラー：' + String(e && e.message || e); }
     } else remindNote += (remindNote ? '・' : '') + '削除依頼 ' + delReqs.length + '件';
   }
@@ -3843,6 +3844,29 @@ function onTrashEdit_(ss, sheet, range) {
 }
 
 // ============ Discord ============
+// 知らせる時間帯（『設定』の「催促する時間帯」。既定 8-18）の外の通知は貯めておき、時間帯に入ったら自動実行で送る（2026-11-05）
+const PROP_DISCORD_QUEUE = 'DISCORD_QUEUE';
+/** 時間帯の中ならすぐ送って true、外なら貯めて false */
+function notifyDiscord_(url, text, cfg) {
+  const hours = (cfg || readSettings_()).notifyHours;
+  if (inNotifyHours_(new Date(), hours)) { sendDiscord_(url, text); return true; }
+  const props = PropertiesService.getScriptProperties();
+  const q = parseJsonArray_(props.getProperty(PROP_DISCORD_QUEUE));
+  q.push(text);
+  props.setProperty(PROP_DISCORD_QUEUE, JSON.stringify(q.slice(-30)));
+  return false;
+}
+/** 貯めておいた通知を、時間帯の中なら送る。送った件数 */
+function flushDiscordQueue_(cfg) {
+  const props = PropertiesService.getScriptProperties();
+  const q = parseJsonArray_(props.getProperty(PROP_DISCORD_QUEUE));
+  if (!q.length || !inNotifyHours_(new Date(), cfg.notifyHours)) return 0;
+  const url = props.getProperty(PROP_DISCORD);
+  props.deleteProperty(PROP_DISCORD_QUEUE);
+  if (!url) return 0;
+  sendDiscord_(url, '（時間帯の外に届いた通知です）\n' + q.join('\n\n'));
+  return q.length;
+}
 /** Discord の Webhook へ送る（2000文字の上限があるので分けて送る） */
 function sendDiscord_(url, text) {
   const chunks = [];
