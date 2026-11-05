@@ -217,6 +217,7 @@ function fakeFirestore(customers) {
       return res(200, hits.length ? hits.map(k => ({ document: { name: k, fields: fs.docs[k] } })) : [{ readTime: 'x' }]);
     }
     if (method === 'get') {
+      if (/\/tasks$/.test(p)) fs.listAll = (fs.listAll || 0) + 1;
       if (/\/tasks$/.test(p)) return res(200, { documents: Object.keys(fs.docs).filter(k => k.indexOf(p + '/') === 0).map(k => ({ name: k, fields: fs.docs[k] })) });
       return fs.docs[p] ? res(200, { name: p, fields: fs.docs[p] }) : res(404, { error: 'NOT_FOUND' });
     }
@@ -272,6 +273,7 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
         env.discord.push(JSON.parse(opt.payload).content);
         return { getResponseCode: () => env.discordCode, getContentText: () => '' };
       }
+      if (env.fsQuota) return { getResponseCode: () => 429, getContentText: () => '{"error":{"code":429,"message":"Quota limit exceeded","status":"RESOURCE_EXHAUSTED"}}' };
       if (fetchCode !== 200) return { getResponseCode: () => fetchCode, getContentText: () => '{"error":"PERMISSION_DENIED"}' };
       return env.fs.fetch(url, opt);
     },
@@ -1623,6 +1625,40 @@ test('『案件入力』の W・X に White・Color を書いて登録 →『登
   edit(m.fields.memo, 2, 'x');
   same([cell(1, 23), cell(1, 26), cell(m.list1, 23), cell(m.list1, 26), cell(m.list, 23)], ['', '登録No（隠し列）', '', 'R0002', 'White（h）']);
   assert.ok(f.hidden.includes(26) && !f.hidden.includes(23));
+});
+
+test('工程図の1日の読み取り上限（429）：戻るまで工程図を読まずにシートの同期は続け、Discord で1回だけ知らせる／送るときは案件のタスクだけ読む', () => {
+  const admin = adminSheet();
+  const eng = engineerFile();
+  const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
+  env.g.quickSetup();
+  env.g.saveDiscordWebhook_('https://discord.com/api/webhooks/123/abc-DEF');
+  const reg = admin.getSheetByName('登録一覧');
+  const rh = reg.header();
+  const setR = (r, name, v) => reg.set(r, rh.indexOf(name) + 1, v);
+  ['会社コード', '案件番号', '社外案件名', '新規or修正', '視点', 'サーバーリンク', 'White', 'Color'].forEach((h, j) => setR(2, h, ['RIC', 34, 'マンション', NEWR, 'EX1', LINK, 3, 2][j]));
+  env.g.syncRegistrationsNow();
+  env.fsQuota = true;
+  let r = env.g.autoRun();
+  const { at, set } = linkAt(admin);
+  assert.equal(at(2, '取込キー'), 'RIC34::EX1::1', 'シートの転記は続ける：' + r);
+  set(2, '転記日時', new Date(Date.now() - 3600000));
+  r = env.g.autoRun();
+  assert.ok(r.includes('読み取り上限'), r);
+  assert.equal(at(2, '状態'), '未送信', '上限の間は送らない');
+  const quotaMsgs = () => env.discord.filter(m => m.includes('読み取り上限')).length;
+  assert.equal(quotaMsgs(), 1, 'Discord で知らせる');
+  env.g.autoRun();
+  assert.equal(quotaMsgs(), 1, '何度も知らせない');
+  assert.ok(Number(env.props.FS_QUOTA_UNTIL) > Date.now());
+  // 戻った
+  env.fsQuota = false;
+  env.props.FS_QUOTA_UNTIL = String(Date.now() - 1000);
+  env.fs.listAll = 0;
+  r = env.g.autoRun();
+  assert.equal(at(2, '状態'), '登録済み', r);
+  assert.equal(env.fs.listAll || 0, 0, '全タスクの一覧は読まない（案件のタスクだけ runQuery で読む）');
+  same(env.fs.tasks().map(t => t.externalId).sort(), ['RIC34::EX1::1::color', 'RIC34::EX1::1::white']);
 });
 
 console.log(`\n${passed} tests passed`);

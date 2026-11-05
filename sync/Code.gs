@@ -1154,8 +1154,10 @@ function runSend_(dryRun, opts) {
     return '対象なし';
   }
 
+  if (auto && fsQuotaBlocked_()) return '対象なし（工程図の1日の読み取り上限のため、戻ってから送ります）';
   const auth = getAuth_();
-  const existing = fsListAll_(auth, cfg, 'workspaces/' + cfg.workspaceId + '/tasks');
+  // 送る行の案件のタスクだけを読む（全タスクを読むと Firestore の1日の読み取り上限を使い切る。2026-11-05）
+  const existing = fsTasksForRows_(auth, cfg, targets.map(t => t.row));
   const deleted = new Set(parseJsonArray_(fsGetValueString_(auth, cfg, 'deletedExternalIds')));
   let customerMaster = parseJsonArray_(fsGetValueString_(auth, cfg, 'customerMaster'));
   // 送る行の会社のうち、『会社マスタ』にあって工程図の顧客マスタに無い会社は、先に顧客マスタへ追加する
@@ -1278,7 +1280,7 @@ function moveStaffRows_(cfg) {
   // 工程図の完了を見るのは1時間に1回、制作中の案件のタスクだけ（全タスクを毎回読むと Firestore の無料枠＝1日の読み取り回数を使い切る。2026-11-05）
   const props = PropertiesService.getScriptProperties();
   const lastCheck = Number(props.getProperty(PROP_DONE_CHECKED_AT) || 0);
-  if (doingRows.length && Date.now() - lastCheck >= DONE_CHECK_INTERVAL_MS) {
+  if (doingRows.length && Date.now() - lastCheck >= DONE_CHECK_INTERVAL_MS && !fsQuotaBlocked_()) {
     props.setProperty(PROP_DONE_CHECKED_AT, String(Date.now()));
     const codes = [];
     doingRows.forEach(r => { if (r.code && codes.indexOf(r.code) < 0) codes.push(r.code); });
@@ -1301,6 +1303,22 @@ function fsTasksByProjects_(auth, cfg, codes) {
       .forEach(d => out.push(d));
   }
   return out;
+}
+/** 送る行の案件のタスク（社内案件名 or 案件名が同じもの。同じ視点の前の回・アプリで作った作業も含む） */
+function fsTasksForRows_(auth, cfg, rows) {
+  const codes = [], names = [];
+  rows.forEach(r => {
+    const c = trimStr_(r.code); const n = trimStr_(r.name) || c;
+    if (c && codes.indexOf(c) < 0) codes.push(c);
+    if (n && names.indexOf(n) < 0) names.push(n);
+  });
+  const byId = new Map();
+  const add = (list) => list.forEach(t => { const id = t.id || t._id; if (id && !byId.has(id)) byId.set(id, Object.assign(t, { id })); });
+  add(fsTasksByProjects_(auth, cfg, codes));
+  for (let i = 0; i < names.length; i += 30) {
+    add(fsRunQuery_(auth, cfg, { fieldFilter: { field: { fieldPath: 'projectName' }, op: 'IN', value: { arrayValue: { values: names.slice(i, i + 30).map(n => ({ stringValue: n })) } } } }));
+  }
+  return Array.from(byId.values());
 }
 /** 取込キーで始まる externalId のタスクだけを読む（キーごとに範囲で絞る） */
 function fsTasksByKeys_(auth, cfg, keys) {
@@ -1369,6 +1387,8 @@ function autoRun() {
   try {
     const cfg = readSettings_();
     let waitingKeys = [];
+    // 工程図の1日の読み取り上限：止まっている間は工程図を読まない（シートの同期・転記は続ける）。Discord で1回だけ知らせる
+    if (fsQuotaBlocked_()) parts.push('工程図の読み取り上限のため、工程図への登録・削除・完了の確認は ' + fmtDateTime_(new Date(fsQuotaUntil_())) + ' ごろまで待ちます');
     try {
       const pd = processPendingDeletes_(cfg);
       if (pd) parts.push('工程図から作業を削除 ' + pd + '件');
@@ -1412,6 +1432,7 @@ function autoRun() {
     } catch (e) {
       parts.push('入力シートの移動エラー：' + String(e && e.message || e));
     }
+    notifyQuotaOnce_();
   } catch (e) {
     parts.push('エラー：' + String(e && e.message || e));
   } finally {
@@ -1422,6 +1443,19 @@ function autoRun() {
   return parts.join(' ／ ');
 }
 
+/** 工程図の読み取り上限に達していたら、Discord で1回だけ知らせる（戻る時刻ごとに1回） */
+function notifyQuotaOnce_() {
+  if (!fsQuotaBlocked_()) return;
+  const props = PropertiesService.getScriptProperties();
+  const until = fsQuotaUntil_();
+  if (props.getProperty(PROP_FS_QUOTA_NOTIFIED) === String(until)) return;
+  props.setProperty(PROP_FS_QUOTA_NOTIFIED, String(until));
+  const url = props.getProperty(PROP_DISCORD);
+  if (!url) return;
+  try {
+    sendDiscord_(url, '⚠ 工程図（Firestore）の1日の読み取り上限に達しました。' + fmtDateTime_(new Date(until)) + ' ごろ（ベトナム時間）に戻るまで、工程図アプリが開けない・連携シートから工程図への登録が止まることがあります。シートへの入力はそのまま続けて大丈夫です（戻ったら自動で登録します）');
+  } catch (e) { /* 知らせられなくても続ける */ }
+}
 /** メニュー：自動実行を今すぐ1回動かして結果を出す */
 function runAutoNow() {
   alertOrLog_('自動実行の結果\n\n' + autoRun());
@@ -3485,6 +3519,7 @@ function processPendingDeletes_(cfg) {
   const props = PropertiesService.getScriptProperties();
   const keys = parseJsonArray_(props.getProperty(PROP_PENDING_DELETES));
   if (!keys.length) return 0;
+  if (fsQuotaBlocked_()) throw new Error('工程図の1日の読み取り上限のため、戻ってから消します');
   const auth = getAuth_();
   const hit = (ext) => keys.some(k => String(ext || '').indexOf(k + '::') === 0);
   const tasks = fsTasksByKeys_(auth, cfg, keys);
@@ -4695,10 +4730,36 @@ function fsFetch_(auth, url, method, body) {
     if (/database .* does not exist/i.test(text404)) throw new Error('工程図のデータベースが見つかりません（プロジェクト ' + url.split('/projects/')[1].split('/')[0] + '・データベース ' + FIRESTORE_DATABASE_ID + '）: ' + text404.slice(0, 300));
     return null;
   }
+  if (code === 429 || (code >= 400 && /RESOURCE_EXHAUSTED|Quota/i.test(res.getContentText()))) {
+    fsSetQuotaBlocked_();
+    throw new Error('工程図（Firestore）の1日の読み取り上限に達しています。' + fmtDateTime_(new Date(fsQuotaUntil_())) + 'ごろ（ベトナム時間）に戻るまで、工程図への登録・削除は待ちます');
+  }
   if (code >= 300) throw new Error('Firestore ' + method.toUpperCase() + ' ' + code + ': ' + res.getContentText().slice(0, 500));
   const text = res.getContentText();
   return text ? JSON.parse(text) : {};
 }
+// ---- 1日の読み取り上限（無料枠）に達したときは、戻るまで工程図を読みに行かない（2026-11-05） ----
+const PROP_FS_QUOTA_UNTIL = 'FS_QUOTA_UNTIL';
+const PROP_FS_QUOTA_NOTIFIED = 'FS_QUOTA_NOTIFIED';
+/** 次に上限が戻る時刻（米国太平洋時間の0時＝ベトナム時間の14時か15時）＋5分。ミリ秒 */
+function fsQuotaResetAt_(now) {
+  let t = Math.ceil(now / 3600000) * 3600000;
+  for (let i = 0; i < 26; i++, t += 3600000) {
+    let h;
+    try { h = Utilities.formatDate(new Date(t), 'America/Los_Angeles', 'H'); } catch (e) { h = null; }
+    if (h === null) return now + 6 * 3600000;
+    if (h === '0') return t + 5 * 60000;
+  }
+  return now + 6 * 3600000;
+}
+function fsSetQuotaBlocked_() {
+  try { PropertiesService.getScriptProperties().setProperty(PROP_FS_QUOTA_UNTIL, String(fsQuotaResetAt_(Date.now()))); } catch (e) { /* 記録できなくても続ける */ }
+}
+function fsQuotaUntil_() {
+  try { return Number(PropertiesService.getScriptProperties().getProperty(PROP_FS_QUOTA_UNTIL) || 0); } catch (e) { return 0; }
+}
+/** 上限のため工程図を読みに行かない時間なら true */
+function fsQuotaBlocked_() { return Date.now() < fsQuotaUntil_(); }
 /** コレクションの全ドキュメント（デコード済み）。limit を渡すと先頭だけ。 */
 function fsListAll_(auth, cfg, collectionPath, limit) {
   const docs = [];

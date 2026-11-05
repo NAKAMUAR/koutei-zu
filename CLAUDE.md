@@ -79,6 +79,7 @@ src/
   - 2026-11-05 から、登録の削除：管理者は『登録一覧』の「削除」にチェック → 確認の画面 → `deleteRegistrations` が入力シート3タブの行と工程図の作業（externalId が 取込キー:: で始まる）を消す（管理者用シートの行は消さない：『登録一覧』は「削除」にチェック・状態「削除済み」、『連携』は「対象外」。チェックを外すと `restoreByNo_` で戻る）（工程図は `PENDING_DELETE_KEYS` に入れてすぐ試し、だめなら次の `autoRun` で。あとの回が残る行は消さない `planRegDeletion_`）。エンジニアは入力シートの「削除依頼」にチェック → 『登録一覧』の「削除依頼」に日時＋Discord。
   - 2026-11-05 から、『登録一覧』の White・Color・pts は管理者も書ける（編集の瞬間に入力シートの White躯体・Color・pts へ `pushRegHoursToStaff_`。入力シートに時間があれば入力シートが正）。Firestore の読み取りを減らすため、制作中→制作済みの確認は1時間に1回・制作中の案件のタスクだけ `runQuery` で読む（`fsTasksByProjects_`）。
   - 2026-11-05 から、削除した登録は管理者用シートの『削除済み』タブに残る（`trashAppend_`・工程図の作業は `trashAttachTasks_`）。「復帰」にチェックで元に戻す（`restoreDeleted_`。同じ視点のあとの回が増えていたら戻さない）。登録No は削除済みの番号も使い回さない。
+  - 2026-11-05 から、連携スクリプトは全タスクを読まない（送るときも案件のタスクだけ `fsTasksForRows_`）。Firestore が 429 を返したら `FS_QUOTA_UNTIL`（太平洋時間0時＋5分）まで工程図を読みに行かず、Discord で1回知らせる（`notifyQuotaOnce_`）。
   - 実際のシートへのスクリプトの設置・初期設定・動作確認の引き継ぎは `docs/09_引き継ぎ_連携スクリプトの設置.md`（設置と承認は kei.n412@gmail.com で行う）。
   - 工程図への書き込みは Firestore REST API。認証は実行アカウント（Firebase オーナー）の OAuth トークン、または サービスアカウント鍵（スクリプトプロパティに保存。**鍵ファイルはリポジトリに入れない**、`.gitignore` 済み）。Firestore ルールはこの経路に適用されないので、ルール変更は不要。
   - 同期で作るタスクは `externalId`（`案件コード::視点名(パターン込み)::n回目::ステップ種類`）を持ち、`stepRoundType`（新規→initial・追加→add・修正/変更→fix）と `viewpointNameExternal`（外観視点①_パターンA）を自動で入れる。アプリ側で削除すると `data/deletedExternalIds` に記録され、再送信しても復活しない（App.jsx の既存挙動）。
