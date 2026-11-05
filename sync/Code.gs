@@ -228,6 +228,8 @@ const STAFF_INPUT_COLUMNS = [
     note: '管理者が『案件登録』に書いた通訳へのメッセージ（自動で入る）\nLời nhắn của quản lý cho phiên dịch (tự động)' },
   { key: 'delivery', label: '納品名', vi: 'Tên file giao', width: 30, auto: true,
     note: '納品するファイルの名前（自動）：社外案件名_社外視点名_YYMMDD。YYMMDD は納品する日に書き換えて使う\nTên file giao (tự động): Tên dự án_Tên góc nhìn_YYMMDD. Đổi YYMMDD thành ngày giao khi dùng' },
+  { key: 'delReq', label: '削除依頼', vi: 'Yêu cầu xóa', width: 8, checkbox: true, input: true,
+    note: '登録の間違い・二重登録などで、この行を消してほしいときにチェック。管理者が確認して消します（自分で行を消さない）\nĐánh dấu khi muốn xóa dòng này (đăng ký nhầm, trùng…). Quản lý sẽ kiểm tra và xóa (không tự xóa dòng)' },
 ];
 const STAFF_INPUT_HEADERS = STAFF_INPUT_COLUMNS.map(c => c.label);
 // 『入力シート』1行目の案内（見出しの上が空のときだけ書く）
@@ -574,6 +576,7 @@ function mapStaffColumns_(headers) {
     regNo: find(['登録No']),
     delivery: find(['納品名']),
     toInterp: find(['管理者からの連絡']),
+    delReq: find(['削除依頼']),
   };
   // 会社コードの列の見出しが「社外案件名」になっている（社外案件名が2つあり、1つ目が案件番号のすぐ左）→ 1つ目を会社コードとみなす
   if (!m.code && m.number && m.name === m.number - 1) {
@@ -1326,6 +1329,12 @@ function autoRun() {
     const cfg = readSettings_();
     let waitingKeys = [];
     try {
+      const pd = processPendingDeletes_(cfg);
+      if (pd) parts.push('工程図から作業を削除 ' + pd + '件');
+    } catch (e) {
+      parts.push('工程図の削除エラー：' + String(e && e.message || e));
+    }
+    try {
       const reg = syncRegistrations_(new Date());
       if (reg.msg !== '案件登録なし') parts.push('案件登録 ' + reg.msg);
     } catch (e) {
@@ -1411,9 +1420,9 @@ const REG_H = {
   translated: '翻訳済み', translatedAt: '翻訳日時', transNote: '翻訳メモ', white: 'White', color: 'Color', other: 'pts', total: '合計', split: '作業の分け方',
   estimator: '時間入力者', estimatedAt: '時間入力日時',
   regDate: '登録日時', delivery: '納品名', message: '連絡文',
-  manual: '今すぐ連携', copy: 'コピー', toInterp: '通訳へのメッセージ', interpMessage: '通訳向け連絡文', copiedAt: '入力シートへ写した日時', notifiedAt: '最後の催促', notifyCount: '催促回数',
+  manual: '今すぐ連携', copy: 'コピー', del: '削除', delReq: '削除依頼', toInterp: '通訳へのメッセージ', interpMessage: '通訳向け連絡文', copiedAt: '入力シートへ写した日時', notifiedAt: '最後の催促', notifyCount: '催促回数',
 };
-const REG_ORDER = ['no', 'state', 'manual', 'regDate', 'copy', 'code', 'number', 'name', 'internal', 'assignee', 'request', 'cut', 'pattern', 'extName', 'link', 'deadline', 'order', 'memo', 'toInterp',
+const REG_ORDER = ['no', 'state', 'manual', 'regDate', 'copy', 'del', 'delReq', 'code', 'number', 'name', 'internal', 'assignee', 'request', 'cut', 'pattern', 'extName', 'link', 'deadline', 'order', 'memo', 'toInterp',
   'translated', 'translatedAt', 'transNote', 'white', 'color', 'other', 'total', 'split', 'estimator', 'estimatedAt', 'copiedAt', 'notifiedAt', 'notifyCount', 'delivery', 'message', 'interpMessage'];
 // 2026-11-03：管理者が書くのは『案件登録』（入力専用）。「登録」にチェックした行に登録No を付け、
 // エンジニア入力シートへ写して『登録一覧』へ移す（『案件登録』からは消える）。それまでの『案件登録』は『登録一覧』に名前を変える。
@@ -1425,7 +1434,7 @@ const ENTRY_NOTES = {
   state: '自動：記入中（足りない項目）／登録できます（「登録」にチェックで送る）',
 };
 // 無くても動く列（あとから足した列。初期設定・登録のときに差し込む）
-const REG_OPTIONAL = ['extName'];
+const REG_OPTIONAL = ['extName', 'del', 'delReq'];
 // 管理者が書く列（ほかの列は自動で入る）
 const REG_INPUT = ['code', 'number', 'name', 'assignee', 'request', 'cut', 'pattern', 'link', 'deadline', 'order', 'memo', 'toInterp'];
 // エンジニア入力シートへ写す列（案件登録 → 入力シート。担当者・納期・注文書・管理者メモは写さない）
@@ -1437,6 +1446,8 @@ const REG_NOTES = {
   code: 'REN・RIC など（『会社マスタ』の英字）', number: '案件の番号（数字）', name: 'お客様の案件名（工程図の案件名）',
   internal: '自動：会社コード＋案件番号（RIC.34）', assignee: '工程図の担当者（入力シートには写さない）',
   request: 'その視点の初回は「新規」、2回目以降は「修正」', cut: 'EX1・IN2 など（『視点マスタ』のキーワード＋番号）', pattern: 'パターン違いがあれば A・B…',
+  del: 'この登録を消すときにチェック → 確認の画面で「削除する」。『登録一覧』・エンジニア入力シート・『連携』の行と、工程図の作業をまとめて消す（元に戻せない）。同じ視点のあとの回（2回目など）がある行は、あとの回から消す',
+  delReq: '自動：エンジニアが入力シートで「削除依頼」にチェックした日時。確かめて消すなら「削除」にチェック。消さないならエンジニアにチェックを外してもらう',
   extName: 'お客様向けの視点名（工程図の社外視点名に入る）。空なら『視点マスタ』から自動（外観目線視点①_パターンA など）。『案件入力』タブで書き換えた名前が入る',
   link: '保存先フォルダのリンク', deadline: '納期（入力シートには写さない。工程図の納期に入る）', order: '注文書のファイルのリンクなど（入力シートには写さない）',
   memo: '管理者だけのメモ（入力シートには写さない）',
@@ -1518,9 +1529,10 @@ function formatRegSheet_(sheet, masters, codes) {
   const dv = () => SpreadsheetApp.newDataValidation();
   const list = (values, allowInvalid) => dv().requireValueInList(values, true).setAllowInvalid(allowInvalid).build();
   REG_ORDER.forEach(k => {
+    if (!rc[k]) return;
     const head = sheet.getRange(1, rc[k]);
     // 人が書く列＝黄色、自動の列＝灰色（『連携』と同じ色分け）
-    head.setNote(REG_NOTES[k] || '').setFontWeight('bold').setBackground(REG_INPUT.indexOf(k) >= 0 || k === 'extName' || k === 'manual' || k === 'copy' ? '#fff2cc' : '#e6e6e6');
+    head.setNote(REG_NOTES[k] || '').setFontWeight('bold').setBackground(REG_INPUT.indexOf(k) >= 0 || k === 'extName' || k === 'manual' || k === 'copy' || k === 'del' ? '#fff2cc' : '#e6e6e6');
   });
   // 社内案件名（会社コード＋案件番号）と合計（White＋Color＋pts）は式。値はスクリプトから書かない
   const fm = regFormulas_(rc);
@@ -1528,6 +1540,8 @@ function formatRegSheet_(sheet, masters, codes) {
   sheet.getRange(2, rc.total, n - 1, 1).setFormulaR1C1(fm.total);
   sheet.getRange(2, rc.manual, n - 1, 1).setDataValidation(dv().requireCheckbox().build());
   sheet.getRange(2, rc.copy, n - 1, 1).setDataValidation(dv().requireCheckbox().build());
+  if (rc.del) sheet.getRange(2, rc.del, n - 1, 1).setDataValidation(dv().requireCheckbox().build());
+  if (rc.delReq) sheet.getRange(2, rc.delReq, n - 1, 1).setNumberFormat('yyyy-mm-dd hh:mm');
   if (codes && codes.length) sheet.getRange(2, rc.code, n - 1, 1).setDataValidation(list(codes, true));
   sheet.getRange(2, rc.number, n - 1, 1).setDataValidation(dv().requireNumberBetween(1, 99999).setAllowInvalid(false).build());
   sheet.getRange(2, rc.request, n - 1, 1).setDataValidation(list(REQUEST_OPTIONS, false));
@@ -1663,7 +1677,7 @@ function insertRegRows_(list, rc, rows) {
     keys.filter(k => rc[k]).forEach(k => list.getRange(r1, rc[k], n, 1).setValues(block.map(line => [line[rc[k] - 1]])));
     list.getRange(r1, rc.internal, n, 1).setFormulaR1C1(fm.internal);
     list.getRange(r1, rc.total, n, 1).setFormulaR1C1(fm.total);
-    ['manual', 'copy'].forEach(k => { if (rc[k]) list.getRange(r1, rc[k], n, 1).setDataValidation(box).setValues(idx.map(() => [false])); });
+    ['manual', 'copy', 'del'].forEach(k => { if (rc[k]) list.getRange(r1, rc[k], n, 1).setDataValidation(box).setValues(idx.map(() => [false])); });
     idx.forEach((i, j) => { at[i] = r1 + j; });
     // 先に書いた（下にある）行の番号は、差し込んだぶんだけずれる
     for (let i = 0; i < at.length; i++) if (at[i] && at[i] > a && idx.indexOf(i) < 0) at[i] += n;
@@ -2624,7 +2638,8 @@ function syncRegistrations_(now) {
   const appends = [];
   const due = [];
   let copied = 0, updated = 0, estimate = 0, missing = 0;
-  const setReg = (r, k, value) => { if (!sameCell_(data[r][rc[k] - 1], value)) { regUpdates.push({ row: r + 1, col: rc[k], value }); data[r][rc[k] - 1] = value; } };
+  const delReqs = []; // 新しく届いた削除依頼（Discord で知らせる）
+  const setReg = (r, k, value) => { if (!rc[k]) return; if (!sameCell_(data[r][rc[k] - 1], value)) { regUpdates.push({ row: r + 1, col: rc[k], value }); data[r][rc[k] - 1] = value; } };
 
   for (let r = 1; r < data.length; r++) {
     const get = (k) => data[r][rc[k] - 1];
@@ -2690,6 +2705,13 @@ function syncRegistrations_(now) {
       const useDn = curDn === '' || /YYMMDD$/.test(curDn) ? dn : curDn;
       putStaff('delivery', useDn);
       setReg(r, 'delivery', useDn);
+      // 削除依頼（エンジニアが入力シートでチェック）→『登録一覧』に依頼の日時。外したら消す
+      if (rc.delReq && ssc.delReq) {
+        const want = isChecked_(sv('delReq'));
+        const cur = row.delReq;
+        if (want && trimStr_(cur) === '') { setReg(r, 'delReq', now); delReqs.push(no + ' ' + regLabel_(row)); }
+        else if (!want && trimStr_(cur) !== '') setReg(r, 'delReq', '');
+      }
     }
     row.state = regState_(row);
     setReg(r, 'state', row.state);
@@ -2745,7 +2767,7 @@ function syncRegistrations_(now) {
       staff.insertRowsAfter(a, list.length);
       writeRows(a + 1, list);
       if (totalF && sc.total) staff.getRange(a + 1, sc.total, list.length, 1).setFormulaR1C1(totalF);
-      if (sc.translated) staff.getRange(a + 1, sc.translated, list.length, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build()).setValues(list.map(() => [false]));
+      ['translated', 'delReq'].forEach(k => { if (sc[k]) staff.getRange(a + 1, sc[k], list.length, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build()).setValues(list.map(() => [false])); });
     });
   }
 
@@ -2762,6 +2784,14 @@ function syncRegistrations_(now) {
       reminded = due.length;
       remindNote = 'Discord で催促 ' + reminded + '件';
     }
+  }
+  // 削除依頼（Discord）
+  if (delReqs.length) {
+    const url = PropertiesService.getScriptProperties().getProperty(PROP_DISCORD);
+    if (url && cfg.notify) {
+      try { sendDiscord_(url, delRequestMessage_(delReqs)); remindNote += (remindNote ? '・' : '') + '削除依頼 ' + delReqs.length + '件を Discord で知らせた'; }
+      catch (e) { remindNote += (remindNote ? '・' : '') + '削除依頼の Discord 送信エラー：' + String(e && e.message || e); }
+    } else remindNote += (remindNote ? '・' : '') + '削除依頼 ' + delReqs.length + '件';
   }
   // 『登録一覧』は列ごとにまとめて書く（変えた行の範囲だけ。1マスずつ書くと遅い）
   const byCol = new Map();
@@ -3061,6 +3091,16 @@ function onAdminEdit(e) {
         return;
       }
     }
+    // 「削除」にチェックした行 → チェックを外して確認の画面を出す（「削除する」を押すまで何も消さない）
+    if (rc.del && e.range.getColumn() <= rc.del && e.range.getLastColumn() >= rc.del) {
+      const delRows = [];
+      vals.forEach((v, i) => { if (isChecked_(v[rc.del - 1])) delRows.push({ r: r1 + i, v }); });
+      if (delRows.length) {
+        delRows.forEach(x => sheet.getRange(x.r, rc.del).setValue(false));
+        showDeleteDialog_(rc, delRows.map(x => x.v));
+        return;
+      }
+    }
     // 「今すぐ連携」にチェックした行（手動連携）
     const manualRows = [];
     vals.forEach((v, i) => { if (isChecked_(v[rc.manual - 1])) manualRows.push(r1 + i); });
@@ -3113,6 +3153,181 @@ function readRegInfo_(ss) {
     if (no) map.set(no, { assignee: trimStr_(v[rc.assignee - 1]), deadline: v[rc.deadline - 1], extName: rc.extName ? trimStr_(v[rc.extName - 1]) : '' });
   });
   return map;
+}
+
+// ============ 登録の削除（2026-11-05） ============
+// 管理者：『登録一覧』の「削除」にチェック → 確認の画面 →「削除する」で、『登録一覧』・エンジニア入力シート（3タブ）・『連携』の行を消し、
+// 工程図の作業（externalId が 取込キー:: で始まるタスク）を消す。工程図の削除は「消す予定」（スクリプトのプロパティ）に入れてすぐ試し、
+// できなければ（画面を押した人に工程図の権限が無いなど）次の自動実行で消す。
+// エンジニア：入力シートの「削除依頼」にチェック → 『登録一覧』の「削除依頼」に日時が入り、Discord で知らせる。消すのは管理者。
+const PROP_PENDING_DELETES = 'PENDING_DELETE_KEYS';
+/**
+ * 消してよいかの判定（純ロジック）。entries＝入力シートの行を古い順（制作済み→制作中→入力前）に並べたもの [{ no, base }]。
+ * 同じ案件・視点の n回目 は上から数えるので、あとの回が残る行を消すと回数がずれる → あとの回から消す。
+ * 戻り値 { ok: [{ no, key }], blocked: [{ no, reason }] }（key は入力シートに無い登録なら ''）
+ */
+function planRegDeletion_(entries, nos) {
+  const want = new Set(nos);
+  const rounds = new Map(); // base → [{ no, n }]
+  const where = new Map(); // no → { base, n }
+  (entries || []).forEach(e => {
+    if (!e.base) return;
+    const list = rounds.get(e.base) || [];
+    list.push({ no: e.no || '', n: list.length + 1 });
+    rounds.set(e.base, list);
+    if (e.no) where.set(e.no, { base: e.base, n: list.length });
+  });
+  const ok = [], blocked = [];
+  nos.forEach(no => {
+    const w = where.get(no);
+    if (!w) { ok.push({ no, key: '' }); return; }
+    const later = rounds.get(w.base).filter(x => x.n > w.n && !want.has(x.no));
+    if (later.length) blocked.push({ no, reason: 'あとの回（' + later.map(x => x.n + '回目' + (x.no ? '・' + x.no : '')).join('、') + '）があるので、先にそちらを消してください' });
+    else ok.push({ no, key: w.base + '::' + w.n });
+  });
+  return { ok, blocked };
+}
+/** 削除依頼の Discord 文（純ロジック） */
+function delRequestMessage_(lines) {
+  return '🗑 エンジニア入力シートで削除依頼がありました（' + lines.length + '件）。『登録一覧』で確かめて、消すなら「削除」にチェックしてください\n' + lines.map(l => '・' + l).join('\n');
+}
+const DELETE_DIALOG_SCRIPT = `
+function el(id) { return document.getElementById(id); }
+el("cancel").addEventListener("click", function () { google.script.host.close(); });
+el("go").addEventListener("click", function () {
+  var b = el("go");
+  b.disabled = true; el("cancel").disabled = true;
+  el("msg").className = ""; el("msg").textContent = "削除しています…";
+  google.script.run.withSuccessHandler(function (r) {
+    el("msg").className = r.ok ? "ok" : "ng"; el("msg").textContent = r.msg;
+    b.style.display = "none"; el("cancel").textContent = "閉じる"; el("cancel").disabled = false;
+  }).withFailureHandler(function (e) {
+    el("msg").className = "ng"; el("msg").textContent = (e && e.message) || String(e); b.disabled = false; el("cancel").disabled = false;
+  }).deleteRegistrations(JSON.parse(el("nos").value));
+});
+`;
+/** 削除の確認画面の HTML（純ロジック）。items＝[{ no, label, state, req }] */
+function deleteDialogHtml_(items) {
+  const esc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const nos = items.map(x => x.no);
+  return '<!doctype html><html><head><meta charset="utf-8"><style>' +
+    'body{font-family:sans-serif;font-size:13px;margin:0;padding:12px 16px;color:#222}ul{margin:6px 0 10px;padding-left:18px;max-height:180px;overflow:auto}' +
+    '.warn{background:#fdecea;border:1px solid #f5c2c0;border-radius:6px;padding:8px 10px;margin:8px 0}' +
+    '.row{display:flex;gap:8px;margin-top:12px}button{flex:1;padding:10px;font-size:14px;border-radius:6px;border:1px solid #ccc;background:#fff;cursor:pointer}' +
+    '#go{background:#d93025;border-color:#d93025;color:#fff}#go:disabled{opacity:.5}#msg{margin-top:10px;white-space:pre-wrap}.ok{color:#188038}.ng{color:#d93025}' +
+    '</style></head><body>' +
+    '<div>次の登録（' + items.length + '件）を削除します。</div><ul>' +
+    items.map(x => '<li>' + esc(x.no) + '　' + esc(x.label) + (x.state ? '（' + esc(x.state) + '）' : '') + (x.req ? '　<b>削除依頼あり</b>' : '') + '</li>').join('') + '</ul>' +
+    '<div class="warn">『登録一覧』・エンジニア入力シート・『連携』の行と、工程図の作業がまとめて消えます。元に戻せません。</div>' +
+    '<input type="hidden" id="nos" value="' + esc(JSON.stringify(nos)) + '">' +
+    '<div class="row"><button id="cancel">やめる</button><button id="go">削除する</button></div><div id="msg"></div>' +
+    '<script>' + DELETE_DIALOG_SCRIPT + '</script></body></html>';
+}
+function showDeleteDialog_(rc, rows) {
+  const items = [];
+  const skipped = [];
+  rows.forEach(v => {
+    const row = {};
+    Object.keys(rc).forEach(k => { row[k] = v[rc[k] - 1]; });
+    const no = trimStr_(row.no);
+    if (!no) { skipped.push(1); return; }
+    items.push({ no, label: regLabel_(row), state: trimStr_(row.state), req: trimStr_(row.delReq) !== '' });
+  });
+  if (!items.length) { toastOrLog_('登録No の無い行は消せません（その行はそのまま消してください）'); return; }
+  const html = HtmlService.createHtmlOutput(deleteDialogHtml_(items)).setWidth(460).setHeight(Math.min(520, 260 + items.length * 22));
+  SpreadsheetApp.getUi().showModalDialog(html, '登録の削除');
+}
+/** 確認画面の「削除する」。nos＝登録No の配列。戻り値 { ok, msg } */
+function deleteRegistrations(nos) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(20000)) return { ok: false, msg: 'ほかの処理が動いています。少し待ってから、もう一度「削除」にチェックしてください' };
+  try {
+    const cfg = readSettings_();
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const want = (nos || []).map(trimStr_).filter(Boolean);
+    if (!want.length) return { ok: false, msg: '消す登録がありません' };
+    // 入力シート（古い順）の行
+    const staffFile = SpreadsheetApp.openById(cfg.fileId);
+    const entries = [];
+    const rowsByNo = new Map(); // no → [{ sheet, row }]
+    staffTabNames_(cfg).map(name => staffFile.getSheetByName(name)).filter(Boolean).forEach(sheet => {
+      const hr = findStaffHeaderRow_(sheet);
+      if (hr < 0 || sheet.getLastRow() <= hr) return;
+      const sc = mapStaffColumns_(sheet.getRange(hr, 1, 1, sheet.getLastColumn()).getValues()[0]);
+      const w = Math.max.apply(null, Object.keys(sc).map(k => sc[k]));
+      sheet.getRange(hr + 1, 1, sheet.getLastRow() - hr, w).getValues().forEach((v, i) => {
+        const no = sc.regNo ? trimStr_(v[sc.regNo - 1]) : '';
+        const code = joinCode_(v[sc.code - 1], sc.number ? v[sc.number - 1] : '');
+        const cut = trimStr_(v[sc.cut - 1]);
+        const base = code && cut ? normCode_(code) + '::' + normCut_(viewpointNameOf_(cut, sc.pattern ? v[sc.pattern - 1] : '')) : '';
+        entries.push({ no, base });
+        if (no && want.indexOf(no) >= 0) { if (!rowsByNo.has(no)) rowsByNo.set(no, []); rowsByNo.get(no).push({ sheet, row: hr + 1 + i }); }
+      });
+    });
+    const plan = planRegDeletion_(entries, want);
+    const okNos = plan.ok.map(x => x.no);
+    const keys = plan.ok.map(x => x.key).filter(Boolean);
+    // 入力シートの行（シートごとに下から）
+    const bySheet = new Map();
+    okNos.forEach(no => (rowsByNo.get(no) || []).forEach(x => { if (!bySheet.has(x.sheet)) bySheet.set(x.sheet, []); bySheet.get(x.sheet).push(x.row); }));
+    bySheet.forEach((list, sheet) => list.sort((a, b) => b - a).forEach(r => sheet.deleteRow(r)));
+    // 『連携』の行
+    let linkDeleted = 0;
+    const link = ss.getSheetByName(SHEET.LINK);
+    if (keys.length && link && link.getLastRow() >= 2) {
+      const col = headerMap_(link);
+      const kv = link.getRange(2, col.key, link.getLastRow() - 1, 1).getValues();
+      const del = [];
+      kv.forEach((v, i) => { if (keys.indexOf(trimStr_(v[0])) >= 0) del.push(i + 2); });
+      del.sort((a, b) => b - a).forEach(r => link.deleteRow(r));
+      linkDeleted = del.length;
+    }
+    // 『登録一覧』の行
+    const reg = ss.getSheetByName(SHEET.REG);
+    if (reg && reg.getLastRow() >= 2 && okNos.length) {
+      const rc = regHeaderMap_(reg);
+      const nv = reg.getRange(2, rc.no, reg.getLastRow() - 1, 1).getValues();
+      const del = [];
+      nv.forEach((v, i) => { if (okNos.indexOf(trimStr_(v[0])) >= 0) del.push(i + 2); });
+      del.sort((a, b) => b - a).forEach(r => reg.deleteRow(r));
+    }
+    // 工程図の作業：消す予定に入れて、すぐ試す（できなければ次の自動実行で）
+    let fsNote = '';
+    if (keys.length) {
+      const props = PropertiesService.getScriptProperties();
+      const pending = parseJsonArray_(props.getProperty(PROP_PENDING_DELETES));
+      keys.forEach(k => { if (pending.indexOf(k) < 0) pending.push(k); });
+      props.setProperty(PROP_PENDING_DELETES, JSON.stringify(pending));
+      try { fsNote = '工程図の作業 ' + processPendingDeletes_(cfg) + '件を削除'; }
+      catch (e) { fsNote = '工程図の作業は次の自動実行（15分以内）で削除します'; console.log('deleteRegistrations: ' + (e && e.message || e)); }
+    }
+    const parts = [];
+    if (okNos.length) parts.push('削除しました：' + okNos.join('・') + '（入力シート ' + Array.from(bySheet.values()).reduce((a, l) => a + l.length, 0) + '行・連携 ' + linkDeleted + '行' + (fsNote ? '・' + fsNote : '') + '）');
+    plan.blocked.forEach(b => parts.push('✗ ' + b.no + '：' + b.reason));
+    return { ok: !plan.blocked.length, msg: parts.join('\n') };
+  } finally {
+    lock.releaseLock();
+  }
+}
+/** 消す予定の取込キーの作業を工程図から消す（deletedExternalIds からも外して、同じ視点をまた登録できるようにする）。消した件数 */
+function processPendingDeletes_(cfg) {
+  const props = PropertiesService.getScriptProperties();
+  const keys = parseJsonArray_(props.getProperty(PROP_PENDING_DELETES));
+  if (!keys.length) return 0;
+  const auth = getAuth_();
+  const hit = (ext) => keys.some(k => String(ext || '').indexOf(k + '::') === 0);
+  const tasks = fsListAll_(auth, cfg, 'workspaces/' + cfg.workspaceId + '/tasks');
+  let n = 0;
+  tasks.forEach(t => {
+    if (!t.id || !hit(t.externalId)) return;
+    fsFetch_(auth, fsBase_(cfg) + '/workspaces/' + cfg.workspaceId + '/tasks/' + encodeURIComponent(t.id), 'delete');
+    n++;
+  });
+  const deleted = parseJsonArray_(fsGetValueString_(auth, cfg, 'deletedExternalIds'));
+  const rest = deleted.filter(x => !hit(x));
+  if (rest.length !== deleted.length) fsPatch_(auth, cfg, 'workspaces/' + cfg.workspaceId + '/data/deletedExternalIds', { value: JSON.stringify(rest) }, ['value']);
+  props.deleteProperty(PROP_PENDING_DELETES);
+  return n;
 }
 
 // ============ Discord ============
@@ -3485,7 +3700,7 @@ function staffValidation_(key, choices) {
       return list(PATTERN_OPTIONS, true, 'パターン違いが無ければ空欄 / Không có phương án khác thì để trống');
     case 'white': case 'whiteBody': case 'whiteFurn': case 'color': case 'other':
       return list(HOUR_OPTIONS, true, '時間（h）/ Số giờ');
-    case 'translated':
+    case 'translated': case 'delReq':
       return dv().requireCheckbox().build();
     default:
       return null;
@@ -3560,6 +3775,8 @@ const STAFF_RULES_LINES = [
   ['', '作業の分け方：分けて作業できるときに書く（例 White＝躯体 3h／家具1 2h）。工程図ではこの作業ごとに分かれます。分けた時間の合計は White などの時間と同じにしてください',
     'Cách chia công việc: ghi khi có thể chia việc (VD: White = kết cấu 3h / nội thất 1 2h). 工程図 sẽ chia theo từng việc. Tổng giờ phải bằng số giờ Trắng…'],
   ['', '時間入力者：制作時間を決めた人の名前（時間入力日時・合計は自動で入ります）', 'Người nhập giờ: tên người quyết định số giờ (thời gian nhập và tổng tự động ghi)'],
+  ['', '削除依頼：登録の間違い・二重登録などで行を消してほしいときにチェック。管理者が確認して消します（行は自分で消さない）',
+    'Yêu cầu xóa: đánh dấu khi muốn xóa dòng (đăng ký nhầm, trùng…). Quản lý sẽ kiểm tra và xóa (không tự xóa dòng)'],
   ['h', '■ 納品名', '■ Tên file giao'],
   ['', '納品名は自動で入ります（社外案件名_社外視点名_YYMMDD）。YYMMDD を納品する日（例 261104）に書き換えて使ってください。',
     'Tên file giao được tự động điền (Tên dự án_Tên góc nhìn_YYMMDD). Khi dùng, hãy đổi YYMMDD thành ngày giao (VD: 261104).'],

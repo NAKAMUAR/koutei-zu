@@ -201,6 +201,7 @@ function fakeFirestore(customers) {
       if (/\/tasks$/.test(p)) return res(200, { documents: Object.keys(fs.docs).filter(k => k.indexOf(p + '/') === 0).map(k => ({ name: k, fields: fs.docs[k] })) });
       return fs.docs[p] ? res(200, { name: p, fields: fs.docs[p] }) : res(404, { error: 'NOT_FOUND' });
     }
+    if (method === 'delete') { delete fs.docs[p]; fs.patches.push({ path: p, deleted: true }); return res(200, {}); }
     const body = JSON.parse(opt.payload);
     const mask = url.indexOf('updateMask') >= 0;
     fs.docs[p] = mask ? Object.assign({}, fs.docs[p] || {}, body.fields) : body.fields;
@@ -258,7 +259,7 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
   };
   vm.createContext(ctx);
   const names = ['onAdminEdit', 'renderRegMessage_', 'onStaffEdit', 'syncRegistrationsNow', 'saveDiscordWebhook_', 'inNotifyHours_', 'isReminderDue_', 'calcDeadlineOf_', 'regState_', 'REG_STATE', 'quickSetup', 'createStaffInputTab', 'transferFromStaffSheet', 'autoRun', 'readSettings_', 'readStaffRows_', 'collectSourceRows_', 'findStaffHeaderRow_',
-    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'FORM_NO_COL', 'updateEntryForm', 'normRegNo_', 'formRegGroup_', 'formEnsureEditRow_', 'FORM_L', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_'];
+    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'FORM_NO_COL', 'updateEntryForm', 'normRegNo_', 'formRegGroup_', 'formEnsureEditRow_', 'FORM_L', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_', 'deleteRegistrations', 'planRegDeletion_', 'deleteDialogHtml_', 'DELETE_DIALOG_SCRIPT'];
   env.g = vm.runInContext(src + '\n;({' + names.join(',') + '})', ctx);
   return env;
 }
@@ -1397,6 +1398,87 @@ test('修正で枚数が増えたとき：足した EX1-C は『登録一覧』�
   const staff = tab.rows.slice(2).filter(r => r[sh.indexOf('登録No')]).map(r => r[sh.indexOf('登録No')] + ' ' + r[sh.indexOf('視点')] + (r[sh.indexOf('パターン')] ? '-' + r[sh.indexOf('パターン')] : ''));
   same(staff, ['R0001 EX1-A', 'R0002 EX1-B', 'R0005 EX1-C', 'R0003 IN1', 'R0004 EX1'], '入力シートでも A・B・C が並ぶ');
   assert.equal(tab.rows[4][sh.indexOf('納品名')], 'マンション_外観目線視点①_パターンC_YYMMDD');
+});
+
+test('登録の削除：エンジニアの削除依頼 →『登録一覧』に日時・Discord／管理者が「削除」→ 確認の画面 →『登録一覧』・入力シート・『連携』・工程図の作業をまとめて消す（あとの回がある行は消さない）', () => {
+  const admin = adminSheet();
+  const eng = engineerFile();
+  const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
+  env.g.quickSetup();
+  env.g.saveDiscordWebhook_('https://discord.com/api/webhooks/123/abc-DEF');
+  const reg = admin.getSheetByName('登録一覧');
+  const rh = reg.header();
+  assert.equal(rh[rh.indexOf('コピー') + 1], '削除'); assert.equal(rh[rh.indexOf('コピー') + 2], '削除依頼');
+  const R = (r, name) => reg.rows[r - 1][rh.indexOf(name)];
+  const setR = (r, name, v) => reg.set(r, rh.indexOf(name) + 1, v);
+  const put = (r, vals) => ['会社コード', '案件番号', '社外案件名', '新規or修正', '視点', 'サーバーリンク'].forEach((h, j) => setR(r, h, vals[j]));
+  put(2, ['RIC', 34, 'マンション', NEWR, 'EX1', LINK]);
+  put(3, ['RIC', 34, 'マンション', NEWR, 'EX2', LINK]);
+  env.g.syncRegistrationsNow();
+  same([R(2, '登録No'), R(3, '登録No')], ['R0001', 'R0002']);
+  const tab = inTab(eng);
+  const sh = tab.header(2).map(h => h.split('\n')[0]);
+  assert.ok(sh.includes('削除依頼'), '入力シートに削除依頼の列');
+  const rowOf = (no) => tab.rows.findIndex(v => v[sh.indexOf('登録No')] === no) + 1;
+  [['R0001', 3], ['R0002', 2]].forEach(([no, h]) => tab.set(rowOf(no), sh.indexOf('White躯体') + 1, h));
+  env.g.transferFromStaffSheet();
+  const { link, at } = linkAt(admin);
+  same([at(2, '取込キー'), at(3, '取込キー')], ['RIC34::EX1::1', 'RIC34::EX2::1']);
+  // 工程図にタスクがある（EX1 のカラーは工程図で消された記録あり）
+  const T = 'workspaces/liebe-asia-team/tasks/';
+  [['t1', 'RIC34::EX1::1::white'], ['t2', 'RIC34::EX2::1::white']].forEach(([id, ext]) => { env.fs.docs[T + id] = { id: { stringValue: id }, externalId: { stringValue: ext } }; });
+  env.fs.docs['workspaces/liebe-asia-team/data/deletedExternalIds'] = { value: { stringValue: JSON.stringify(['RIC34::EX1::1::color', 'OTHER::IN1::1::white']) } };
+
+  // エンジニアが削除依頼 → 『登録一覧』に日時・Discord で知らせる（1回だけ）。外すと消える
+  tab.set(rowOf('R0001'), sh.indexOf('削除依頼') + 1, true);
+  env.g.syncRegistrationsNow();
+  assert.ok(isDate(R(2, '削除依頼')));
+  const dm = env.discord[env.discord.length - 1];
+  assert.ok(dm.startsWith('🗑') && dm.includes('R0001 RIC.34'), dm);
+  const nd = env.discord.length;
+  env.g.syncRegistrationsNow();
+  assert.equal(env.discord.length, nd, '同じ依頼で何度も送らない');
+
+  // 管理者が「削除」にチェック → 確認の画面（まだ何も消さない）
+  env.dialogs.length = 0;
+  setR(2, '削除', true);
+  env.g.onAdminEdit({ range: reg.getRange(2, rh.indexOf('削除') + 1), source: admin });
+  assert.equal(env.dialogs.length, 1);
+  const html = env.dialogs[0].html;
+  assert.ok(html.includes('R0001') && html.includes('削除依頼あり') && html.includes('元に戻せません'), html.slice(0, 400));
+  new vm.Script(html.split('<script>')[1].split('</script>')[0]);
+  assert.ok(!html.split('<script>')[1].includes('\\'), '画面のスクリプトにバックスラッシュが無い');
+  assert.equal(R(2, '削除'), false, 'チェックは外れる');
+  assert.equal(R(2, '登録No'), 'R0001', '画面で押すまでは消さない');
+
+  // 「削除する」
+  const res = env.g.deleteRegistrations(['R0001']);
+  assert.equal(res.ok, true, res.msg);
+  assert.ok(res.msg.includes('削除しました：R0001') && res.msg.includes('工程図の作業 1件を削除'), res.msg);
+  assert.equal(R(2, '登録No'), 'R0002', '『登録一覧』から消える');
+  assert.equal(rowOf('R0001'), 0, '入力シートから消える');
+  assert.ok(rowOf('R0002') > 0);
+  same(link.rows.slice(1).map(v => v[link.header().indexOf('取込キー')]).filter(Boolean), ['RIC34::EX2::1'], '『連携』から消える');
+  same(env.fs.tasks().map(t => t.externalId), ['RIC34::EX2::1::white'], '工程図の作業も消える');
+  same(JSON.parse(env.fs.docs['workspaces/liebe-asia-team/data/deletedExternalIds'].value.stringValue), ['OTHER::IN1::1::white'], '消した記録からも外す（同じ視点をまた登録できる）');
+  assert.ok(!('PENDING_DELETE_KEYS' in env.props));
+
+  // 同じ視点の2回目がある行（1回目）は消さない。2つ一緒なら消せる
+  put(3, ['RIC', 34, 'マンション', FIXR, 'EX2', LINK]);
+  env.g.syncRegistrationsNow();
+  assert.equal(R(3, '登録No'), 'R0003');
+  const bad = env.g.deleteRegistrations(['R0002']);
+  assert.equal(bad.ok, false);
+  assert.ok(bad.msg.includes('あとの回（2回目・R0003）'), bad.msg);
+  assert.equal(R(2, '登録No'), 'R0002', '消していない');
+  const both = env.g.deleteRegistrations(['R0002', 'R0003']);
+  assert.equal(both.ok, true, both.msg);
+  same(reg.rows.slice(1).map(v => v[rh.indexOf('登録No')]).filter(Boolean), [], '『登録一覧』は空');
+  assert.equal(env.fs.tasks().length, 0);
+
+  // 判定だけ（純ロジック）：あとの回が残る行は消さない・入力シートに無い登録は消せる
+  same(plain(env.g.planRegDeletion_([{ no: 'R1', base: 'A::X' }, { no: '', base: 'A::X' }, { no: 'R3', base: 'B::Y' }], ['R1', 'R3', 'R9'])), {
+    ok: [{ no: 'R3', key: 'B::Y::1' }, { no: 'R9', key: '' }], blocked: [{ no: 'R1', reason: 'あとの回（2回目）があるので、先にそちらを消してください' }] });
 });
 
 console.log(`\n${passed} tests passed`);
