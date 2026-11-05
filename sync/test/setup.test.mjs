@@ -1661,4 +1661,44 @@ test('工程図の1日の読み取り上限（429）：戻るまで工程図を�
   same(env.fs.tasks().map(t => t.externalId).sort(), ['RIC34::EX1::1::color', 'RIC34::EX1::1::white']);
 });
 
+test('エンジニアが入力シート『入力前』で足した行（登録No なし）は『登録一覧』に取り込む（同じ視点の下・登録No を付ける・書きかけは待つ）', () => {
+  const admin = adminSheet();
+  const eng = engineerFile();
+  const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
+  env.g.quickSetup();
+  const reg = admin.getSheetByName('登録一覧');
+  const rh = reg.header();
+  const R = (r, name) => reg.rows[r - 1][rh.indexOf(name)];
+  const setR = (r, name, v) => reg.set(r, rh.indexOf(name) + 1, v);
+  const put = (r, vals) => ['会社コード', '案件番号', '社外案件名', '担当者', '新規or修正', '視点', 'パターン', 'サーバーリンク'].forEach((h, j) => setR(r, h, vals[j]));
+  put(2, ['REN', 94, 'ロイヤルパークス有明', '井戸澤様', FIXR, 'IN4', 'A', LINK]);
+  put(3, ['REN', 94, 'ロイヤルパークス有明', '井戸澤様', FIXR, 'IN4', 'B', LINK]);
+  put(4, ['RIC', 34, 'マンション', '', NEWR, 'EX1', '', LINK]);
+  env.g.syncRegistrationsNow();
+  same([R(2, '登録No'), R(3, '登録No'), R(4, '登録No')], ['R0001', 'R0002', 'R0003']);
+  const tab = inTab(eng);
+  const sh = tab.header(2).map(h => h.split('\n')[0]);
+  const C = (name) => sh.indexOf(name) + 1;
+  // エンジニアが B の下に C を足す（まだ書きかけ：時間も翻訳済みも無い）
+  const rowB = tab.rows.findIndex(v => v[C('登録No') - 1] === 'R0002') + 1;
+  const newRow = tab.getLastRow() + 1;
+  [['会社コード', 'REN'], ['案件番号', 94], ['社外案件名', 'ロイヤルパークス有明'], ['サーバーリンク', LINK], ['新規or修正', FIXR], ['視点', 'IN4'], ['パターン', 'C']].forEach(([h, v]) => tab.set(newRow, C(h), v));
+  env.g.syncRegistrationsNow();
+  assert.equal(tab.rows[newRow - 1][C('登録No') - 1] || '', '', '書きかけ（翻訳済みも時間も無い）は取り込まない');
+  tab.set(newRow, C('翻訳済み'), true); tab.set(newRow, C('Color'), 0.5);
+  const msg = env.g.syncRegistrationsNow();
+  assert.ok(msg.includes('入力シートで足した行を取り込み 1件'), msg);
+  assert.equal(tab.rows[newRow - 1][C('登録No') - 1], 'R0004', '入力シートの行に登録No');
+  assert.ok(rowB > 0);
+  // 『登録一覧』では INE4-B のすぐ下（RIC.34 の前）に入る。担当者は同じ案件の前の登録から
+  same([R(4, '登録No'), R(4, '視点'), R(4, 'パターン'), R(4, '担当者'), R(4, '管理者メモ'), R(5, '登録No')], ['R0004', 'IN4', 'C', '井戸澤様', 'エンジニア入力シートで追加', 'R0003']);
+  assert.equal(R(4, 'Color'), 0.5);
+  assert.equal(R(4, '状態'), '時間入力済み');
+  assert.equal(tab.rows[newRow - 1][C('納品名') - 1], 'ロイヤルパークス有明_内観目線視点④_パターンC_YYMMDD', '納品名も入る');
+  // 何度動かしても二重にしない
+  env.g.syncRegistrationsNow();
+  assert.equal(reg.rows.filter(v => v[rh.indexOf('パターン')] === 'C').length, 1);
+  assert.equal(tab.rows.filter(v => v[C('パターン') - 1] === 'C').length, 1);
+});
+
 console.log(`\n${passed} tests passed`);

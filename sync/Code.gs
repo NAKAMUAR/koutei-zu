@@ -2710,6 +2710,8 @@ function syncRegistrations_(now) {
   if (!reg) return { msg: '案件登録なし', copied: 0, updated: 0, estimate: 0, reminded: 0, missing: 0 };
   const rc = regHeaderMap_(reg);
   const intake = intakeEntries_(ss, reg, rc);
+  let adopted = 0;
+  try { adopted = adoptStaffRows_(ss, reg, rc, cfg, now); } catch (e) { console.log('adoptStaffRows_: ' + (e && e.message || e)); }
   if (reg.getLastRow() < 2) return { msg: intake.rejected ? '登録できない行 ' + intake.rejected + '件（足りない項目あり）' : '案件登録なし', copied: 0, updated: 0, estimate: 0, reminded: 0, missing: 0 };
   const data = reg.getDataRange().getValues();
 
@@ -2929,13 +2931,61 @@ function syncRegistrations_(now) {
     reg.getRange(r1, col, vals.length, 1).setValues(vals);
   });
 
-  const msg = (intake.moved ? '登録 ' + intake.moved + '件・' : '') + (intake.rejected ? '登録できない行 ' + intake.rejected + '件（足りない項目あり）・' : '') +
+  const msg = (adopted ? '入力シートで足した行を取り込み ' + adopted + '件・' : '') + (intake.moved ? '登録 ' + intake.moved + '件・' : '') + (intake.rejected ? '登録できない行 ' + intake.rejected + '件（足りない項目あり）・' : '') +
     '入力シートへ写した ' + copied + '件・直した ' + updated + '件・時間計算待ち ' + estimate + '件' +
     (missing ? '・入力シートに無い ' + missing + '件' : '') + (remindNote ? '・' + remindNote : '');
   console.log(msg);
   return { msg, copied, updated, estimate, reminded, missing };
 }
 
+/**
+ * エンジニアが入力シート『入力前』に自分で足した行（登録No が無い）を『登録一覧』に取り込む（申請なし。2026-11-05）。
+ * 会社コード・案件番号・視点・新規or修正がそろい、翻訳済み か 時間 が入った行だけ（書きかけの行は取り込まない：
+ * 取り込んだあとは『登録一覧』の値が入力シートへ写るので、書きかけだと上書きしてしまうため）。
+ * 同じ視点の行のすぐ下に入れ、登録No を入力シートの行にも書く。担当者は同じ案件の前の登録から。取り込んだ件数
+ */
+function adoptStaffRows_(ss, reg, rc, cfg, now) {
+  if (cfg.tabName !== STAFF_TAB_DEFAULT) return 0;
+  const file = SpreadsheetApp.openById(cfg.fileId);
+  const staff = file.getSheetByName(STAFF_TAB_DEFAULT);
+  if (!staff) return 0;
+  const hr = findStaffHeaderRow_(staff);
+  if (hr < 0 || staff.getLastRow() <= hr) return 0;
+  const sc = mapStaffColumns_(staff.getRange(hr, 1, 1, staff.getLastColumn()).getValues()[0]);
+  if (!sc.regNo || !sc.number) return 0;
+  const w = Math.max.apply(null, Object.keys(sc).map(k => sc[k]));
+  const vals = staff.getRange(hr + 1, 1, staff.getLastRow() - hr, w).getValues();
+  const at = (v, k) => (sc[k] ? v[sc[k] - 1] : '');
+  const picks = [];
+  vals.forEach((v, i) => {
+    if (trimStr_(at(v, 'regNo'))) return;
+    if (!trimStr_(at(v, 'code')) || !trimStr_(at(v, 'number')) || !trimStr_(at(v, 'cut')) || !trimStr_(at(v, 'request'))) return;
+    const hours = staffWhite_(v, sc) + toHours_(at(v, 'color')) + toHours_(at(v, 'other'));
+    if (!isChecked_(at(v, 'translated')) && hours <= 0) return;
+    picks.push({ row: hr + 1 + i, v });
+  });
+  if (!picks.length) return 0;
+  const regRows = formRegRows_(ss);
+  const next = nextRegNo_(regRows.map(r => { const a = []; a[rc.no - 1] = r.no; return a; }), rc, trashNos_(ss));
+  const rows = picks.map(p => {
+    const v = p.v;
+    const known = formKnownProject_(regRows, [], at(v, 'code'), at(v, 'number'));
+    return {
+      code: trimStr_(at(v, 'code')).toUpperCase(), number: at(v, 'number'), name: trimStr_(at(v, 'name')) || known.name, assignee: known.assignee,
+      request: trimStr_(at(v, 'request')), cut: trimStr_(at(v, 'cut')).toUpperCase(), pattern: normPattern_(at(v, 'pattern')), link: trimStr_(at(v, 'link')),
+      memo: 'エンジニア入力シートで追加',
+    };
+  });
+  const placed = insertRegRows_(reg, rc, rows);
+  placed.forEach((r, i) => {
+    const no = next();
+    reg.getRange(r, rc.no).setValue(no);
+    reg.getRange(r, rc.regDate).setValue(now);
+    reg.getRange(r, rc.copiedAt).setValue(now);
+    staff.getRange(picks[i].row, sc.regNo).setValue(no);
+  });
+  return placed.length;
+}
 /**
  * 入力シートの1行 → 翻訳済み・翻訳日時・合計・時間入力日時（純ロジック）。
  * 翻訳日時：チェックがあって日時が空なら now、チェックが外れたら空。時間入力日時：時間が入っていて空なら now、時間が全部空なら空。
@@ -4221,6 +4271,8 @@ const STAFF_RULES_LINES = [
   ['', '作業の分け方：分けて作業できるときに書く（例 White＝躯体 3h／家具1 2h）。工程図ではこの作業ごとに分かれます。分けた時間の合計は White などの時間と同じにしてください',
     'Cách chia công việc: ghi khi có thể chia việc (VD: White = kết cấu 3h / nội thất 1 2h). 工程図 sẽ chia theo từng việc. Tổng giờ phải bằng số giờ Trắng…'],
   ['', '時間入力者：制作時間を決めた人の名前（時間入力日時・合計は自動で入ります）', 'Người nhập giờ: tên người quyết định số giờ (thời gian nhập và tổng tự động ghi)'],
+  ['', '視点・パターンを足すとき：『入力前』のいちばん下（同じ視点の行の下でもよい）に、会社コード・案件番号・社外案件名・サーバーリンク・新規or修正・視点・パターンを書き、翻訳済み か 時間 を入れると、自動で管理者の一覧に載り登録No が付きます（申請は要りません）',
+    'Khi thêm góc nhìn / phương án: ghi vào dòng mới ở tab『入力前』(Mã công ty, Số dự án, Tên dự án, Link, Mới/Sửa, Góc nhìn, Phương án), rồi đánh dấu Đã dịch hoặc nhập giờ → tự động đăng ký và có Mã đăng ký (không cần xin phép)'],
   ['', '削除依頼：登録の間違い・二重登録などで行を消してほしいときにチェック。管理者が確認して消します（行は自分で消さない）',
     'Yêu cầu xóa: đánh dấu khi muốn xóa dòng (đăng ký nhầm, trùng…). Quản lý sẽ kiểm tra và xóa (không tự xóa dòng)'],
   ['h', '■ 納品名', '■ Tên file giao'],
