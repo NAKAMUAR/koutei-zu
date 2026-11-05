@@ -186,12 +186,15 @@ export default function App() {
 
     // 購読を先に開始（マイグレーションの完了を待たない＝ローディングで止まらない）
     unsubTasks = tasksStore.subscribe(
-      (arr) => {
+      (arr, meta) => {
         const migrated = arr.map(migrateTask);
         const normalized = normalizePriorities(migrated);
         setTasks(normalized);
         tasksRef.current = normalized;
-        setTasksLoaded(true);
+        // ブラウザに保存してある分（fromCache）は表示だけ。起動時の自動補正などが古い値で書き戻さないよう、
+        // 「読み込み完了」はサーバーとそろってから。オフラインのときは保存分で開く
+        const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+        if (!(meta && meta.fromCache) || offline) setTasksLoaded(true);
       },
       () => { setTasksLoaded(true); }
     );

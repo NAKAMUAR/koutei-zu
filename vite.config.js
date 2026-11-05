@@ -10,7 +10,9 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: {
-          firebase: ['firebase/app', 'firebase/firestore', 'firebase/auth'],
+          // Firestore（ブラウザ保存つき）が大きいので、認証とは別のファイルにする（500kB の警告を出さない）
+          firestore: ['firebase/firestore'],
+          firebase: ['firebase/app', 'firebase/auth'],
           react: ['react', 'react-dom'],
           icons: ['lucide-react'],
         },

@@ -5,8 +5,8 @@
 import { initializeApp } from 'firebase/app';
 import {
   initializeFirestore,
-  memoryLocalCache,
-  doc, setDoc, deleteDoc, onSnapshot,
+  memoryLocalCache, persistentLocalCache, persistentMultipleTabManager,
+  doc, setDoc, deleteDoc, onSnapshot, getDocFromServer, getDocFromCache,
   collection, writeBatch, getDocs,
   query, orderBy, startAt, endAt, documentId,
 } from 'firebase/firestore';
@@ -38,11 +38,24 @@ const OWNER_EMAILS = ['kei.n412@gmail.com'];
 const app = initializeApp(firebaseConfig);
 // このプロジェクトの Firestore データベース名は "default"（カッコなし、Enterprise edition）。
 // デフォルトの "(default)" を参照しても見つからないため、明示的に指定する。
-// メモリキャッシュ：端末間で表示が乖離しないよう、毎回サーバから取得する。
+// キャッシュ（2026-11-05〜）：読んだデータをこのブラウザに残す（上限 10MB・ブラウザを閉じても残る）。
+//  - オフラインでも最後に読んだ内容で開け、入力はつながったときに送られる
+//  - 開き直したときは変わった分だけ読む（Firestore の1日の読み取り上限を使いすぎないため）
+// 表示が古いまま書き戻さないよう、タスクの「読み込み完了」はサーバーとそろってから（tasksStore.subscribe の fromCache）。
+// IndexedDB が使えないブラウザ（シークレットウィンドウの一部など）では、これまでどおりメモリだけ。
 const DATABASE_ID = 'default';
-const db = initializeFirestore(app, {
-  localCache: memoryLocalCache(),
-}, DATABASE_ID);
+const CACHE_BYTES = 10 * 1024 * 1024;
+function makeDb() {
+  try {
+    return initializeFirestore(app, {
+      localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager(), cacheSizeBytes: CACHE_BYTES }),
+    }, DATABASE_ID);
+  } catch (e) {
+    console.warn('このブラウザには保存できないため、メモリだけで動きます:', e);
+    return initializeFirestore(app, { localCache: memoryLocalCache() }, DATABASE_ID);
+  }
+}
+const db = makeDb();
 const auth = getAuth(app);
 const googleProvider = new GoogleAuthProvider();
 
@@ -128,10 +141,11 @@ export const memberList = {
 export const tasksStore = {
   subscribe(callback, onError) {
     const colRef = collection(db, 'workspaces', WORKSPACE_ID, 'tasks');
-    return onSnapshot(colRef, (snap) => {
+    // includeMetadataChanges：保存分（fromCache）→ サーバーとそろった、の切り替わりも受け取る
+    return onSnapshot(colRef, { includeMetadataChanges: true }, (snap) => {
       const arr = [];
       snap.forEach(d => arr.push(d.data()));
-      callback(arr);
+      callback(arr, { fromCache: snap.metadata.fromCache });
     }, (err) => {
       console.error('タスク購読エラー:', err);
       if (onError) onError(err);
@@ -178,15 +192,20 @@ export const tasksStore = {
 
 // Claude.ai の window.storage と同じ形のAPI
 export const storage = {
+  // まずサーバーから読む（読んで書き戻す処理が、保存してある古い値を使わないように）。
+  // オフライン・時間切れ（8秒）のときは、このブラウザに保存してある値を使う
   async get(key) {
-    return new Promise((resolve) => {
-      const ref = doc(db, 'workspaces', WORKSPACE_ID, 'data', key);
-      const unsub = onSnapshot(ref, (snap) => {
-        unsub();
-        if (!snap.exists()) resolve(null);
-        else resolve({ key, value: snap.data().value, updatedAt: snap.data().updatedAt || null, shared: true });
-      }, () => resolve(null));
-    });
+    const ref = doc(db, 'workspaces', WORKSPACE_ID, 'data', key);
+    const wrap = (snap) => (snap && snap.exists() ? { key, value: snap.data().value, updatedAt: snap.data().updatedAt || null, shared: true } : null);
+    try {
+      const snap = await Promise.race([
+        getDocFromServer(ref),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 8000)),
+      ]);
+      return wrap(snap);
+    } catch (e) {
+      try { return wrap(await getDocFromCache(ref)); } catch (e2) { return null; }
+    }
   },
   async set(key, value) {
     const ref = doc(db, 'workspaces', WORKSPACE_ID, 'data', key);
