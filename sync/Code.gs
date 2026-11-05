@@ -2967,12 +2967,19 @@ function adoptStaffRows_(ss, reg, rc, cfg, now) {
   if (!picks.length) return 0;
   const regRows = formRegRows_(ss);
   const next = nextRegNo_(regRows.map(r => { const a = []; a[rc.no - 1] = r.no; return a; }), rc, trashNos_(ss));
+  const views = readMasters_(ss).views;
   const rows = picks.map(p => {
     const v = p.v;
     const known = formKnownProject_(regRows, [], at(v, 'code'), at(v, 'number'));
+    // 納期は同じ案件のいちばん新しい登録から
+    const key = normCode_(joinCode_(at(v, 'code'), at(v, 'number')));
+    const same = regRows.filter(r => normCode_(joinCode_(r.code, r.number)) === key && trimStr_(r.deadline) !== '').sort((a, b) => (regGroupKey_(a) < regGroupKey_(b) ? 1 : -1));
+    const cut = formSplitCut_(trimStr_(at(v, 'cut')));
+    const pattern = normPattern_(at(v, 'pattern'));
     return {
       code: trimStr_(at(v, 'code')).toUpperCase(), number: at(v, 'number'), name: trimStr_(at(v, 'name')) || known.name, assignee: known.assignee,
-      request: trimStr_(at(v, 'request')), cut: trimStr_(at(v, 'cut')).toUpperCase(), pattern: normPattern_(at(v, 'pattern')), link: trimStr_(at(v, 'link')),
+      request: trimStr_(at(v, 'request')), cut: trimStr_(at(v, 'cut')).toUpperCase(), pattern, link: trimStr_(at(v, 'link')),
+      deadline: same.length ? same[0].deadline : '', extName: formAutoExt_(cut.code, cut.room, pattern, views),
       memo: 'エンジニア入力シートで追加',
     };
   });

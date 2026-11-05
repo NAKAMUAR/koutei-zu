@@ -1672,6 +1672,7 @@ test('エンジニアが入力シート『入力前』で足した行（登録No
   const setR = (r, name, v) => reg.set(r, rh.indexOf(name) + 1, v);
   const put = (r, vals) => ['会社コード', '案件番号', '社外案件名', '担当者', '新規or修正', '視点', 'パターン', 'サーバーリンク'].forEach((h, j) => setR(r, h, vals[j]));
   put(2, ['REN', 94, 'ロイヤルパークス有明', '井戸澤様', FIXR, 'IN4', 'A', LINK]);
+  setR(2, '納期', new Date(2030, 0, 20));
   put(3, ['REN', 94, 'ロイヤルパークス有明', '井戸澤様', FIXR, 'IN4', 'B', LINK]);
   put(4, ['RIC', 34, 'マンション', '', NEWR, 'EX1', '', LINK]);
   env.g.syncRegistrationsNow();
@@ -1693,6 +1694,8 @@ test('エンジニアが入力シート『入力前』で足した行（登録No
   // 『登録一覧』では INE4-B のすぐ下（RIC.34 の前）に入る。担当者は同じ案件の前の登録から
   same([R(4, '登録No'), R(4, '視点'), R(4, 'パターン'), R(4, '担当者'), R(4, '管理者メモ'), R(5, '登録No')], ['R0004', 'IN4', 'C', '井戸澤様', 'エンジニア入力シートで追加', 'R0003']);
   assert.equal(R(4, 'Color'), 0.5);
+  assert.equal(R(4, '社外視点名'), '内観目線視点④_パターンC', '社外視点名も入る');
+  assert.equal(String(R(4, '納期')), String(new Date(2030, 0, 20)), '納期は同じ案件の前の登録から');
   assert.equal(R(4, '状態'), '時間入力済み');
   assert.equal(tab.rows[newRow - 1][C('納品名') - 1], 'ロイヤルパークス有明_内観目線視点④_パターンC_YYMMDD', '納品名も入る');
   // 何度動かしても二重にしない
