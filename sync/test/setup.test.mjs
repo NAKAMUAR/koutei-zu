@@ -89,7 +89,7 @@ class FakeSheet {
   setFrozenRows(n) { this.frozen = n; return this; }
   setColumnWidth() { return this; }
   setRowHeight() { return this; }
-  hideColumns(c) { this.hidden = (this.hidden || []).concat([c]); return this; }
+  hideColumns(c, n) { this.hidden = (this.hidden || []).concat(Array.from({ length: n || 1 }, (_, i) => c + i)); return this; }
   clearContents() { this.rows = []; return this; }
   clear() { this.rows = []; this.notes = {}; this.validations = []; this.formats = []; return this; }
   header(row = 1) { return (this.rows[row - 1] || []).map(v => (empty(v) ? '' : String(v))); }
@@ -1485,11 +1485,37 @@ test('登録の削除：エンジニアの削除依頼 →『登録一覧』に�
   same(env.fs.tasks().map(t => t.externalId), ['RIC34::EX2::1::white'], '工程図の作業も消える');
   same(JSON.parse(env.fs.docs['workspaces/liebe-asia-team/data/deletedExternalIds'].value.stringValue), ['OTHER::IN1::1::white'], '消した記録からも外す（同じ視点をまた登録できる）');
   assert.ok(!('PENDING_DELETE_KEYS' in env.props));
+  // 『削除済み』に残る（JSON の列は隠す）
+  const tr = admin.getSheetByName('削除済み');
+  assert.ok(tr, '『削除済み』タブができる');
+  const th = tr.header();
+  const T2 = (name) => tr.rows[1][th.indexOf(name)];
+  same([T2('登録No'), T2('社内案件名'), T2('視点'), T2('状態'), T2('取込キー')], ['R0001', 'RIC.34', 'EX1', '削除済み', 'RIC34::EX1::1']);
+  assert.equal(JSON.parse(T2('工程図')).length, 1, '消した工程図の作業も残る');
+  assert.equal(JSON.parse(T2('入力シート')).tab, '入力前');
+  assert.ok((tr.hidden || []).includes(th.indexOf('登録一覧') + 1));
+  // 登録No は使い回さない（R0001 は削除済みにある）
+  // 「復帰」にチェック → 元に戻る（工程図の作業も）
+  tr.set(2, th.indexOf('復帰') + 1, true);
+  env.g.onAdminEdit({ range: tr.getRange(2, th.indexOf('復帰') + 1), source: admin });
+  assert.equal(T2('状態'), '復帰済み', T2('結果'));
+  assert.equal(T2('復帰'), false);
+  assert.ok(String(T2('結果')).includes('工程図の作業 1件'), T2('結果'));
+  assert.ok(rowOf('R0001') > 0, '入力シートに戻る');
+  assert.equal(tab.rows[rowOf('R0001') - 1][sh.indexOf('削除依頼')], false, '削除依頼は外して戻す');
+  assert.ok(reg.rows.some(v => v[rh.indexOf('登録No')] === 'R0001'), '『登録一覧』に戻る');
+  assert.ok(link.rows.some(v => v[link.header().indexOf('取込キー')] === 'RIC34::EX1::1'), '『連携』に戻る');
+  same(env.fs.tasks().map(t => t.externalId).sort(), ['RIC34::EX1::1::white', 'RIC34::EX2::1::white'], '工程図の作業も戻る');
+  env.g.syncRegistrationsNow();
+  assert.equal(R(3, '登録No'), 'R0001');
+  // 戻したものは、もう一度消して片付ける（以下のテストのため）
+  assert.equal(env.g.deleteRegistrations(['R0001']).ok, true);
+  assert.equal(tr.rows[2][th.indexOf('登録No')], 'R0001', '2回目の削除も残る');
 
   // 同じ視点の2回目がある行（1回目）は消さない。2つ一緒なら消せる
   put(3, ['RIC', 34, 'マンション', FIXR, 'EX2', LINK]);
   env.g.syncRegistrationsNow();
-  assert.equal(R(3, '登録No'), 'R0003');
+  assert.equal(R(3, '登録No'), 'R0003', '削除済みの R0001 も含めた次の番号');
   const bad = env.g.deleteRegistrations(['R0002']);
   assert.equal(bad.ok, false);
   assert.ok(bad.msg.includes('あとの回（2回目・R0003）'), bad.msg);

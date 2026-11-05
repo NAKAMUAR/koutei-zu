@@ -77,6 +77,7 @@ src/
   - 2026-11-04 から、エンジニア入力シートは3タブ：『入力前』（`STAFF_TAB_DEFAULT`。翻訳・時間を入れる）→『制作中』（『連携』で登録済み・更新ありになった行を自動で移す）→『制作済み』（工程図のその視点・回のタスクがすべて `status: 'done'` になった行を移す）。移動は `autoRun` の最後の `moveStaffRows_`。取込キーの n回目 が変わらないよう、読む順は 制作済み→制作中→入力前（`staffTabNames_`）。White は「White躯体」「White家具」の2列（工程図へは合計を1つの White で送る。`staffWhite_`）。黄色の列＝エンジニア・通訳が入力、灰色＝管理者・自動。納品名は `deliveryNameOf_`（社外案件名_社外視点名_YYMMDD。YYMMDD のままなら作り直す）。
   - 2026-11-05 から、登録の削除：管理者は『登録一覧』の「削除」にチェック → 確認の画面 → `deleteRegistrations` が『登録一覧』・入力シート3タブ・『連携』の行と工程図の作業（externalId が 取込キー:: で始まる）を消す（工程図は `PENDING_DELETE_KEYS` に入れてすぐ試し、だめなら次の `autoRun` で。あとの回が残る行は消さない `planRegDeletion_`）。エンジニアは入力シートの「削除依頼」にチェック → 『登録一覧』の「削除依頼」に日時＋Discord。
   - 2026-11-05 から、『登録一覧』の White・Color・pts は管理者も書ける（編集の瞬間に入力シートの White躯体・Color・pts へ `pushRegHoursToStaff_`。入力シートに時間があれば入力シートが正）。Firestore の読み取りを減らすため、制作中→制作済みの確認は1時間に1回・制作中の案件のタスクだけ `runQuery` で読む（`fsTasksByProjects_`）。
+  - 2026-11-05 から、削除した登録は管理者用シートの『削除済み』タブに残る（`trashAppend_`・工程図の作業は `trashAttachTasks_`）。「復帰」にチェックで元に戻す（`restoreDeleted_`。同じ視点のあとの回が増えていたら戻さない）。登録No は削除済みの番号も使い回さない。
   - 実際のシートへのスクリプトの設置・初期設定・動作確認の引き継ぎは `docs/09_引き継ぎ_連携スクリプトの設置.md`（設置と承認は kei.n412@gmail.com で行う）。
   - 工程図への書き込みは Firestore REST API。認証は実行アカウント（Firebase オーナー）の OAuth トークン、または サービスアカウント鍵（スクリプトプロパティに保存。**鍵ファイルはリポジトリに入れない**、`.gitignore` 済み）。Firestore ルールはこの経路に適用されないので、ルール変更は不要。
   - 同期で作るタスクは `externalId`（`案件コード::視点名(パターン込み)::n回目::ステップ種類`）を持ち、`stepRoundType`（新規→initial・追加→add・修正/変更→fix）と `viewpointNameExternal`（外観視点①_パターンA）を自動で入れる。アプリ側で削除すると `data/deletedExternalIds` に記録され、再送信しても復活しない（App.jsx の既存挙動）。
