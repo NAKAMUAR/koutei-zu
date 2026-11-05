@@ -245,8 +245,8 @@ const VIEW_VI = {
   EXP: 'ghép ảnh ngoại thất', INP: 'ghép ảnh nội thất', P: 'ghép ảnh', VR: 'VR', VIDEO: 'video',
 };
 // 視点のプルダウンに並べる番号の数（IN は多いので 20、ほかは 10。リストに無い番号も入力はできる）
-const VIEW_OPTION_COUNT = { IN: 20 };
-const VIEW_OPTION_COUNT_DEFAULT = 10;
+const VIEW_OPTION_COUNT = {};
+const VIEW_OPTION_COUNT_DEFAULT = 20; // 2026-11-05：どの区分も20視点まで（前は IN だけ20・ほかは10）
 // 時間：0〜3 は 0.25 刻み、3.5〜10 は 0.5 刻み、11〜40 は 1 刻み（リストに無い数字も入力はできる。2026-11-05 に 3 までを 0.25 刻みに）
 const HOUR_OPTIONS = Array.from({ length: 13 }, (_, i) => String(i / 4))
   .concat(Array.from({ length: 14 }, (_, i) => String(3.5 + i / 2)))
@@ -2152,6 +2152,15 @@ function ensureFormSheet_(ss, masters, rebuild) {
   let sheet = ss.getSheetByName(SHEET.FORM);
   if (sheet && !rebuild && trimStr_(sheet.getRange(1, 1).getValue()) === FORM_TITLE) {
     formEnsureEditRow_(sheet);
+    // ① のチェックボックスを今の数（VIEW_OPTION_COUNT）にそろえる（前の版は10までの区分がある）
+    try {
+      const m0 = formMap_(sheet);
+      m0.grid.forEach(g => {
+        const n = Math.min(VIEW_OPTION_COUNT[g.keyword] || VIEW_OPTION_COUNT_DEFAULT, FORM_COLS - 1);
+        const cur = sheet.getRange(g.row, 2, 1, n).getValues()[0].map(v => isChecked_(v));
+        sheet.getRange(g.row, 2, 1, n).setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build()).setBackground(null).setValues([cur]);
+      });
+    } catch (e) { console.log('formGrid: ' + (e && e.message || e)); }
     // ② の W・X（時間）の見出しとプルダウンを今の選択肢にそろえる
     const listRow = sheet.getRange(1, 1, Math.min(sheet.getMaxRows(), 300), 1).getValues().map(r => trimStr_(r[0])).indexOf(FORM_L.list) + 1;
     if (listRow && sheet.getMaxColumns() >= FORM_LC.color) formHoursHeader_(sheet, listRow);

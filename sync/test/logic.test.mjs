@@ -181,7 +181,8 @@ test('管理者が直した視点マスタで、入力シートの視点コー�
 test('視点マスタ → エンジニアの視点プルダウン・記入ルールの視点コード表・『連携』の区分／種類の選択肢', () => {
   const opts = g.viewCodeOptions_(userViews);
   ['EX1', 'EX10', 'IN20', 'EXCB1', 'INCB1', 'EXM1', 'EXP1', 'INP1', 'VR1', 'VIDEO1'].forEach(c => assert.ok(opts.includes(c), c));
-  ['P1', 'INCM1', 'IN21', 'EX11'].forEach(c => assert.ok(!opts.includes(c), c + ' は出さない'));
+  ['P1', 'INCM1', 'IN21', 'EX21'].forEach(c => assert.ok(!opts.includes(c), c + ' は出さない'));
+  ['EX11', 'EX20', 'EXCB20'].forEach(c => assert.ok(opts.includes(c), c + '（どの区分も20まで）'));
   opts.forEach(c => assert.ok(g.judgeViewpoint_(c, '', userViews).kind, c + ' の種類が判定できる'));
   const lines = g.viewCodeLines_(userViews);
   assert.equal(lines[0], 'EX1 → 外観目線視点① ／ ngoại thất – góc nhìn ngang tầm mắt ①');
