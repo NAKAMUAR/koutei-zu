@@ -1480,14 +1480,14 @@ const REG_OPTIONAL = ['extName', 'del', 'delReq'];
 const REG_INPUT = ['code', 'number', 'name', 'assignee', 'request', 'cut', 'pattern', 'link', 'deadline', 'order', 'memo', 'toInterp'];
 // エンジニア入力シートへ写す列（案件登録 → 入力シート。担当者・納期・注文書・管理者メモは写さない）
 const REG_COPY = ['code', 'number', 'name', 'link', 'request', 'cut', 'pattern', 'toInterp'];
-const REG_STATE = { DRAFT: '記入中', TRANSLATE: '翻訳待ち', ESTIMATE: '時間計算待ち', DONE: '時間入力済み', MISSING: '入力シートに無い' };
+const REG_STATE = { DRAFT: '記入中', TRANSLATE: '翻訳待ち', ESTIMATE: '時間計算待ち', DONE: '時間入力済み', MISSING: '入力シートに無い', DELETED: '削除済み' };
 const REG_NOTES = {
   no: '自動で入る番号。入力シートの「登録No」と同じ。消すと次の自動実行でもう一度写す（入力シートに同じ行が2つできるので注意）',
   state: '自動：記入中（会社コード・案件番号・視点・新規or修正のどれかが空）／翻訳待ち／時間計算待ち（翻訳済み・時間が空）／時間入力済み／入力シートに無い（入力シートで行が消された）',
   code: 'REN・RIC など（『会社マスタ』の英字）', number: '案件の番号（数字）', name: 'お客様の案件名（工程図の案件名）',
   internal: '自動：会社コード＋案件番号（RIC.34）', assignee: '工程図の担当者（入力シートには写さない）',
   request: 'その視点の初回は「新規」、2回目以降は「修正」', cut: 'EX1・IN2 など（『視点マスタ』のキーワード＋番号）', pattern: 'パターン違いがあれば A・B…',
-  del: 'この登録を消すときにチェック → 確認の画面で「削除する」。『登録一覧』・エンジニア入力シート・『連携』の行と、工程図の作業をまとめて消す（元に戻せない）。同じ視点のあとの回（2回目など）がある行は、あとの回から消す',
+  del: 'この登録を消すときにチェック → 確認の画面で「削除する」。エンジニア入力シートの行と工程図の作業を消す（この行はチェックが付いたまま残り、状態が「削除済み」になる）。チェックを外すと元に戻る。同じ視点のあとの回（2回目など）がある行は、あとの回から消す',
   delReq: '自動：エンジニアが入力シートで「削除依頼」にチェックした日時。確かめて消すなら「削除」にチェック。消さないならエンジニアにチェックを外してもらう',
   extName: 'お客様向けの視点名（工程図の社外視点名に入る）。空なら『視点マスタ』から自動（外観目線視点①_パターンA など）。『案件入力』タブで書き換えた名前が入る',
   link: '保存先フォルダのリンク', deadline: '納期（入力シートには写さない。工程図の納期に入る）', order: '注文書のファイルのリンクなど（入力シートには写さない）',
@@ -2321,7 +2321,7 @@ function formClear_(sheet, m, views) {
 /** 前回の視点（純ロジック）：『登録一覧』の行 [{code, number, cut, pattern, extName, regDate, name, link, assignee}] から、同じ案件のいちばん新しい登録日の行 */
 function formPrevious_(regRows, code, number) {
   const key = normCode_(joinCode_(code, number));
-  const mine = (regRows || []).filter(r => trimStr_(r.cut) && normCode_(joinCode_(r.code, r.number)) === key);
+  const mine = (regRows || []).filter(r => trimStr_(r.cut) && trimStr_(r.state) !== REG_STATE.DELETED && normCode_(joinCode_(r.code, r.number)) === key);
   if (!mine.length) return null;
   let best = '';
   mine.forEach(r => { const g = regGroupKey_(r); if (g > best) best = g; });
@@ -2411,7 +2411,7 @@ function formRegGroup_(regRows, no) {
   const hit = (regRows || []).find(r => trimStr_(r.no) === no);
   if (!hit) return null;
   const g = regGroupKey_(hit);
-  const rows = regRows.filter(r => trimStr_(r.no) && trimStr_(r.cut) && regGroupKey_(r) === g);
+  const rows = regRows.filter(r => trimStr_(r.no) && trimStr_(r.cut) && trimStr_(r.state) !== REG_STATE.DELETED && regGroupKey_(r) === g);
   return { hit, rows, date: g.split('::')[1] || '' };
 }
 /** 「登録Noで直す」：その登録をフォームに呼び出す（空にしたら新規に戻す） */
@@ -2723,6 +2723,7 @@ function syncRegistrations_(now) {
     if (REG_INPUT.every(k => trimStr_(get(k)) === '')) continue;
     const row = {};
     Object.keys(rc).forEach(k => { row[k] = get(k); });
+    if (trimStr_(row.state) === REG_STATE.DELETED) continue; // 削除済み（入力シートの行と工程図の作業は消してある）
     if (trimStr_(row.regDate) === '') setReg(r, 'regDate', now); // 書き始めた日時（登録Noが付いたときに直す）
     const draft = regState_(row) === REG_STATE.DRAFT;
     if (draft) { setReg(r, 'state', REG_STATE.DRAFT); continue; }
@@ -2815,7 +2816,7 @@ function syncRegistrations_(now) {
   for (let r = 1; r < data.length; r++) {
     const row = {};
     Object.keys(rc).forEach(k => { row[k] = data[r][rc[k] - 1]; });
-    if (regState_(row) === REG_STATE.DRAFT) continue;
+    if (regState_(row) === REG_STATE.DRAFT || trimStr_(row.state) === REG_STATE.DELETED) continue;
     const k = regGroupKey_(row);
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push({ r, row });
@@ -3181,13 +3182,23 @@ function onAdminEdit(e) {
       try { pushRegHoursToStaff_(vals.map(v => ({ no: v[rc.no - 1], white: v[rc.white - 1], color: v[rc.color - 1], other: v[rc.other - 1] }))); }
       catch (err) { console.log('pushRegHoursToStaff_: ' + (err && err.message || err)); }
     }
-    // 「削除」にチェックした行 → チェックを外して確認の画面を出す（「削除する」を押すまで何も消さない）
+    // 「削除」：チェックを入れた行 → 確認の画面（「削除する」で入力シートの行と工程図の作業だけ消す。この行はチェックが付いたまま残る）
+    //        削除済みの行のチェックを外した → 元に戻す（入力シートの行と工程図の作業を『削除済み』から戻す）
     if (rc.del && e.range.getColumn() <= rc.del && e.range.getLastColumn() >= rc.del) {
-      const delRows = [];
-      vals.forEach((v, i) => { if (isChecked_(v[rc.del - 1])) delRows.push({ r: r1 + i, v }); });
-      if (delRows.length) {
-        delRows.forEach(x => sheet.getRange(x.r, rc.del).setValue(false));
-        showDeleteDialog_(rc, delRows.map(x => x.v));
+      const delRows = [], backRows = [];
+      vals.forEach((v, i) => {
+        const deleted = trimStr_(v[rc.state - 1]) === REG_STATE.DELETED;
+        if (isChecked_(v[rc.del - 1]) && !deleted) delRows.push({ r: r1 + i, v });
+        if (!isChecked_(v[rc.del - 1]) && deleted) backRows.push(trimStr_(v[rc.no - 1]));
+      });
+      if (delRows.length) { showDeleteDialog_(rc, delRows.map(x => x.v)); return; }
+      if (backRows.length) {
+        const ss0 = e.source || SpreadsheetApp.getActiveSpreadsheet();
+        backRows.filter(Boolean).forEach(no => {
+          let res;
+          try { res = restoreByNo_(ss0, no); } catch (err) { res = { ok: false, msg: String(err && err.message || err) }; }
+          toastOrLog_((res.ok ? '元に戻しました：' : '戻せません：') + no + ' ' + res.msg);
+        });
         return;
       }
     }
@@ -3314,10 +3325,17 @@ function delRequestMessage_(lines) {
 }
 const DELETE_DIALOG_SCRIPT = `
 function el(id) { return document.getElementById(id); }
-el("cancel").addEventListener("click", function () { google.script.host.close(); });
+var DONE = false;
+el("cancel").addEventListener("click", function () {
+  if (DONE) { google.script.host.close(); return; }
+  el("cancel").disabled = true; el("go").disabled = true;
+  google.script.run.withSuccessHandler(function () { google.script.host.close(); }).withFailureHandler(function () { google.script.host.close(); })
+    .cancelDeleteRegistrations(JSON.parse(el("nos").value));
+});
 el("go").addEventListener("click", function () {
   var b = el("go");
   b.disabled = true; el("cancel").disabled = true;
+  DONE = true;
   el("msg").className = ""; el("msg").textContent = "削除しています…";
   google.script.run.withSuccessHandler(function (r) {
     el("msg").className = r.ok ? "ok" : "ng"; el("msg").textContent = r.msg;
@@ -3339,7 +3357,7 @@ function deleteDialogHtml_(items) {
     '</style></head><body>' +
     '<div>次の登録（' + items.length + '件）を削除します。</div><ul>' +
     items.map(x => '<li>' + esc(x.no) + '　' + esc(x.label) + (x.state ? '（' + esc(x.state) + '）' : '') + (x.req ? '　<b>削除依頼あり</b>' : '') + '</li>').join('') + '</ul>' +
-    '<div class="warn">『登録一覧』・エンジニア入力シート・『連携』の行と、工程図の作業がまとめて消えます。元に戻せません。</div>' +
+    '<div class="warn">エンジニア入力シートの行と、工程図の作業が消えます。この管理者用シートの行は「削除」にチェックが付いたまま残ります（状態は「削除済み」）。<br>戻すときは「削除」のチェックを外すと、消した行と作業が元に戻ります。</div>' +
     '<input type="hidden" id="nos" value="' + esc(JSON.stringify(nos)) + '">' +
     '<div class="row"><button id="cancel">やめる</button><button id="go">削除する</button></div><div id="msg"></div>' +
     '<script>' + DELETE_DIALOG_SCRIPT + '</script></body></html>';
@@ -3417,25 +3435,23 @@ function deleteRegistrations(nos) {
     const bySheet = new Map();
     okNos.forEach(no => (rowsByNo.get(no) || []).forEach(x => { if (!bySheet.has(x.sheet)) bySheet.set(x.sheet, []); bySheet.get(x.sheet).push(x.row); }));
     bySheet.forEach((list, sheet) => list.sort((a, b) => b - a).forEach(r => sheet.deleteRow(r)));
-    // 『連携』の行
-    let linkDeleted = 0;
+    // 管理者用シート（『登録一覧』・『連携』）の行は消さない：『登録一覧』は「削除」にチェック・状態「削除済み」、『連携』は「対象外」にする
+    const reg = ss.getSheetByName(SHEET.REG);
+    if (reg && reg.getLastRow() >= 2) {
+      const rc = regHeaderMap_(reg);
+      const nv = reg.getRange(2, rc.no, reg.getLastRow() - 1, 1).getValues();
+      nv.forEach((v, i) => {
+        const no = trimStr_(v[0]);
+        if (okNos.indexOf(no) >= 0) { reg.getRange(i + 2, rc.state).setValue(REG_STATE.DELETED); if (rc.del) reg.getRange(i + 2, rc.del).setValue(true); }
+        else if (want.indexOf(no) >= 0 && rc.del) reg.getRange(i + 2, rc.del).setValue(false); // 消せなかった行はチェックを外す
+      });
+    }
     const link = ss.getSheetByName(SHEET.LINK);
+    let linkMarked = 0;
     if (keys.length && link && link.getLastRow() >= 2) {
       const col = headerMap_(link);
       const kv = link.getRange(2, col.key, link.getLastRow() - 1, 1).getValues();
-      const del = [];
-      kv.forEach((v, i) => { if (keys.indexOf(trimStr_(v[0])) >= 0) del.push(i + 2); });
-      del.sort((a, b) => b - a).forEach(r => link.deleteRow(r));
-      linkDeleted = del.length;
-    }
-    // 『登録一覧』の行
-    const reg = ss.getSheetByName(SHEET.REG);
-    if (reg && reg.getLastRow() >= 2 && okNos.length) {
-      const rc = regHeaderMap_(reg);
-      const nv = reg.getRange(2, rc.no, reg.getLastRow() - 1, 1).getValues();
-      const del = [];
-      nv.forEach((v, i) => { if (okNos.indexOf(trimStr_(v[0])) >= 0) del.push(i + 2); });
-      del.sort((a, b) => b - a).forEach(r => reg.deleteRow(r));
+      kv.forEach((v, i) => { if (keys.indexOf(trimStr_(v[0])) >= 0) { link.getRange(i + 2, col.exclude).setValue(true); link.getRange(i + 2, col.result).setValue('削除済み（『登録一覧』で削除）'); linkMarked++; } });
     }
     // 工程図の作業：消す予定に入れて、すぐ試す（できなければ次の自動実行で）
     let fsNote = '';
@@ -3448,12 +3464,21 @@ function deleteRegistrations(nos) {
       catch (e) { fsNote = '工程図の作業は次の自動実行（15分以内）で削除します'; console.log('deleteRegistrations: ' + (e && e.message || e)); }
     }
     const parts = [];
-    if (okNos.length) parts.push('削除しました：' + okNos.join('・') + '（入力シート ' + Array.from(bySheet.values()).reduce((a, l) => a + l.length, 0) + '行・連携 ' + linkDeleted + '行' + (fsNote ? '・' + fsNote : '') + '）');
+    if (okNos.length) parts.push('削除しました：' + okNos.join('・') + '（入力シート ' + Array.from(bySheet.values()).reduce((a, l) => a + l.length, 0) + '行' + (fsNote ? '・' + fsNote : '') + '）。管理者用シートの行は「削除済み」として残しました');
     plan.blocked.forEach(b => parts.push('✗ ' + b.no + '：' + b.reason));
     return { ok: !plan.blocked.length, msg: parts.join('\n') };
   } finally {
     lock.releaseLock();
   }
+}
+/** 確認の画面で「やめる」：チェックを外す */
+function cancelDeleteRegistrations(nos) {
+  const reg = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET.REG);
+  if (!reg || reg.getLastRow() < 2) return;
+  const rc = regHeaderMap_(reg);
+  if (!rc.del) return;
+  const vals = reg.getRange(2, 1, reg.getLastRow() - 1, reg.getLastColumn()).getValues();
+  vals.forEach((v, i) => { if ((nos || []).indexOf(trimStr_(v[rc.no - 1])) >= 0 && trimStr_(v[rc.state - 1]) !== REG_STATE.DELETED) reg.getRange(i + 2, rc.del).setValue(false); });
 }
 /** 消す予定の取込キーの作業を工程図から消す（deletedExternalIds からも外して、同じ視点をまた登録できるようにする）。消した件数 */
 function processPendingDeletes_(cfg) {
@@ -3551,8 +3576,16 @@ function restoreDeleted_(ss, row) {
   const cfg = readSettings_();
   const reg = ss.getSheetByName(SHEET.REG);
   const rc = regHeaderMap_(reg);
-  // 同じ登録No が『登録一覧』にある・同じ視点のあとの回がもうある → 戻さない（回数がずれるため）
-  if (reg.getLastRow() >= 2 && reg.getRange(2, rc.no, reg.getLastRow() - 1, 1).getValues().some(x => trimStr_(x[0]) === no)) return { ok: false, msg: '登録No ' + no + ' が『登録一覧』にもうあります' };
+  // 『登録一覧』に同じ登録No の行がある：「削除済み」の行ならその行を戻す（2026-11-05 から管理者用シートの行は消さない）。ほかの状態なら戻さない
+  let regRow = 0;
+  if (reg.getLastRow() >= 2) {
+    const rv = reg.getRange(2, 1, reg.getLastRow() - 1, reg.getLastColumn()).getValues();
+    for (let i = 0; i < rv.length; i++) {
+      if (trimStr_(rv[i][rc.no - 1]) !== no) continue;
+      if (trimStr_(rv[i][rc.state - 1]) !== REG_STATE.DELETED) return { ok: false, msg: '登録No ' + no + ' が『登録一覧』にもうあります' };
+      regRow = i + 2;
+    }
+  }
   const file = SpreadsheetApp.openById(cfg.fileId);
   if (staffB && key) {
     const base = key.replace(/::\d+$/, ''), n = parseInt(key.split('::').pop(), 10);
@@ -3585,8 +3618,11 @@ function restoreDeleted_(ss, row) {
     if (f && sc.total) s.getRange(r, sc.total).setFormulaR1C1(f);
     ['translated', 'delReq'].forEach(k => { if (sc[k]) s.getRange(r, sc[k]).setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build()); });
   }
-  // 『登録一覧』：中身がある最後の行の下へ
-  if (regB) {
+  // 『登録一覧』：残っている行は「削除」を外すだけ（状態は次の同期で入る）。無ければ中身がある最後の行の下へ
+  if (regRow) {
+    reg.getRange(regRow, rc.state).setValue('');
+    if (rc.del) reg.getRange(regRow, rc.del).setValue(false);
+  } else if (regB) {
     const lv = reg.getLastRow() >= 2 ? reg.getRange(2, 1, reg.getLastRow() - 1, reg.getLastColumn()).getValues() : [];
     let last = 1;
     lv.forEach((x, i) => { if (trimStr_(x[rc.no - 1]) !== '' || REG_INPUT.some(k => trimStr_(x[rc[k] - 1]) !== '')) last = i + 2; });
@@ -3601,8 +3637,19 @@ function restoreDeleted_(ss, row) {
   }
   // 『連携』：いちばん下へ
   let linkNote = '';
-  if (linkB) {
-    const link = ss.getSheetByName(SHEET.LINK);
+  const linkS = ss.getSheetByName(SHEET.LINK);
+  let linkRow = 0;
+  if (key && linkS && linkS.getLastRow() >= 2) {
+    const c0 = headerMap_(linkS);
+    linkS.getRange(2, c0.key, linkS.getLastRow() - 1, 1).getValues().forEach((x, i) => { if (trimStr_(x[0]) === key) linkRow = i + 2; });
+    if (linkRow) {
+      linkS.getRange(linkRow, c0.exclude).setValue(linkB ? cellFromJson_(linkB.exclude) || false : false);
+      linkS.getRange(linkRow, c0.result).setValue(linkB ? cellFromJson_(linkB.result) || '' : '');
+      linkNote = '・連携の「対象外」を外した';
+    }
+  }
+  if (linkB && !linkRow) {
+    const link = linkS;
     const col = headerMap_(link);
     const o = {};
     Object.keys(linkB).forEach(k => { o[k] = cellFromJson_(linkB[k]); });
@@ -3633,6 +3680,35 @@ function restoreDeleted_(ss, row) {
   sh.getRange(row, TRASH_C.state).setValue(TRASH_STATE.RESTORED);
   sh.getRange(row, TRASH_C.result).setValue(msg);
   return { ok: !/戻せませんでした/.test(fsNote), msg };
+}
+/** 『登録一覧』で「削除」のチェックを外したとき：その登録No のいちばん新しい削除済みのバックアップから戻す */
+function restoreByNo_(ss, no) {
+  const sh = ss.getSheetByName(SHEET.TRASH);
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(20000)) return { ok: false, msg: 'ほかの処理が動いています' };
+  try {
+    if (sh && sh.getLastRow() >= 2) {
+      const vals = sh.getRange(2, 1, sh.getLastRow() - 1, TRASH_H.length).getValues();
+      for (let i = vals.length - 1; i >= 0; i--) {
+        if (trimStr_(vals[i][TRASH_C.no - 1]) === no && vals[i][TRASH_C.state - 1] === TRASH_STATE.DELETED) {
+          const res = restoreDeleted_(ss, i + 2);
+          if (!res.ok) markRegDeleted_(ss, no);
+          return res;
+        }
+      }
+    }
+    markRegDeleted_(ss, no);
+    return { ok: false, msg: '『削除済み』にバックアップが見つかりません' };
+  } finally {
+    lock.releaseLock();
+  }
+}
+/** 戻せなかったとき：「削除」のチェックを付け直す */
+function markRegDeleted_(ss, no) {
+  const reg = ss.getSheetByName(SHEET.REG);
+  const rc = regHeaderMap_(reg);
+  if (!rc.del || reg.getLastRow() < 2) return;
+  reg.getRange(2, rc.no, reg.getLastRow() - 1, 1).getValues().forEach((x, i) => { if (trimStr_(x[0]) === no) reg.getRange(i + 2, rc.del).setValue(true); });
 }
 /** 『削除済み』を編集したとき：「復帰」にチェックした行を戻し、チェックを外す */
 function onTrashEdit_(ss, sheet, range) {

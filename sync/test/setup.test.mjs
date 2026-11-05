@@ -278,7 +278,7 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
   };
   vm.createContext(ctx);
   const names = ['onAdminEdit', 'renderRegMessage_', 'onStaffEdit', 'syncRegistrationsNow', 'saveDiscordWebhook_', 'inNotifyHours_', 'isReminderDue_', 'calcDeadlineOf_', 'regState_', 'REG_STATE', 'quickSetup', 'createStaffInputTab', 'transferFromStaffSheet', 'autoRun', 'readSettings_', 'readStaffRows_', 'collectSourceRows_', 'findStaffHeaderRow_',
-    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'FORM_NO_COL', 'updateEntryForm', 'normRegNo_', 'formRegGroup_', 'formEnsureEditRow_', 'FORM_L', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_', 'deleteRegistrations', 'planRegDeletion_', 'deleteDialogHtml_', 'DELETE_DIALOG_SCRIPT'];
+    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'FORM_NO_COL', 'updateEntryForm', 'normRegNo_', 'formRegGroup_', 'formEnsureEditRow_', 'FORM_L', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_', 'deleteRegistrations', 'cancelDeleteRegistrations', 'planRegDeletion_', 'deleteDialogHtml_', 'DELETE_DIALOG_SCRIPT'];
   env.g = vm.runInContext(src + '\n;({' + names.join(',') + '})', ctx);
   return env;
 }
@@ -1424,7 +1424,7 @@ test('修正で枚数が増えたとき：足した EX1-C は『登録一覧』�
   assert.equal(tab.rows[4][sh.indexOf('納品名')], 'マンション_外観目線視点①_パターンC_YYMMDD');
 });
 
-test('登録の削除：エンジニアの削除依頼 →『登録一覧』に日時・Discord／管理者が「削除」→ 確認の画面 →『登録一覧』・入力シート・『連携』・工程図の作業をまとめて消す（あとの回がある行は消さない）', () => {
+test('登録の削除：エンジニアの削除依頼 →『登録一覧』に日時・Discord／管理者が「削除」→ 確認の画面 → 入力シートの行と工程図の作業だけ消す（管理者用シートはチェックが残る）→ チェックを外すと戻る（あとの回がある行は消さない）', () => {
   const admin = adminSheet();
   const eng = engineerFile();
   const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
@@ -1463,30 +1463,40 @@ test('登録の削除：エンジニアの削除依頼 →『登録一覧』に�
   env.g.syncRegistrationsNow();
   assert.equal(env.discord.length, nd, '同じ依頼で何度も送らない');
 
-  // 管理者が「削除」にチェック → 確認の画面（まだ何も消さない）
+  // 管理者が「削除」にチェック → 確認の画面（まだ何も消さない。チェックは付いたまま）
   env.dialogs.length = 0;
   setR(2, '削除', true);
   env.g.onAdminEdit({ range: reg.getRange(2, rh.indexOf('削除') + 1), source: admin });
   assert.equal(env.dialogs.length, 1);
   const html = env.dialogs[0].html;
-  assert.ok(html.includes('R0001') && html.includes('削除依頼あり') && html.includes('元に戻せません'), html.slice(0, 400));
+  assert.ok(html.includes('R0001') && html.includes('削除依頼あり') && html.includes('チェックを外すと'), html.slice(0, 600));
   new vm.Script(html.split('<script>')[1].split('</script>')[0]);
   assert.ok(!html.split('<script>')[1].includes('\\'), '画面のスクリプトにバックスラッシュが無い');
-  assert.equal(R(2, '削除'), false, 'チェックは外れる');
-  assert.equal(R(2, '登録No'), 'R0001', '画面で押すまでは消さない');
+  assert.equal(R(2, '削除'), true);
+  // 「やめる」→ チェックが外れる
+  env.g.cancelDeleteRegistrations(['R0001']);
+  assert.equal(R(2, '削除'), false);
+  setR(2, '削除', true);
 
-  // 「削除する」
+  // 「削除する」：入力シートの行と工程図の作業だけ消す。管理者用シートの行は残る（登録一覧は削除済み・連携は対象外）
   const res = env.g.deleteRegistrations(['R0001']);
   assert.equal(res.ok, true, res.msg);
   assert.ok(res.msg.includes('削除しました：R0001') && res.msg.includes('工程図の作業 1件を削除'), res.msg);
-  assert.equal(R(2, '登録No'), 'R0002', '『登録一覧』から消える');
+  same([R(2, '登録No'), R(2, '状態'), R(2, '削除')], ['R0001', '削除済み', true], '『登録一覧』の行は残る');
   assert.equal(rowOf('R0001'), 0, '入力シートから消える');
   assert.ok(rowOf('R0002') > 0);
-  same(link.rows.slice(1).map(v => v[link.header().indexOf('取込キー')]).filter(Boolean), ['RIC34::EX2::1'], '『連携』から消える');
-  same(env.fs.tasks().map(t => t.externalId), ['RIC34::EX2::1::white'], '工程図の作業も消える');
+  const lh = link.header();
+  const lrow = link.rows.find(v => v[lh.indexOf('取込キー')] === 'RIC34::EX1::1');
+  assert.ok(lrow, '『連携』の行は残る');
+  assert.equal(lrow[lh.indexOf('対象外')], true, '対象外にする');
+  same(env.fs.tasks().map(t => t.externalId), ['RIC34::EX2::1::white'], '工程図の作業は消える');
   same(JSON.parse(env.fs.docs['workspaces/liebe-asia-team/data/deletedExternalIds'].value.stringValue), ['OTHER::IN1::1::white'], '消した記録からも外す（同じ視点をまた登録できる）');
   assert.ok(!('PENDING_DELETE_KEYS' in env.props));
-  // 『削除済み』に残る（JSON の列は隠す）
+  env.g.syncRegistrationsNow();
+  assert.equal(R(2, '状態'), '削除済み', '同期しても削除済みのまま（入力シートへ写し直さない）');
+  assert.equal(rowOf('R0001'), 0);
+  env.g.transferFromStaffSheet();
+  // 『削除済み』にバックアップ（JSON の列は隠す）
   const tr = admin.getSheetByName('削除済み');
   assert.ok(tr, '『削除済み』タブができる');
   const th = tr.header();
@@ -1495,35 +1505,42 @@ test('登録の削除：エンジニアの削除依頼 →『登録一覧』に�
   assert.equal(JSON.parse(T2('工程図')).length, 1, '消した工程図の作業も残る');
   assert.equal(JSON.parse(T2('入力シート')).tab, '入力前');
   assert.ok((tr.hidden || []).includes(th.indexOf('登録一覧') + 1));
-  // 登録No は使い回さない（R0001 は削除済みにある）
-  // 「復帰」にチェック → 元に戻る（工程図の作業も）
-  tr.set(2, th.indexOf('復帰') + 1, true);
-  env.g.onAdminEdit({ range: tr.getRange(2, th.indexOf('復帰') + 1), source: admin });
+  // 「削除」のチェックを外す → 元に戻る（入力シートの行・工程図の作業・連携の対象外）
+  setR(2, '削除', false);
+  env.g.onAdminEdit({ range: reg.getRange(2, rh.indexOf('削除') + 1), source: admin });
   assert.equal(T2('状態'), '復帰済み', T2('結果'));
-  assert.equal(T2('復帰'), false);
   assert.ok(String(T2('結果')).includes('工程図の作業 1件'), T2('結果'));
   assert.ok(rowOf('R0001') > 0, '入力シートに戻る');
   assert.equal(tab.rows[rowOf('R0001') - 1][sh.indexOf('削除依頼')], false, '削除依頼は外して戻す');
-  assert.ok(reg.rows.some(v => v[rh.indexOf('登録No')] === 'R0001'), '『登録一覧』に戻る');
-  assert.ok(link.rows.some(v => v[link.header().indexOf('取込キー')] === 'RIC34::EX1::1'), '『連携』に戻る');
+  assert.equal(reg.rows.filter(v => v[rh.indexOf('登録No')] === 'R0001').length, 1, '『登録一覧』の行は増えない');
+  assert.equal(link.rows.find(v => v[lh.indexOf('取込キー')] === 'RIC34::EX1::1')[lh.indexOf('対象外')], false, '対象外を外す');
   same(env.fs.tasks().map(t => t.externalId).sort(), ['RIC34::EX1::1::white', 'RIC34::EX2::1::white'], '工程図の作業も戻る');
   env.g.syncRegistrationsNow();
-  assert.equal(R(3, '登録No'), 'R0001');
-  // 戻したものは、もう一度消して片付ける（以下のテストのため）
+  assert.notEqual(R(2, '状態'), '削除済み');
+  // 『削除済み』の「復帰」からも戻せる：もう一度消して、復帰にチェック
+  setR(2, '削除', true);
   assert.equal(env.g.deleteRegistrations(['R0001']).ok, true);
   assert.equal(tr.rows[2][th.indexOf('登録No')], 'R0001', '2回目の削除も残る');
+  tr.set(3, th.indexOf('復帰') + 1, true);
+  env.g.onAdminEdit({ range: tr.getRange(3, th.indexOf('復帰') + 1), source: admin });
+  assert.equal(tr.rows[2][th.indexOf('状態')], '復帰済み', tr.rows[2][th.indexOf('結果')]);
+  same([R(2, '削除'), R(2, '状態')], [false, ''], '『登録一覧』の削除も外れる');
+  assert.ok(rowOf('R0001') > 0);
+  // 片付け：もう一度消す
+  assert.equal(env.g.deleteRegistrations(['R0001']).ok, true);
 
-  // 同じ視点の2回目がある行（1回目）は消さない。2つ一緒なら消せる
-  put(3, ['RIC', 34, 'マンション', FIXR, 'EX2', LINK]);
+  // 同じ視点の2回目がある行（1回目）は消さない（チェックも外す）。2つ一緒なら消せる
+  put(4, ['RIC', 34, 'マンション', FIXR, 'EX2', LINK]);
   env.g.syncRegistrationsNow();
-  assert.equal(R(3, '登録No'), 'R0003', '削除済みの R0001 も含めた次の番号');
+  assert.equal(R(4, '登録No'), 'R0003');
+  setR(3, '削除', true);
   const bad = env.g.deleteRegistrations(['R0002']);
   assert.equal(bad.ok, false);
   assert.ok(bad.msg.includes('あとの回（2回目・R0003）'), bad.msg);
-  assert.equal(R(2, '登録No'), 'R0002', '消していない');
+  same([R(3, '状態') !== '削除済み', R(3, '削除')], [true, false], '消していない・チェックは外れる');
   const both = env.g.deleteRegistrations(['R0002', 'R0003']);
   assert.equal(both.ok, true, both.msg);
-  same(reg.rows.slice(1).map(v => v[rh.indexOf('登録No')]).filter(Boolean), [], '『登録一覧』は空');
+  same(reg.rows.slice(1).filter(v => v[rh.indexOf('登録No')]).map(v => v[rh.indexOf('状態')]), ['削除済み', '削除済み', '削除済み']);
   assert.equal(env.fs.tasks().length, 0);
 
   // 判定だけ（純ロジック）：あとの回が残る行は消さない・入力シートに無い登録は消せる
