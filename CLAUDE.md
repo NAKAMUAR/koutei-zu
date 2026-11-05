@@ -68,6 +68,7 @@ src/
 - ESLint 9（フラット構成 `eslint.config.js`）。`npm run check` で実行、`npm run build` の前に自動実行される
 - バックエンド: Firebase（Cloud Firestore + Auth）。`storage`（`workspaces/{id}/data/{key}` の汎用KV）、`tasksStore`（タスク1件=1ドキュメント）、`billingStore`（帳票1件=1ドキュメント、`data/bill_{id}`）、`salesStore`（売上1か月=1ドキュメント、`data/sales_{YYYY-MM}`）、`legacyStore`（過去分の保管庫。1か月=1ドキュメント、`data/legacy_{YYYY-MM}`。毎回読み込む tasks とは別で、「過去分の取り込み」画面を開いたときだけ読む。旧「Project Schedule」・LINE の過去分はここに入れ、tasks には入れない）
   - 帳票・売上の旧1ドキュメント集中保存（`billingDocuments` / `salesLedger`）は起動時に自動移行され、旧データは `*_backup` キーへ退避される
+- **Firestore は無料枠（1日の読み取り上限）で運用。** 上限に達すると SDK は黙って再試行し続け、画面が「読み込み中」で止まる。`src/components/LoadingScreen.jsx` が10秒後に REST で確かめ、上限なら「日本時間17時ごろ（夏時間は16時ごろ）に戻る」と案内する。全タスクを何度も読む処理（特に連携スクリプトの15分ごとの自動実行）を増やさないこと（2026-11-05 に上限到達）
 - ホスティング: GitHub Pages（`gh-pages` で `dist/` を公開）
 - Firestore ルール（`firestore.rules`）: オーナー（ルール内に直書き）＋ `data/allowedEmails` の emails 配列に載っているメンバーのみ読み書き可。メンバーはアプリの設定パネル（メンバー管理）で編集（リストの書き換えはオーナーのみ）。**ルールを変更したら Firebase コンソールへ手動デプロイが必要。**
 - スプレッドシート連携（`sync/`）: エンジニアが書く「工程図 エンジニア入力シート」の『入力シート』タブ（会社コード・案件番号・社外案件名・サーバーリンク・新規or修正・視点・パターン・White/Color/pts・メモ。見出し・プルダウン・『記入ルール/説明』は日本語／ベトナム語の併記）→ 管理者だけが見る別ファイル「工程図連携」シート（転記した日を「入力日」に記録。案件マスタ・会社マスタ・視点マスタで自動判定、人が補正）→ 工程図、という2段階。15分ごとのトリガー（`autoRun`）で転記し、自動判定がすべてできた「未送信」の行は15分待ってから自動登録（「要確認」「更新あり」は人が「工程図へ」にチェックしたら登録）。会社マスタにあって工程図の顧客マスタ（`data/customerMaster`）に無い会社は自動で追加する。`sync/Code.gs`（Apps Script）と `sync/appsscript.json` を「工程図連携」シートに貼り付けて使う。手順・仕様は `docs/08_スプレッドシート連携.md`。

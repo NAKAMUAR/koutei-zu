@@ -17,6 +17,7 @@ import { MemberSettings } from './components/MemberSettings.jsx';
 import { MaintenanceSettings } from './components/MaintenanceSettings.jsx';
 import { InputView } from './views/InputView.jsx';
 import { EndPromptModal } from './components/modals.jsx';
+import { LoadingScreen } from './components/LoadingScreen.jsx';
 // 毎日使う「案件」タブ以外のビューは、開いたときに読み込む（初回ロードを軽くする）
 const MessageView = lazy(() => import('./views/MessageView.jsx').then(m => ({ default: m.MessageView })));
 const DoneView = lazy(() => import('./views/DoneView.jsx').then(m => ({ default: m.DoneView })));
@@ -2232,13 +2233,7 @@ export default function App() {
   const fontJP = "'Noto Sans JP', sans-serif";
   const fontDisplay = "'Shippori Mincho', serif";
 
-  if (!auth.ready) {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', background: colors.bg, fontFamily: fontJP, color: colors.textMute }}>
-        読み込み中...
-      </div>
-    );
-  }
+  if (!auth.ready) return <LoadingScreen colors={colors} fontJP={fontJP} />;
 
   if (!auth.allowed) {
     return (
@@ -2274,13 +2269,7 @@ export default function App() {
     );
   }
 
-  if (loading) {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', background: colors.bg, fontFamily: fontJP, color: colors.textMute }}>
-        読み込み中...
-      </div>
-    );
-  }
+  if (loading) return <LoadingScreen colors={colors} fontJP={fontJP} />;
 
   // ビュー・カード類が useApp()（src/appContext.js）で参照する共有データ＋タスク操作ハンドラ。
   // コンポーネント固有の値（form・group・task など）は従来どおり props で渡す。

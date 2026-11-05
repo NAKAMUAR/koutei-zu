@@ -46,6 +46,22 @@ const db = initializeFirestore(app, {
 const auth = getAuth(app);
 const googleProvider = new GoogleAuthProvider();
 
+// 読み込みが長いときの原因調べ。Firestore SDK は「1日の読み取り上限（無料枠）」に達しても
+// エラーを返さず再試行し続ける（＝画面が「読み込み中」のまま止まる）ため、REST で1回だけ問い合わせて確かめる。
+// 戻り値: 'quota'（上限に達している） / 'ok' / 'unknown'（通信できない等）
+export async function checkFirestoreQuota() {
+  try {
+    const headers = {};
+    if (auth.currentUser) headers.Authorization = 'Bearer ' + await auth.currentUser.getIdToken();
+    const url = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${DATABASE_ID}/documents/workspaces/${WORKSPACE_ID}/data/allowedEmails`;
+    const res = await fetch(url, { headers });
+    if (res.status === 429) return 'quota';
+    return 'ok';
+  } catch (e) {
+    return 'unknown';
+  }
+}
+
 export async function signIn() {
   return signInWithPopup(auth, googleProvider);
 }
