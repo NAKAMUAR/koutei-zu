@@ -18,6 +18,7 @@ import { MaintenanceSettings } from './components/MaintenanceSettings.jsx';
 import { InputView } from './views/InputView.jsx';
 import { EndPromptModal } from './components/modals.jsx';
 import { LoadingScreen } from './components/LoadingScreen.jsx';
+import { useScheduleSnapshot } from './lib/useScheduleSnapshot.js';
 // 毎日使う「案件」タブ以外のビューは、開いたときに読み込む（初回ロードを軽くする）
 const MessageView = lazy(() => import('./views/MessageView.jsx').then(m => ({ default: m.MessageView })));
 const DoneView = lazy(() => import('./views/DoneView.jsx').then(m => ({ default: m.DoneView })));
@@ -2138,6 +2139,8 @@ export default function App() {
     syncWorkdays(settings);     // 土日などの出勤日をモジュールに反映
     return scheduleTasks(tasks, schedSettings, projectOrder, now);
   }, [tasks, settings, schedSettings, projectOrder, now]);
+  // 予定を連携シート（『連携』の開始予定・終了予定）へ出すためのまとめ（変わったときだけ・10分に1回まで）
+  useScheduleSnapshot(scheduled, tasksLoaded);
 
   // 終了予定を過ぎた視点（機能B）。1分ごとの now と endPromptState で再評価
   const overdueViewpoints = useMemo(() => {

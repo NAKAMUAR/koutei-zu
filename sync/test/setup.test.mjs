@@ -280,7 +280,7 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
   };
   vm.createContext(ctx);
   const names = ['onAdminEdit', 'renderRegMessage_', 'onStaffEdit', 'syncRegistrationsNow', 'saveDiscordWebhook_', 'inNotifyHours_', 'isReminderDue_', 'calcDeadlineOf_', 'regState_', 'REG_STATE', 'quickSetup', 'createStaffInputTab', 'transferFromStaffSheet', 'autoRun', 'readSettings_', 'readStaffRows_', 'collectSourceRows_', 'findStaffHeaderRow_',
-    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'FORM_NO_COL', 'updateEntryForm', 'normRegNo_', 'formRegGroup_', 'formEnsureEditRow_', 'FORM_L', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_', 'deleteRegistrations', 'cancelDeleteRegistrations', 'deliveryYmd_', 'fillStaffDeliveryNames_', 'planRegDeletion_', 'deleteDialogHtml_', 'DELETE_DIALOG_SCRIPT'];
+    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'FORM_NO_COL', 'updateEntryForm', 'normRegNo_', 'formRegGroup_', 'formEnsureEditRow_', 'FORM_L', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_', 'deleteRegistrations', 'cancelDeleteRegistrations', 'writeScheduleToLink_', 'deliveryYmd_', 'fillStaffDeliveryNames_', 'planRegDeletion_', 'deleteDialogHtml_', 'DELETE_DIALOG_SCRIPT'];
   env.g = vm.runInContext(src + '\n;({' + names.join(',') + '})', ctx);
   // テストは時刻に関係なく Discord を送る（知らせる時間帯を 0-24 に）。時間帯のテストは env.setHours で変える
   env.setHours = (h) => { const st = env.admin.getSheetByName('設定'); const r = st && st.rows.findIndex(x => x[0] === '催促する時間帯（ベトナム時間）'); if (r >= 0) st.set(r + 1, 2, h); };
@@ -1789,6 +1789,29 @@ test('納品名：登録No の無い古い行（制作中・制作済み）に�
   env.g.fillStaffDeliveryNames_(env.g.readSettings_(), admin);
   assert.equal(D(3), '王子PJ_内観目線視点①_261101', '制作済みは日付を止める');
   assert.equal(before.rows[2][B('納品名') - 1], '王子PJ_内観目線視点⑤_' + env.g.deliveryYmd_(), '入力前・制作中は毎日その日の日付');
+});
+
+test('工程図の予定：アプリが書いた data/scheduleSnapshot を1件読んで、『連携』の開始予定・終了予定・担当・状態に入れる', () => {
+  const admin = adminSheet();
+  const eng = engineerFile();
+  const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
+  env.g.quickSetup();
+  const { link, at } = linkAt(admin);
+  const lh = link.header();
+  ['開始予定（工程図）', '終了予定（工程図）', '担当（工程図）', '工程図の状態'].forEach(h => assert.ok(lh.includes(h), h + ' の列'));
+  link.set(2, lh.indexOf('取込キー') + 1, 'REN100::INE3::1');
+  link.set(3, lh.indexOf('取込キー') + 1, 'REN100::INE4::1');
+  const s = new Date(2026, 10, 6, 9, 0).getTime(), e = new Date(2026, 10, 7, 15, 30).getTime();
+  env.fs.docs['workspaces/liebe-asia-team/data/scheduleSnapshot'] = { value: { stringValue: JSON.stringify({ updatedAt: s, items: { 'REN100::INE3::1': { s, e, a: 'Quynh・Linh', st: '作業中' } } }) } };
+  const g0 = env.fs.gets || 0;
+  const r = env.g.writeScheduleToLink_(env.g.readSettings_(), admin);
+  assert.equal(r.rows, 1);
+  same([at(2, '開始予定（工程図）').getTime(), at(2, '終了予定（工程図）').getTime(), at(2, '担当（工程図）'), at(2, '工程図の状態')], [s, e, 'Quynh・Linh', '作業中']);
+  same([at(3, '開始予定（工程図）'), at(3, '工程図の状態')], ['', ''], 'まとめに無い行は空');
+  // 上限の間は読まない
+  env.props.FS_QUOTA_UNTIL = String(Date.now() + 3600000);
+  assert.equal(env.g.writeScheduleToLink_(env.g.readSettings_(), admin).skipped, true);
+  assert.ok(g0 >= 0);
 });
 
 console.log(`\n${passed} tests passed`);

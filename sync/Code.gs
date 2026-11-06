@@ -57,12 +57,14 @@ const H = {
   assignee: '担当者', memo: 'メモ', exclude: '対象外',
   transferredAt: '転記日時', sentAt: '送信日時', result: '結果', srcRow: '元シート行', link: 'サーバリンク',
   split: '作業の分け方',
+  // 工程図の予定（アプリが計算した予定のまとめ data/scheduleSnapshot から。2026-11-06）
+  planStart: '開始予定（工程図）', planEnd: '終了予定（工程図）', planAssignee: '担当（工程図）', planState: '工程図の状態',
 };
 // 旧バージョンの見出し（そのまま使えるように別名として受け付ける）
 const H_ALIASES = { cut: ['カット名'], white: ['White時間'], color: ['Color時間'] };
 const LINK_HEADER_ORDER = ['key', 'status', 'send', 'inputDate', 'code', 'name', 'cut', 'pattern', 'extName', 'round', 'request', 'deadline',
   'white', 'color', 'other', 'item', 'note', 'company', 'contact', 'category', 'kind', 'stepKind', 'assignee', 'memo', 'exclude',
-  'transferredAt', 'sentAt', 'result', 'srcRow', 'link', 'split'];
+  'transferredAt', 'sentAt', 'result', 'srcRow', 'link', 'split', 'planStart', 'planEnd', 'planAssignee', 'planState'];
 
 const STATUS = { NEW: '未送信', CHECK: '要確認', UPDATED: '更新あり', SENT: '登録済み', ERROR: 'エラー', GONE: '元シートから消えた' };
 const KIND = { PERS: 'パース', PHOTO: '写真合成', MODEL: 'モデル', VR: 'VR', VIDEO: '動画' };
@@ -1365,6 +1367,42 @@ function fillStaffDeliveryNames_(cfg, ss) {
   });
   return filled;
 }
+/**
+ * 工程図の予定を『連携』の「開始予定（工程図）」「終了予定（工程図）」「担当（工程図）」「工程図の状態」に入れる（2026-11-06）。
+ * 予定はアプリが計算して data/scheduleSnapshot に書いたまとめを1件読むだけ（全タスクは読まない）。
+ * アプリを開いていないあいだは、最後に開いたときの予定のまま。戻り値 { rows, updatedAt }
+ */
+function writeScheduleToLink_(cfg, ss) {
+  if (fsQuotaBlocked_()) return { rows: 0, updatedAt: null, skipped: true };
+  const raw = fsGetValueString_(getAuth_(), cfg, 'scheduleSnapshot');
+  if (!raw) return { rows: 0, updatedAt: null };
+  let snap;
+  try { snap = JSON.parse(raw); } catch (e) { return { rows: 0, updatedAt: null }; }
+  const items = (snap && snap.items) || {};
+  const link = ensureLinkSheet_(ss);
+  if (link.getLastRow() < 2) return { rows: 0, updatedAt: snap.updatedAt || null };
+  const col = headerMap_(link);
+  const n = link.getLastRow() - 1;
+  const keys = link.getRange(2, col.key, n, 1).getValues().map(v => trimStr_(v[0]));
+  const want = keys.map(k => {
+    const it = k ? items[k] : null;
+    if (!it) return ['', '', '', ''];
+    return [it.s ? new Date(it.s) : '', it.e ? new Date(it.e) : '', it.a || '', it.st || ''];
+  });
+  let rows = 0;
+  ['planStart', 'planEnd', 'planAssignee', 'planState'].forEach((k, j) => {
+    if (!col[k]) return;
+    const range = link.getRange(2, col[k], n, 1);
+    const cur = range.getValues();
+    const next = want.map(w => [w[j]]);
+    if (next.some((v, i) => !sameCell_(cur[i][0], v[0]))) {
+      range.setValues(next);
+      if (j < 2) range.setNumberFormat('m/d hh:mm');
+      rows++;
+    }
+  });
+  return { rows: want.filter(w => w[0] || w[3]).length, changed: rows > 0, updatedAt: snap.updatedAt || null };
+}
 /** 社内案件名（RIC.34 など）のタスクだけを読む（projectNameInternal で絞る。30件ずつ） */
 function fsTasksByProjects_(auth, cfg, codes) {
   const out = [];
@@ -1503,6 +1541,12 @@ function autoRun() {
       if (mv.toDoing || mv.toDone) parts.push('入力シート 制作中へ' + mv.toDoing + '件・制作済みへ' + mv.toDone + '件');
     } catch (e) {
       parts.push('入力シートの移動エラー：' + String(e && e.message || e));
+    }
+    try {
+      const sp = writeScheduleToLink_(cfg, SpreadsheetApp.getActiveSpreadsheet());
+      if (sp.updatedAt && sp.changed) parts.push('工程図の予定を入れた ' + sp.rows + '件（' + fmtDateTime_(new Date(sp.updatedAt)) + ' 時点）');
+    } catch (e) {
+      parts.push('工程図の予定のエラー：' + String(e && e.message || e));
     }
     try {
       const dn = fillStaffDeliveryNames_(cfg, SpreadsheetApp.getActiveSpreadsheet());
