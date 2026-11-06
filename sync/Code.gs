@@ -2903,21 +2903,36 @@ var BASE = el("preview").value;
 function refresh() { var t = el("toInterp").value.trim(); el("preview").value = t ? BASE + NL + t : BASE; }
 el("toInterp").addEventListener("input", refresh);
 el("cancel").addEventListener("click", function () { google.script.host.close(); });
+// 連絡文をコピーする（ボタンを押したその瞬間でないと、ブラウザがコピーを許さない）
+function copyPreview() {
+  var p = el("preview");
+  p.focus(); p.select();
+  var ok = false;
+  try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+  if (!ok && navigator.clipboard) { try { navigator.clipboard.writeText(p.value); ok = true; } catch (e) { ok = false; } }
+  return ok;
+}
 el("go").addEventListener("click", function () {
   var b = el("go");
+  // 「登録する」と同時に、通訳への連絡文をコピーする
+  var copied = copyPreview();
+  var copiedText = el("preview").value;
   b.disabled = true; el("cancel").disabled = true;
-  el("msg").className = ""; el("msg").textContent = "登録しています…";
+  el("msg").className = ""; el("msg").textContent = (copied ? "通訳への連絡文をコピーしました。" : "") + "登録しています…";
   google.script.run.withSuccessHandler(function (r) {
     el("msg").className = r.ok ? "ok" : "ng"; el("msg").textContent = r.msg;
     if (r.ok) {
       b.style.display = "none"; el("toInterp").disabled = true;
       el("cancel").textContent = "閉じる"; el("cancel").disabled = false;
       var p = el("preview");
+      var changed = r.interp && r.interp !== copiedText;
       if (r.interp) p.value = r.interp;
       p.focus(); p.select();
-      var copied = false;
-      try { copied = document.execCommand("copy"); } catch (e) { copied = false; }
-      el("msg").textContent = r.msg + (copied ? NL + "通訳への連絡文をコピーしました。" : NL + "通訳への連絡文を選んであるので、⌘C（Windows は Ctrl+C）でコピーできます。");
+      var again = changed ? copyPreview() : copied;
+      var note = again ? "通訳への連絡文をコピーしました（そのまま貼り付けできます）。"
+        : changed ? "登録で連絡文の時刻が変わりました。選んであるので、⌘C（Windows は Ctrl+C）でコピーし直してください。"
+        : "通訳への連絡文を選んであるので、⌘C（Windows は Ctrl+C）でコピーできます。";
+      el("msg").textContent = r.msg + NL + note;
     } else { b.disabled = false; el("cancel").disabled = false; }
   }).withFailureHandler(function (e) {
     el("msg").className = "ng"; el("msg").textContent = (e && e.message) || String(e); b.disabled = false; el("cancel").disabled = false;
@@ -2941,7 +2956,7 @@ function formConfirmHtml_(o) {
     '<div>' + (o.editing ? '直す視点' : '登録する視点') + '（' + o.views.length + '件）</div><ul>' + o.views.map(v => '<li>' + esc(v) + '</li>').join('') + '</ul>' +
     '<label for="toInterp">通訳へのメッセージ（追加で伝えること）</label><textarea id="toInterp" placeholder="翻訳してほしい点・注意点など（無ければ空のまま）"></textarea>' +
     '<div class="n">入力シートの「管理者からの連絡」に写り、下の連絡文の最後にも入ります</div>' +
-    '<label for="preview" style="margin-top:12px">通訳への連絡文（登録するとコピーできます）</label><textarea id="preview" class="pv" readonly>' + esc(o.preview || '') + '</textarea>' +
+    '<label for="preview" style="margin-top:12px">通訳への連絡文（「登録する」と同時にコピーします）</label><textarea id="preview" class="pv" readonly>' + esc(o.preview || '') + '</textarea>' +
     '<div class="n">ひな形は『設定』の「通訳向けの連絡文」。制作時間の計算の期限は、登録の時刻＋1時間30分（12〜13時と17時以降は数えない）</div>' +
     '<div class="btns"><button type="button" id="cancel">やめる</button><button type="button" id="go">' + (o.editing ? '上書きする' : '登録する') + '</button></div><div id="msg"></div>' +
     '<script>' + FORM_CONFIRM_SCRIPT + '</script></body></html>';

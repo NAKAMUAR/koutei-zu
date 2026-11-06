@@ -1949,4 +1949,33 @@ test('タスクのまとめ保存：スクリプトの割り振りはアプリ�
   assert.ok(env.fs.docs[env.fs.packOf(white.id)].t.mapValue.fields[white.id], 'アプリと同じまとめに入る');
 });
 
+test('『案件入力』の登録の確認画面：「登録する」を押した瞬間に通訳への連絡文をコピーする（登録で時刻が変わったら選び直す）', () => {
+  const env = makeEnv({ admin: adminSheet(), files: { [NEW_ID]: engineerFile() } });
+  const html = env.g.formConfirmHtml_({ title: 'TANAKA.342', request: '新規', views: ['内観目線③（INE3）'], preview: '連絡文 13:21まで' });
+  assert.ok(html.includes('「登録する」と同時にコピー'));
+  const script = html.split('<script>')[1].split('</script>')[0];
+  const run = ({ interp, execOk = true }) => {
+    const log = [];
+    const mk = (id) => ({ id, value: '', textContent: '', className: '', disabled: false, style: {}, handlers: {},
+      addEventListener(ev, f) { this.handlers[ev] = f; }, focus() {}, select() { log.push('select:' + this.value); } });
+    const els = { preview: mk('preview'), toInterp: mk('toInterp'), go: mk('go'), cancel: mk('cancel'), msg: mk('msg') };
+    els.preview.value = '連絡文 13:21まで';
+    let success = null;
+    const runner = { withSuccessHandler(f) { success = f; return runner; }, withFailureHandler() { return runner; }, submitFormSheet() { log.push('submit'); } };
+    const doc = { getElementById: (id) => els[id], execCommand: (c) => { log.push('copy:' + els.preview.value); return execOk; } };
+    vm.runInContext(script, vm.createContext({ document: doc, navigator: {}, google: { script: { run: runner, host: { close() {} } } }, String }));
+    els.go.handlers.click();
+    assert.deepEqual(log.filter(x => x.startsWith('copy') || x === 'submit').slice(0, 2), ['copy:連絡文 13:21まで', 'submit'], 'サーバーへ送る前（押した瞬間）にコピー');
+    assert.equal(els.msg.textContent.startsWith('通訳への連絡文をコピーしました。'), execOk, els.msg.textContent);
+    success({ ok: true, msg: '登録しました：R0001', interp });
+    return { log, msg: els.msg.textContent };
+  };
+  const same1 = run({ interp: '連絡文 13:21まで' });
+  assert.ok(same1.msg.includes('コピーしました（そのまま貼り付けできます）'), same1.msg);
+  const changed = run({ interp: '連絡文 13:25まで', execOk: true });
+  assert.ok(changed.log.includes('copy:連絡文 13:25まで'), '時刻が変わったらもう一度コピー');
+  const blocked = run({ interp: '連絡文 13:25まで', execOk: false });
+  assert.ok(blocked.msg.includes('コピーし直してください'), blocked.msg);
+});
+
 console.log(`\n${passed} tests passed`);
