@@ -280,7 +280,7 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
   };
   vm.createContext(ctx);
   const names = ['onAdminEdit', 'renderRegMessage_', 'onStaffEdit', 'syncRegistrationsNow', 'saveDiscordWebhook_', 'inNotifyHours_', 'isReminderDue_', 'calcDeadlineOf_', 'regState_', 'REG_STATE', 'quickSetup', 'createStaffInputTab', 'transferFromStaffSheet', 'autoRun', 'readSettings_', 'readStaffRows_', 'collectSourceRows_', 'findStaffHeaderRow_',
-    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'FORM_NO_COL', 'updateEntryForm', 'normRegNo_', 'formRegGroup_', 'formEnsureEditRow_', 'FORM_L', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_', 'deleteRegistrations', 'cancelDeleteRegistrations', 'fillStaffDeliveryNames_', 'planRegDeletion_', 'deleteDialogHtml_', 'DELETE_DIALOG_SCRIPT'];
+    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'FORM_NO_COL', 'updateEntryForm', 'normRegNo_', 'formRegGroup_', 'formEnsureEditRow_', 'FORM_L', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_', 'deleteRegistrations', 'cancelDeleteRegistrations', 'deliveryYmd_', 'fillStaffDeliveryNames_', 'planRegDeletion_', 'deleteDialogHtml_', 'DELETE_DIALOG_SCRIPT'];
   env.g = vm.runInContext(src + '\n;({' + names.join(',') + '})', ctx);
   // テストは時刻に関係なく Discord を送る（知らせる時間帯を 0-24 に）。時間帯のテストは env.setHours で変える
   env.setHours = (h) => { const st = env.admin.getSheetByName('設定'); const r = st && st.rows.findIndex(x => x[0] === '催促する時間帯（ベトナム時間）'); if (r >= 0) st.set(r + 1, 2, h); };
@@ -379,7 +379,7 @@ test('かんたん初期設定：管理者シート・入力シート（2か国�
   // 『記入ルール/説明』は2か国語で書き直され、視点コード表は視点マスタから
   const rules = eng.getSheetByName('記入ルール/説明');
   const text = rules.rows.map(r => r.join(' ')).join('\n');
-  ['【記入ルール】', 'Quy tắc', 'EX1 → 外観目線視点① ／ ngoại thất', 'EXP1 → 外観写真合成視点①', 'VIDEO1 → 動画', '黄色の列だけ', 'Chỉ nhập vào các cột màu vàng', 'White躯体', 'Trắng – nội thất', '『制作中』', 'YYMMDD'].forEach(w => assert.ok(text.toLowerCase().indexOf(w.toLowerCase()) >= 0, w));
+  ['【記入ルール】', 'Quy tắc', 'EX1 → 外観目線視点① ／ ngoại thất', 'EXP1 → 外観写真合成視点①', 'VIDEO1 → 動画', '黄色の列だけ', 'Chỉ nhập vào các cột màu vàng', 'White躯体', 'Trắng – nội thất', '『制作中』', '261106', 'Ngày tự đổi'].forEach(w => assert.ok(text.toLowerCase().indexOf(w.toLowerCase()) >= 0, w));
   ['会社コード：', '案件番号：', 'サーバーリンク：', '新規or修正：'].forEach(w => assert.ok(text.indexOf(w) < 0, '管理者が入れる列の書き方は載せない：' + w));
   assert.ok(!rules.rows.some(r => r.includes('new')), '古い記入例（new/add）は残らない');
   assert.equal(eng.getSheetByName('Untitled').rows[16][1], '社内案件名', '旧レイアウトのタブには触らない');
@@ -748,8 +748,8 @@ test('案件登録 → 入力シートへ写す → 翻訳済み → 2時間で 
   same([S('会社コード'), S('案件番号'), S('社外案件名'), S('新規or修正'), S('視点'), S('パターン'), S('サーバーリンク'), S('登録No')], ['RIC', 34, 'マンション', NEWR, 'EX1', 'A', LINK, 'R0001']);
   assert.ok(!tab.rows[2].some(v => v === 'Quynh' || v === 'https://drive/order.pdf' || v === '急ぎ'), '管理者だけの情報は写さない');
   assert.equal(tab.rows[2].length, sh.indexOf('納品名') + 1, '写す列と登録No・納品名だけを書く（合計の式などには触らない）');
-  assert.equal(S('納品名'), 'マンション_外観目線視点①_パターンA_YYMMDD', '納品名は 社外案件名_社外視点名_YYMMDD');
-  assert.equal(R(2, '納品名'), 'マンション_外観目線視点①_パターンA_YYMMDD');
+  assert.equal(S('納品名'), 'マンション_外観目線視点①_パターンA_' + env.g.deliveryYmd_(), '納品名は 社外案件名_社外視点名_今日の日付');
+  assert.equal(R(2, '納品名'), 'マンション_外観目線視点①_パターンA_' + env.g.deliveryYmd_());
   assert.equal(tab.rows[2][sh.indexOf('合計')], '', '合計の列は書かない');
   // 時間が空なので転記はまだ（記入途中）
   env.g.transferFromStaffSheet();
@@ -762,7 +762,7 @@ test('案件登録 → 入力シートへ写す → 翻訳済み → 2時間で 
   msg = env.g.syncRegistrationsNow();
   assert.ok(msg.indexOf('直した 1件') >= 0, msg);
   assert.equal(S('視点'), 'EX2');
-  assert.equal(S('納品名'), 'マンション_外観目線視点②_パターンA_YYMMDD', 'YYMMDD のままの納品名は視点を直すと作り直す');
+  assert.equal(S('納品名'), 'マンション_外観目線視点②_パターンA_' + env.g.deliveryYmd_(), '自動の納品名は視点を直すと作り直す');
 
   // 通訳が翻訳済みにチェック → 時間計算待ち（翻訳日時が入る）
   tab.set(3, sh.indexOf('翻訳済み') + 1, true);
@@ -811,13 +811,17 @@ test('案件登録 → 入力シートへ写す → 翻訳済み → 2時間で 
   assert.equal(at(2, '担当者'), 'Quynh');
   assert.equal(at(2, '納期'), '2030-01-20');
 
-  // 納品名は 社外案件名_社外視点名_YYMMDD（工程図の書き出しは使わない）。エンジニアが日付に書き換えたら、そのまま
+  // 納品名は 社外案件名_社外視点名_今日の日付（工程図の書き出しは使わない）
   env.fs.docs['workspaces/liebe-asia-team/data/deliveryNames'] = { value: { stringValue: JSON.stringify({ 'RIC34::EX2-A::1': ['別の名前'] }) } };
   env.g.syncRegistrationsNow();
-  assert.equal(R(2, '納品名'), 'マンション_外観目線視点②_パターンA_YYMMDD');
+  assert.equal(R(2, '納品名'), 'マンション_外観目線視点②_パターンA_' + env.g.deliveryYmd_());
+  // 日付は毎日その日に作り直す（前の日付のまま残らない）。日付で終わらない名前は人が付けた名前としてそのまま
   tab.set(3, sh.indexOf('納品名') + 1, 'マンション_外観目線視点②_パターンA_261104');
   env.g.syncRegistrationsNow();
-  assert.equal(S('納品名'), 'マンション_外観目線視点②_パターンA_261104');
+  assert.equal(S('納品名'), 'マンション_外観目線視点②_パターンA_' + env.g.deliveryYmd_(), '前の日の日付 → 今日');
+  tab.set(3, sh.indexOf('納品名') + 1, 'マンション_最終版');
+  env.g.syncRegistrationsNow();
+  assert.equal(S('納品名'), 'マンション_最終版');
   assert.equal(R(2, '納品名'), S('納品名'));
 
   // 入力シートで行が消されたら「入力シートに無い」（勝手に写し直さない）
@@ -1427,7 +1431,7 @@ test('修正で枚数が増えたとき：足した EX1-C は『登録一覧』�
   const sh = tab.header(2).map(h => h.split('\n')[0]);
   const staff = tab.rows.slice(2).filter(r => r[sh.indexOf('登録No')]).map(r => r[sh.indexOf('登録No')] + ' ' + r[sh.indexOf('視点')] + (r[sh.indexOf('パターン')] ? '-' + r[sh.indexOf('パターン')] : ''));
   same(staff, ['R0001 EX1-A', 'R0002 EX1-B', 'R0005 EX1-C', 'R0003 IN1', 'R0004 EX1'], '入力シートでも A・B・C が並ぶ');
-  assert.equal(tab.rows[4][sh.indexOf('納品名')], 'マンション_外観目線視点①_パターンC_YYMMDD');
+  assert.equal(tab.rows[4][sh.indexOf('納品名')], 'マンション_外観目線視点①_パターンC_' + env.g.deliveryYmd_());
 });
 
 test('登録の削除：エンジニアの削除依頼 →『登録一覧』に日時・Discord／管理者が「削除」→ 確認の画面 → 入力シートの行と工程図の作業だけ消す（管理者用シートはチェックが残る）→ チェックを外すと戻る（あとの回がある行は消さない）', () => {
@@ -1701,7 +1705,7 @@ test('エンジニアが入力シート『入力前』で足した行（登録No
   assert.equal(R(4, '社外視点名'), '内観目線視点④_パターンC', '社外視点名も入る');
   assert.equal(String(R(4, '納期')), String(new Date(2030, 0, 20)), '納期は同じ案件の前の登録から');
   assert.equal(R(4, '状態'), '時間入力済み');
-  assert.equal(tab.rows[newRow - 1][C('納品名') - 1], 'ロイヤルパークス有明_内観目線視点④_パターンC_YYMMDD', '納品名も入る');
+  assert.equal(tab.rows[newRow - 1][C('納品名') - 1], 'ロイヤルパークス有明_内観目線視点④_パターンC_' + env.g.deliveryYmd_(), '納品名も入る');
   // 何度動かしても二重にしない
   env.g.syncRegistrationsNow();
   assert.equal(reg.rows.filter(v => v[rh.indexOf('パターン')] === 'C').length, 1);
@@ -1763,8 +1767,17 @@ test('納品名：登録No の無い古い行（制作中・制作済み）に�
   const n = env.g.fillStaffDeliveryNames_(env.g.readSettings_(), admin);
   assert.equal(n, 4);
   const D = (r) => done.rows[r - 1][C('納品名') - 1];
-  same([D(3), D(4), D(5), D(6), D(7)], ['王子PJ_内観目線視点①_YYMMDD', '王子PJ_リビング_YYMMDD', '深沢_House1_YYMMDD', '王子PJ_内観目線視点①_YYMMDD', '手で付けた名前']);
+  same([D(3), D(4), D(5), D(6), D(7)], ['王子PJ_内観目線視点①_' + env.g.deliveryYmd_(), '王子PJ_リビング_' + env.g.deliveryYmd_(), '深沢_House1_' + env.g.deliveryYmd_(), '王子PJ_内観目線視点①_' + env.g.deliveryYmd_(), '手で付けた名前']);
   assert.equal(env.g.fillStaffDeliveryNames_(env.g.readSettings_(), admin), 0, '2回目は何もしない');
+  // 日付が変わったら：『制作済み』は止める（納品した日のまま）・ほかのタブは今日の日付に作り直す
+  done.set(3, C('納品名'), '王子PJ_内観目線視点①_261101');
+  const before = eng.getSheetByName('入力前');
+  const bh = before.header(2).map(h => h.split('\n')[0]);
+  const B = (name) => bh.indexOf(name) + 1;
+  [['会社コード', 'REN'], ['案件番号', 100], ['社外案件名', '王子PJ'], ['視点', 'IN5'], ['新規or修正', NEWR], ['登録No', 'R9999'], ['納品名', '王子PJ_内観目線視点⑤_261101']].forEach(([h, v]) => before.set(3, B(h), v));
+  env.g.fillStaffDeliveryNames_(env.g.readSettings_(), admin);
+  assert.equal(D(3), '王子PJ_内観目線視点①_261101', '制作済みは日付を止める');
+  assert.equal(before.rows[2][B('納品名') - 1], '王子PJ_内観目線視点⑤_' + env.g.deliveryYmd_(), '入力前・制作中は毎日その日の日付');
 });
 
 console.log(`\n${passed} tests passed`);

@@ -227,7 +227,7 @@ const STAFF_INPUT_COLUMNS = [
   { key: 'toInterp', label: '管理者からの連絡', vi: 'Lời nhắn từ quản lý', width: 30, auto: true,
     note: '管理者が『案件登録』に書いた通訳へのメッセージ（自動で入る）\nLời nhắn của quản lý cho phiên dịch (tự động)' },
   { key: 'delivery', label: '納品名', vi: 'Tên file giao', width: 30, auto: true,
-    note: '納品するファイルの名前（自動）：社外案件名_社外視点名_YYMMDD。YYMMDD は納品する日に書き換えて使う\nTên file giao (tự động): Tên dự án_Tên góc nhìn_YYMMDD. Đổi YYMMDD thành ngày giao khi dùng' },
+    note: '納品するファイルの名前（自動）：社外案件名_社外視点名_日付（YYMMDD）。日付は毎日その日に変わり、制作済みになったら止まる。そのままコピーして使える\nTên file giao (tự động): Tên dự án_Tên góc nhìn_ngày (YYMMDD). Ngày tự đổi theo ngày hôm nay, dừng khi đã hoàn thành. Có thể sao chép dùng ngay' },
   { key: 'delReq', label: '削除依頼', vi: 'Yêu cầu xóa', width: 8, checkbox: true, input: true,
     note: '登録の間違い・二重登録などで、この行を消してほしいときにチェック。管理者が確認して消します（自分で行を消さない）\nĐánh dấu khi muốn xóa dòng này (đăng ký nhầm, trùng…). Quản lý sẽ kiểm tra và xóa (không tự xóa dòng)' },
 ];
@@ -1312,6 +1312,7 @@ function fillStaffDeliveryNames_(cfg, ss) {
     });
   }
   const views = readMasters_(ss).views;
+  const today = deliveryYmd_();
   const file = SpreadsheetApp.openById(cfg.fileId);
   const counts = new Map();
   let filled = 0;
@@ -1333,12 +1334,15 @@ function fillStaffDeliveryNames_(cfg, ss) {
       const base = normCode_(code) + '::' + normCut_(vp);
       const n = (counts.get(base) || 0) + 1;
       counts.set(base, n);
-      if (trimStr_(v[sc.delivery - 1]) !== '') return;
+      const cur = trimStr_(v[sc.delivery - 1]);
+      // 空 → 入れる。自動の名前 → 日付が今日でなければ作り直す（『制作済み』は止める）。人が付けた名前 → そのまま
+      if (cur !== '' && (sheet.getName() === STAFF_TAB_DONE || !isAutoDelivery_(cur) || cur.slice(-6) === today)) return;
       const l = byKey.get(base + '::' + n) || {};
       const name = trimStr_(v[sc.name - 1]) || l.name || '';
       const sp = formSplitCut_(cut);
       const ext = l.ext || formAutoExt_(sp.code, sp.room, normPattern_(pattern), views) || vp;
-      const dn = [name, ext, 'YYMMDD'].filter(Boolean).join('_');
+      const dn = [name, ext, today].filter(Boolean).join('_');
+      if (dn === cur) return;
       out[i] = [dn];
       changed = true;
       filled++;
@@ -1597,7 +1601,7 @@ const REG_NOTES = {
   toInterp: '通訳へのメッセージ（翻訳してほしい点・注意点など）。入力シートの「管理者からの連絡」に写り、「通訳向け連絡文」にも入る',
   interpMessage: '自動：通訳に送る連絡文（ひな形は『設定』の「通訳向けの連絡文」）。メニュー「連絡文をコピー」でコピー・Discord へ送信もできる',
   message: '自動：エンジニア・通訳に送る連絡文（ひな形は『設定』の「登録時の連絡文」）。同じ社内案件名・同じ入力日の行は1通にまとめる。メニュー「連絡文をコピー」でコピー・Discord へ送信もできる',
-  delivery: '自動：納品名（社外案件名_社外視点名_YYMMDD）。入力シートの「納品名」と同じ。YYMMDD はエンジニアが納品の日に書き換えて使う',
+  delivery: '自動：納品名（社外案件名_社外視点名_日付）。入力シートの「納品名」と同じ。日付は毎日その日（ベトナム時間）に変わり、制作済みになったら止まる',
 };
 
 /** メニュー：『案件登録』を今すぐ入力シートへ写し、翻訳・時間を読み戻す（催促もここで送る） */
@@ -2764,11 +2768,25 @@ function nextRegNo_(rows, col, extraNos) {
  * 『案件登録』⇄ エンジニア入力シート の同期と、時間計算の催促。
  * 戻り値: { msg, copied, updated, estimate, reminded, missing }
  */
-/** 納品名（純ロジック）：社外案件名_社外視点名_YYMMDD（YYMMDD はエンジニアが納品の日に書き換える）。空の部分は飛ばす */
-function deliveryNameOf_(row, views) {
+/** 今日の日付（ベトナム時間）を YYMMDD（例 261106）で */
+function deliveryYmd_(d) {
+  const t = d || new Date();
+  if (typeof Utilities !== 'undefined') return Utilities.formatDate(t, APP_TIME_ZONE, 'yyMMdd');
+  return String(t.getFullYear()).slice(2) + ('0' + (t.getMonth() + 1)).slice(-2) + ('0' + t.getDate()).slice(-2);
+}
+/** 自動の納品名か（空・末尾が _YYMMDD・末尾が _6桁の日付）。自動なら毎日その日の日付に作り直す。違う名前は人が付けた名前としてそのまま */
+function isAutoDelivery_(s) {
+  const t = trimStr_(s);
+  return t === '' || /_(YYMMDD|\d{6})$/.test(t);
+}
+/**
+ * 納品名（純ロジック）：社外案件名_社外視点名_YYMMDD。YYMMDD は今日の日付（2026-11-06 から。毎日その日の日付に更新し、
+ * 制作済みになったら止める）。ymd を渡さなければ今日。空の部分は飛ばす
+ */
+function deliveryNameOf_(row, views, ymd) {
   const cut = formSplitCut_(row.cut);
   const ext = trimStr_(row.extName) || formAutoExt_(cut.code, cut.room, row.pattern, views);
-  return [trimStr_(row.name), ext, 'YYMMDD'].filter(Boolean).join('_');
+  return [trimStr_(row.name), ext, ymd || deliveryYmd_()].filter(Boolean).join('_');
 }
 function syncRegistrations_(now) {
   const cfg = readSettings_();
@@ -2893,11 +2911,12 @@ function syncRegistrations_(now) {
       setReg(r, 'translatedAt', st.transAt || '');
       setReg(r, 'estimatedAt', st.estimatedAt || '');
       row.translatedAt = st.transAt || '';
-      // 納品名（社外案件名_社外視点名_YYMMDD）
-      // 空、または YYMMDD のまま（エンジニアが日付を書いていない）なら、案件名・視点を直したときに合わせて作り直す
+      // 納品名（社外案件名_社外視点名_今日の日付）。自動の名前なら毎日その日の日付・案件名や視点の直しに合わせて作り直す。
+      // 『制作済み』の行は日付を止める（納品した日のまま）。人が付けた名前はそのまま
       const dn = deliveryNameOf_(row, views);
       const curDn = trimStr_(sv('delivery'));
-      const useDn = curDn === '' || /YYMMDD$/.test(curDn) ? dn : curDn;
+      const frozen = hit && hit.sheet.getName() === STAFF_TAB_DONE && curDn !== '';
+      const useDn = !frozen && isAutoDelivery_(curDn) ? dn : curDn;
       putStaff('delivery', useDn);
       setReg(r, 'delivery', useDn);
       // 削除依頼（エンジニアが入力シートでチェック）→『登録一覧』に依頼の日時。外したら消す
@@ -4373,8 +4392,8 @@ const STAFF_RULES_LINES = [
   ['', '削除依頼：登録の間違い・二重登録などで行を消してほしいときにチェック。管理者が確認して消します（行は自分で消さない）',
     'Yêu cầu xóa: đánh dấu khi muốn xóa dòng (đăng ký nhầm, trùng…). Quản lý sẽ kiểm tra và xóa (không tự xóa dòng)'],
   ['h', '■ 納品名', '■ Tên file giao'],
-  ['', '納品名は自動で入ります（社外案件名_社外視点名_YYMMDD）。YYMMDD を納品する日（例 261104）に書き換えて使ってください。',
-    'Tên file giao được tự động điền (Tên dự án_Tên góc nhìn_YYMMDD). Khi dùng, hãy đổi YYMMDD thành ngày giao (VD: 261104).'],
+  ['', '納品名は自動で入ります（社外案件名_社外視点名_日付 例 261106）。日付は毎日その日に変わり、制作済みになったら止まります。そのままコピーして使えます。',
+    'Tên file giao được tự động điền (Tên dự án_Tên góc nhìn_ngày, VD: 261106). Ngày tự đổi theo ngày hôm nay và dừng khi đã hoàn thành. Có thể sao chép dùng ngay.'],
   ['', '※ 連絡文の期限を過ぎても時間が空だと Discord で催促が届きます', '※ Nếu quá hạn trong tin nhắn mà vẫn chưa có số giờ, sẽ có nhắc nhở qua Discord'],
   ['h', '■ 視点コードの読み方（灰色の「視点」列）', '■ Cách đọc mã góc nhìn (cột「Góc nhìn」màu xám)'],
 ];
