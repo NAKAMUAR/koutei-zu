@@ -7,9 +7,10 @@ import {
   initializeFirestore,
   memoryLocalCache, persistentLocalCache, persistentMultipleTabManager,
   doc, setDoc, deleteDoc, onSnapshot, getDocFromServer, getDocFromCache,
-  collection, writeBatch, getDocs,
+  collection, writeBatch, getDocs, getDocsFromServer, deleteField, FieldPath,
   query, orderBy, startAt, endAt, documentId,
 } from 'firebase/firestore';
+import { makeTaskStore } from './lib/taskPackStore.js';
 import {
   getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged,
 } from 'firebase/auth';
@@ -137,58 +138,18 @@ export const memberList = {
   },
 };
 
-// タスク：1件 = 1 Firestore ドキュメント（複数端末での同時編集に強い）
-export const tasksStore = {
-  subscribe(callback, onError) {
-    const colRef = collection(db, 'workspaces', WORKSPACE_ID, 'tasks');
-    // includeMetadataChanges：保存分（fromCache）→ サーバーとそろった、の切り替わりも受け取る
-    return onSnapshot(colRef, { includeMetadataChanges: true }, (snap) => {
-      const arr = [];
-      snap.forEach(d => arr.push(d.data()));
-      callback(arr, { fromCache: snap.metadata.fromCache });
-    }, (err) => {
-      console.error('タスク購読エラー:', err);
-      if (onError) onError(err);
-    });
-  },
-  async upsert(task) {
-    const ref = doc(db, 'workspaces', WORKSPACE_ID, 'tasks', task.id);
-    await setDoc(ref, task);
-  },
-  async remove(taskId) {
-    const ref = doc(db, 'workspaces', WORKSPACE_ID, 'tasks', taskId);
-    await deleteDoc(ref);
-  },
-  // upserts: Task[], deletes: string[]
-  async batch(upserts, deletes) {
-    const list = upserts || [];
-    const del = deletes || [];
-    if (list.length === 0 && del.length === 0) return;
-    // Firestore のバッチ上限（500件）を超える場合は分割
-    const chunkSize = 450;
-    for (let i = 0; i < list.length || i < del.length; i += chunkSize) {
-      const batch = writeBatch(db);
-      const upChunk = list.slice(i, i + chunkSize);
-      const delChunk = del.slice(i, i + chunkSize);
-      for (const t of upChunk) {
-        const ref = doc(db, 'workspaces', WORKSPACE_ID, 'tasks', t.id);
-        batch.set(ref, t);
-      }
-      for (const id of delChunk) {
-        const ref = doc(db, 'workspaces', WORKSPACE_ID, 'tasks', id);
-        batch.delete(ref);
-      }
-      await batch.commit();
-    }
-  },
-  async listAll() {
-    const colRef = collection(db, 'workspaces', WORKSPACE_ID, 'tasks');
-    const snap = await getDocs(colRef);
-    const arr = [];
-    snap.forEach(d => arr.push(d.data()));
-    return arr;
-  },
-};
+// タスク：まとめ保存（2026-11-06〜）。タスクを数十個の「まとめ」（1まとめ＝1ドキュメント）に入れる。
+// 以前は1件＝1ドキュメント（workspaces/{wid}/tasks/{id}）で、開き直すたびに全件（数千件）を読んでいた。
+// Firestore の無料枠は「1日に読めるドキュメントの数」なので、まとめにすると全部読んでもまとめの数（既定 64）だけになる。
+//  - 目印：workspaces/{wid}/data/taskPacks（{ v: 1, packs: まとめの数, … }）
+//  - まとめ：workspaces/{wid}/data/taskPacks/packs/{p00〜}（{ t: { タスクid: タスク } }）
+//  - 1件の保存は、そのまとめの t.{id} だけを置き換える（mergeFields。ほかのタスクは触らない＝同時編集に強いまま）
+//  - 目印が無ければ、最初に開いたときに旧 tasks を一度だけ読んでまとめへ移す（旧 tasks は消さずに残す＝控え）
+// data 配下なので Firestore ルールの変更は不要。割り振り（taskPackOf）は連携スクリプト・帳票スクリプトと同じ
+export const tasksStore = makeTaskStore({
+  db, workspaceId: WORKSPACE_ID,
+  doc, collection, setDoc, getDocs, getDocsFromServer, getDocFromServer, getDocFromCache, onSnapshot, writeBatch, deleteField, FieldPath,
+});
 
 // Claude.ai の window.storage と同じ形のAPI
 export const storage = {

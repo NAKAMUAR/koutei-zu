@@ -1212,12 +1212,11 @@ function runSend_(dryRun, opts) {
     let c = 0, u = 0, s = 0;
     built.records.forEach(rec => {
       if (rec.skippedDeleted) { s++; return; }
-      const path = 'workspaces/' + cfg.workspaceId + '/tasks/' + rec.id;
       if (rec.update) {
-        if (rec.changes) { if (!dryRun) fsPatch_(auth, cfg, path, rec.changes, Object.keys(rec.changes)); u++; }
+        if (rec.changes) { if (!dryRun) fsTaskPatch_(auth, cfg, rec.id, fsEncodeFields_(rec.changes), Object.keys(rec.changes)); u++; }
         return;
       }
-      if (!dryRun) fsPatch_(auth, cfg, path, rec.doc, null);
+      if (!dryRun) fsTaskPatch_(auth, cfg, rec.id, fsEncodeFields_(rec.doc), null);
       // 同じ視点の後続行（2回目など）が正しい順番・回数になるよう、作成分をコンテキストに反映
       byExt.set(rec.externalId, rec.doc);
       const k = vpKey_(rec.doc.projectName, rec.doc.viewpointName);
@@ -1520,6 +1519,7 @@ function writeAssigneeTabs_(ss, snap) {
 }
 /** 社内案件名（RIC.34 など）のタスクだけを読む（projectNameInternal で絞る。30件ずつ） */
 function fsTasksByProjects_(auth, cfg, codes) {
+  if (fsTaskPacks_(auth, cfg)) return fsAllPackedTasks_(auth, cfg).filter(t => codes.indexOf(t.projectNameInternal) >= 0);
   const out = [];
   for (let i = 0; i < codes.length; i += 30) {
     const chunk = codes.slice(i, i + 30);
@@ -1536,6 +1536,8 @@ function fsTasksForRows_(auth, cfg, rows) {
     if (c && codes.indexOf(c) < 0) codes.push(c);
     if (n && names.indexOf(n) < 0) names.push(n);
   });
+  // まとめ保存なら、まとめを1回だけ読んで絞る
+  if (fsTaskPacks_(auth, cfg)) return fsAllPackedTasks_(auth, cfg).filter(t => codes.indexOf(t.projectNameInternal) >= 0 || names.indexOf(t.projectName) >= 0);
   const byId = new Map();
   const add = (list) => list.forEach(t => { const id = t.id || t._id; if (id && !byId.has(id)) byId.set(id, Object.assign(t, { id })); });
   add(fsTasksByProjects_(auth, cfg, codes));
@@ -1546,6 +1548,7 @@ function fsTasksForRows_(auth, cfg, rows) {
 }
 /** 取込キーで始まる externalId のタスクだけを読む（キーごとに範囲で絞る） */
 function fsTasksByKeys_(auth, cfg, keys) {
+  if (fsTaskPacks_(auth, cfg)) return fsAllPackedTasks_(auth, cfg).filter(t => keys.some(k => String(t.externalId || '').indexOf(k + '::') === 0));
   const out = [];
   keys.forEach(k => {
     const lo = k + '::';
@@ -1558,6 +1561,7 @@ function fsTasksByKeys_(auth, cfg, keys) {
 }
 /** workspaces/{wid}/tasks を where で絞って読む（デコード済み。_id にドキュメントID） */
 function fsRunQuery_(auth, cfg, where) {
+  if (fsTaskPacks_(auth, cfg)) return fsAllPackedTasks_(auth, cfg).filter(t => fsWhereMatch_(where, t));
   const url = fsBase_(cfg) + '/workspaces/' + cfg.workspaceId + ':runQuery';
   const res = fsFetch_(auth, url, 'post', { structuredQuery: { from: [{ collectionId: 'tasks' }], where } }) || [];
   return (Array.isArray(res) ? res : []).filter(x => x && x.document).map(x => {
@@ -1566,6 +1570,106 @@ function fsRunQuery_(auth, cfg, where) {
     d._raw = x.document.fields || {};
     return d;
   });
+}
+// ---- タスクのまとめ保存（2026-11-06） ----
+// 工程図アプリはタスクを数十個の「まとめ」（workspaces/{wid}/data/taskPacks/packs/{p00〜}。{ t: { タスクid: タスク } }）に入れる。
+// 目印 data/taskPacks（{ v: 1, packs }）があれば、スクリプトもまとめを読み書きする（無ければ旧 tasks）。
+// 全部読んでもまとめの数（既定 64）だけ。割り振りはアプリ（src/lib/taskPacks.js の taskPackOf）と同じ計算
+const PROP_TASK_PACKS = 'TASK_PACKS';
+/** まとめ保存なら まとめの数、まだ旧 tasks なら 0。分かったら覚えておく（毎回は読まない） */
+function fsTaskPacks_(auth, cfg) {
+  const props = PropertiesService.getScriptProperties();
+  const known = Number(props.getProperty(PROP_TASK_PACKS) || 0);
+  if (known > 0) return known;
+  const d = fsFetch_(auth, fsBase_(cfg) + '/workspaces/' + cfg.workspaceId + '/data/taskPacks', 'get');
+  const m = d ? fsDecodeDoc_(d) : null;
+  if (m && Number(m.v) === 1) {
+    const n = Number(m.packs) || 64;
+    props.setProperty(PROP_TASK_PACKS, String(n));
+    return n;
+  }
+  return 0;
+}
+/** タスクid → まとめの名前（p00〜）。FNV-1a（32bit）の余り */
+function taskPackOf_(id, packs) {
+  const s = String(id);
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  const n = (h >>> 0) % (packs || 64);
+  return 'p' + (n < 10 ? '0' : '') + n;
+}
+/** 項目名を Firestore のフィールドパスの1区切りに（英数字以外はバッククォートで囲む） */
+function fsQuoteSeg_(k) {
+  const s = String(k);
+  return /^[A-Za-z_][A-Za-z_0-9]*$/.test(s) ? s : '`' + s.replace(/\\/g, '\\\\').replace(/`/g, '\\`') + '`';
+}
+/** まとめのタスクをすべて（デコード済み。_id にタスクid・_raw にエンコードのまま） */
+function fsAllPackedTasks_(auth, cfg) {
+  const out = [];
+  let pageToken = '';
+  do {
+    const url = fsBase_(cfg) + '/workspaces/' + cfg.workspaceId + '/data/taskPacks/packs?pageSize=300' + (pageToken ? '&pageToken=' + encodeURIComponent(pageToken) : '');
+    const j = fsFetch_(auth, url, 'get') || {};
+    (j.documents || []).forEach(d => {
+      const t = d.fields && d.fields.t && d.fields.t.mapValue && d.fields.t.mapValue.fields;
+      if (!t) return;
+      Object.keys(t).forEach(id => {
+        const raw = (t[id] && t[id].mapValue && t[id].mapValue.fields) || {};
+        const o = fsDecodeDoc_({ fields: raw });
+        o._id = id;
+        o._raw = raw;
+        if (!o.id) o.id = id;
+        out.push(o);
+      });
+    });
+    pageToken = j.nextPageToken || '';
+  } while (pageToken);
+  return out;
+}
+/** runQuery の where（fieldFilter の EQUAL・IN・範囲、compositeFilter の AND）を、読んだタスクに当てはめる */
+function fsWhereMatch_(where, t) {
+  if (!where) return true;
+  if (where.compositeFilter) return (where.compositeFilter.filters || []).every(f => fsWhereMatch_(f, t));
+  const ff = where.fieldFilter;
+  if (!ff) return true;
+  const cur = t[ff.field.fieldPath];
+  if (ff.op === 'IN') return ((ff.value.arrayValue && ff.value.arrayValue.values) || []).map(fsDecodeValue_).indexOf(cur) >= 0;
+  if (cur === undefined || cur === null) return false;
+  const w = fsDecodeValue_(ff.value);
+  if (ff.op === 'EQUAL') return cur === w;
+  if (ff.op === 'GREATER_THAN_OR_EQUAL') return cur >= w;
+  if (ff.op === 'GREATER_THAN') return cur > w;
+  if (ff.op === 'LESS_THAN') return cur < w;
+  if (ff.op === 'LESS_THAN_OR_EQUAL') return cur <= w;
+  return false;
+}
+/** タスクを書く。fields はエンコード済み。maskKeys を渡すとその項目だけ、null ならタスクをまるごと置き換える */
+function fsTaskPatch_(auth, cfg, id, fields, maskKeys) {
+  const packs = fsTaskPacks_(auth, cfg);
+  if (!packs) {
+    let url = fsBase_(cfg) + '/workspaces/' + cfg.workspaceId + '/tasks/' + encodeURIComponent(id);
+    if (maskKeys && maskKeys.length) url += '?' + maskKeys.map(f => 'updateMask.fieldPaths=' + encodeURIComponent(f)).join('&');
+    return fsFetch_(auth, url, 'patch', { fields });
+  }
+  const base = 't.' + fsQuoteSeg_(id);
+  const paths = maskKeys && maskKeys.length ? maskKeys.map(k => base + '.' + fsQuoteSeg_(k)) : [base];
+  const url = fsBase_(cfg) + '/workspaces/' + cfg.workspaceId + '/data/taskPacks/packs/' + taskPackOf_(id, packs) + '?' +
+    paths.concat(['updatedAt']).map(f => 'updateMask.fieldPaths=' + encodeURIComponent(f)).join('&');
+  const inner = {};
+  inner[id] = { mapValue: { fields } };
+  return fsFetch_(auth, url, 'patch', { fields: { t: { mapValue: { fields: inner } }, updatedAt: { integerValue: String(Date.now()) } } });
+}
+/** タスクを消す */
+function fsTaskDelete_(auth, cfg, id) {
+  const packs = fsTaskPacks_(auth, cfg);
+  if (!packs) return fsFetch_(auth, fsBase_(cfg) + '/workspaces/' + cfg.workspaceId + '/tasks/' + encodeURIComponent(id), 'delete');
+  // 更新するパスに入れて、中身には入れない → その項目が消える
+  const url = fsBase_(cfg) + '/workspaces/' + cfg.workspaceId + '/data/taskPacks/packs/' + taskPackOf_(id, packs) + '?' +
+    ['t.' + fsQuoteSeg_(id), 'updatedAt'].map(f => 'updateMask.fieldPaths=' + encodeURIComponent(f)).join('&');
+  return fsFetch_(auth, url, 'patch', { fields: { t: { mapValue: { fields: {} } }, updatedAt: { integerValue: String(Date.now()) } } });
 }
 /** 工程図のタスク → すべて完了になった取込キー（純ロジック）。externalId ＝ 取込キー::ステップ */
 function staffDoneKeys_(tasks) {
@@ -3871,7 +3975,7 @@ function processPendingDeletes_(cfg, manual) {
   });
   try { trashAttachTasks_(SpreadsheetApp.getActiveSpreadsheet(), byKey); } catch (e) { console.log('trashAttachTasks_: ' + (e && e.message || e)); }
   byKey.forEach(list => list.forEach(d => {
-    fsFetch_(auth, fsBase_(cfg) + '/workspaces/' + cfg.workspaceId + '/tasks/' + encodeURIComponent(d.id), 'delete');
+    fsTaskDelete_(auth, cfg, d.id);
     n++;
   }));
   const deleted = parseJsonArray_(fsGetValueString_(auth, cfg, 'deletedExternalIds'));
@@ -4042,7 +4146,7 @@ function restoreDeleted_(ss, row) {
   if (tasksB.length) {
     try {
       const auth = getAuth_();
-      tasksB.forEach(d => { fsFetch_(auth, fsBase_(cfg) + '/workspaces/' + cfg.workspaceId + '/tasks/' + encodeURIComponent(d.id), 'patch', { fields: d.fields }); made++; });
+      tasksB.forEach(d => { fsTaskPatch_(auth, cfg, d.id, d.fields, null); made++; });
       fsNote = '・工程図の作業 ' + made + '件';
     } catch (e) {
       fsNote = '・工程図の作業は戻せませんでした（' + String(e && e.message || e).slice(0, 120) + '）';
@@ -4328,7 +4432,8 @@ function checkConnection_() {
   const cfg = readSettings_();
   try {
     const auth = getAuth_();
-    const docs = fsListAll_(auth, cfg, 'workspaces/' + cfg.workspaceId + '/tasks', 1);
+    const packs = fsTaskPacks_(auth, cfg);
+    const docs = packs ? fsListAll_(auth, cfg, 'workspaces/' + cfg.workspaceId + '/data/taskPacks/packs', 1) : fsListAll_(auth, cfg, 'workspaces/' + cfg.workspaceId + '/tasks', 1);
     return { ok: true, text: '接続OK（認証方式: ' + (auth.mode === 'service-account' ? 'サービスアカウントの秘密鍵' : 'このGoogleアカウントの権限') + '）\n工程図のタスクを読み取れました（先頭 ' + docs.length + ' 件を確認）。' };
   } catch (e) {
     return { ok: false, text: '接続に失敗しました。\n\n' + String(e && e.message || e) + '\n\n対処:\n1) このスクリプトを実行しているGoogleアカウントが、工程図のFirebaseプロジェクト（' + cfg.projectId + '）のオーナーまたは編集者か確認\n2) それでも失敗する場合は、メニュー「秘密鍵を設定」でサービスアカウントの鍵を登録（手順書を参照）' };

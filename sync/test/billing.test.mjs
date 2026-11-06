@@ -119,7 +119,7 @@ test('工程図の帳票一覧に入れる形（請求書は送付済み）', ()
 });
 
 // ---- 偽のシートで「読み込む」→「PDFで発行」 ----
-function fakeEnv(tabName) {
+function fakeEnv(tabName, { packs = false } = {}) {
   const cells = {};
   const formulas = {};
   // 請求書の雛形：金額の列に式がある
@@ -154,6 +154,12 @@ function fakeEnv(tabName) {
         fetches.push({ url, method: opt.method || 'get', body: opt.payload });
         let body = '{}';
         if (url.includes('/tasks?')) body = JSON.stringify({ documents: docTasks });
+        else if (packs && /\/data\/taskPacks$/.test(url.split('?')[0])) body = JSON.stringify({ fields: { v: { integerValue: '1' }, packs: { integerValue: '64' } } });
+        else if (packs && url.includes('/data/taskPacks/packs?')) {
+          const t = {};
+          docTasks.forEach(d => { t[d.name.split('/').pop()] = { mapValue: { fields: d.fields } }; });
+          body = JSON.stringify({ documents: [{ name: 'x/p00', fields: { t: { mapValue: { fields: t } } } }] });
+        }
         else if (url.includes(':runQuery')) body = JSON.stringify([{ document: { fields: { value: { stringValue: JSON.stringify({ no: 'I-202611-04' }) } } } }, { readTime: 'x' }]);
         else if (url.includes('/export?')) return { getResponseCode: () => 200, getBlob: () => ({ setName(n) { this.name = n; return this; } }) };
         return { getResponseCode: () => 200, getContentText: () => body };
@@ -374,6 +380,18 @@ test('偽のシート：雛形から月の報告書を作り、売上登録表�
   // データの無い月は空の報告書
   const msg2 = env.blBuildSalesReport_(ss, tpl, '2026-12', () => true);
   assert.ok(msg2.includes('データがありません'), msg2);
+});
+
+test('工程図がまとめ保存のとき：まとめから作業を読み、請求済みはそのまとめの t.{id}.invoiceCheckedAt だけ書く', () => {
+  const f = fakeEnv('請求書', { packs: true });
+  const msg = f.env.blImportProject('REN.94', false);
+  assert.ok(msg.includes('1件'), msg);
+  f.env.blIssuePdf();
+  assert.equal(f.fetches.filter(x => x.url.includes('/tasks')).length, 0, '旧 tasks は読み書きしない');
+  const mark = f.fetches.filter(x => x.method === 'patch' && x.url.includes('/data/taskPacks/packs/'));
+  assert.equal(mark.length, 1);
+  assert.ok(decodeURIComponent(mark[0].url).includes('updateMask.fieldPaths=t.t1.invoiceCheckedAt'), mark[0].url);
+  assert.ok(JSON.parse(mark[0].body).fields.t.mapValue.fields.t1.mapValue.fields.invoiceCheckedAt);
 });
 
 console.log(`billing: ${passed} tests passed`);

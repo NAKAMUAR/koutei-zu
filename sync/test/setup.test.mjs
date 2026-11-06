@@ -8,6 +8,7 @@ import vm from 'node:vm';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { taskPackOf as appTaskPackOf } from '../../src/lib/taskPacks.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const src = readFileSync(path.join(here, '..', 'Code.gs'), 'utf8');
@@ -190,13 +191,36 @@ function fakeFirestore(customers) {
   const list = customers.map((company, i) => ({ id: 'cust-' + i, company, contacts: [] }));
   fs.docs['workspaces/liebe-asia-team/data/customerMaster'] = { value: { stringValue: JSON.stringify(list) } };
   fs.customers = () => JSON.parse(fs.docs['workspaces/liebe-asia-team/data/customerMaster'].value.stringValue).map(c => c.company);
-  fs.tasks = () => Object.keys(fs.docs).filter(k => k.indexOf('workspaces/liebe-asia-team/tasks/') === 0).map(k => {
-    const f = fs.docs[k]; const o = {};
+  // まとめ保存（TASK_PACKS=1 で動かすと、工程図がまとめ保存に移った後の状態でテストする）
+  const W = 'workspaces/liebe-asia-team/';
+  const PACKS = W + 'data/taskPacks/packs/';
+  fs.packMode = !!process.env.TASK_PACKS;
+  if (fs.packMode) {
+    fs.docs[W + 'data/taskPacks'] = { v: { integerValue: '1' }, packs: { integerValue: '64' } };
+    for (let i = 0; i < 64; i++) fs.docs[PACKS + 'p' + String(i).padStart(2, '0')] = { t: { mapValue: { fields: {} } } };
+  }
+  const packOf = (id) => { let h = 0x811c9dc5; const s = String(id); for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); } return PACKS + 'p' + String((h >>> 0) % 64).padStart(2, '0'); };
+  fs.packOf = packOf;
+  // タスクid → エンコード済み fields（どちらの保存のしかたでも）
+  const taskFields = () => {
+    const out = {};
+    if (fs.packMode) Object.keys(fs.docs).filter(k => k.indexOf(PACKS) === 0).forEach(k => { const t = fs.docs[k].t.mapValue.fields || {}; Object.keys(t).forEach(id => { out[id] = t[id].mapValue.fields; }); });
+    else Object.keys(fs.docs).filter(k => k.indexOf(W + 'tasks/') === 0).forEach(k => { out[k.split('/').pop()] = fs.docs[k]; });
+    return out;
+  };
+  fs.tasks = () => Object.values(taskFields()).map(f => {
+    const o = {};
     Object.keys(f).forEach(n => { const v = f[n]; o[n] = 'stringValue' in v ? v.stringValue : 'integerValue' in v ? Number(v.integerValue) : 'doubleValue' in v ? v.doubleValue : 'booleanValue' in v ? v.booleanValue : null; });
     return o;
   });
-  // テスト用：工程図側でタスクを直す（完了にするなど）
-  fs.setTask = (id, patch) => { const k = 'workspaces/liebe-asia-team/tasks/' + id; Object.keys(patch).forEach(f => { fs.docs[k][f] = { stringValue: patch[f] }; }); };
+  // テスト用：工程図側でタスクを置く・直す（完了にするなど）
+  fs.putTask = (id, fields) => {
+    if (fs.packMode) fs.docs[packOf(id)].t.mapValue.fields[id] = { mapValue: { fields } };
+    else fs.docs[W + 'tasks/' + id] = fields;
+  };
+  fs.setTask = (id, patch) => { const f = taskFields()[id]; Object.keys(patch).forEach(k => { f[k] = { stringValue: patch[k] }; }); };
+  // updateMask のパス（t.`id`.hours など）を区切る
+  const splitPath = (p) => { const out = []; let cur = '', q = false; for (let i = 0; i < p.length; i++) { const c = p[i]; if (q) { if (c === '\\') { cur += p[++i]; } else if (c === '`') q = false; else cur += c; } else if (c === '`') q = true; else if (c === '.') { out.push(cur); cur = ''; } else cur += c; } out.push(cur); return out; };
   fs.fetch = (url, opt) => {
     const method = (opt && opt.method) || 'get';
     const res = (code, body) => ({ getResponseCode: () => code, getContentText: () => (body === undefined ? '' : JSON.stringify(body)) });
@@ -219,10 +243,15 @@ function fakeFirestore(customers) {
       };
       const hits = Object.keys(fs.docs).filter(k => k.indexOf(base) === 0 && !k.slice(base.length).includes('/') && test(q.where, fs.docs[k]));
       fs.queries = (fs.queries || 0) + 1;
+      fs.taskReads = (fs.taskReads || 0) + 1;
       fs.queryReads = (fs.queryReads || 0) + hits.length;
       return res(200, hits.length ? hits.map(k => ({ document: { name: k, fields: fs.docs[k] } })) : [{ readTime: 'x' }]);
     }
     if (method === 'get') {
+      if (/\/taskPacks\/packs$/.test(p)) {
+        fs.taskReads = (fs.taskReads || 0) + 1;
+        return res(200, { documents: Object.keys(fs.docs).filter(k => k.indexOf(p + '/') === 0).map(k => ({ name: k, fields: fs.docs[k] })) });
+      }
       if (/\/tasks$/.test(p)) fs.listAll = (fs.listAll || 0) + 1;
       if (/\/tasks$/.test(p)) return res(200, { documents: Object.keys(fs.docs).filter(k => k.indexOf(p + '/') === 0).map(k => ({ name: k, fields: fs.docs[k] })) });
       return fs.docs[p] ? res(200, { name: p, fields: fs.docs[p] }) : res(404, { error: 'NOT_FOUND' });
@@ -230,7 +259,25 @@ function fakeFirestore(customers) {
     if (method === 'delete') { delete fs.docs[p]; fs.patches.push({ path: p, deleted: true }); return res(200, {}); }
     const body = JSON.parse(opt.payload);
     const mask = url.indexOf('updateMask') >= 0;
-    fs.docs[p] = mask ? Object.assign({}, fs.docs[p] || {}, body.fields) : body.fields;
+    if (!mask) fs.docs[p] = body.fields;
+    else {
+      // 本物と同じく、パスごとに：中身にあれば置き換え、無ければ消す（入れ子の t.`id`.hours も）
+      const cur = JSON.parse(JSON.stringify(fs.docs[p] || {}));
+      const paths = url.split('?')[1].split('&').filter(x => x.indexOf('updateMask.fieldPaths=') === 0).map(x => decodeURIComponent(x.split('=')[1]));
+      paths.forEach(fp => {
+        const segs = splitPath(fp);
+        let src = body.fields;
+        segs.forEach((sg, i) => { src = src && (i === 0 ? src[sg] : (src.mapValue && src.mapValue.fields || {})[sg]); });
+        let dst = cur;
+        for (let i = 0; i < segs.length - 1; i++) {
+          if (!dst[segs[i]] || !dst[segs[i]].mapValue) dst[segs[i]] = { mapValue: { fields: {} } };
+          dst = dst[segs[i]].mapValue.fields || (dst[segs[i]].mapValue.fields = {});
+        }
+        const last = segs[segs.length - 1];
+        if (src === undefined) delete dst[last]; else dst[last] = src;
+      });
+      fs.docs[p] = cur;
+    }
     fs.patches.push({ path: p, mask, fields: Object.keys(body.fields) });
     return res(200, { name: p });
   };
@@ -286,7 +333,7 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
   };
   vm.createContext(ctx);
   const names = ['onAdminEdit', 'renderRegMessage_', 'onStaffEdit', 'syncRegistrationsNow', 'saveDiscordWebhook_', 'inNotifyHours_', 'isReminderDue_', 'calcDeadlineOf_', 'regState_', 'REG_STATE', 'quickSetup', 'createStaffInputTab', 'transferFromStaffSheet', 'autoRun', 'readSettings_', 'readStaffRows_', 'collectSourceRows_', 'findStaffHeaderRow_',
-    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'FORM_NO_COL', 'updateEntryForm', 'normRegNo_', 'formRegGroup_', 'formEnsureEditRow_', 'FORM_L', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_', 'deleteRegistrations', 'cancelDeleteRegistrations', 'writeScheduleToLink_', 'writeAssigneeTabs_', 'fsReadDay_', 'fsReadsToday_', 'AUTO_READ_BUDGET', 'deliveryYmd_', 'fillStaffDeliveryNames_', 'planRegDeletion_', 'deleteDialogHtml_', 'DELETE_DIALOG_SCRIPT'];
+    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'FORM_NO_COL', 'updateEntryForm', 'normRegNo_', 'formRegGroup_', 'formEnsureEditRow_', 'FORM_L', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_', 'deleteRegistrations', 'cancelDeleteRegistrations', 'writeScheduleToLink_', 'writeAssigneeTabs_', 'taskPackOf_', 'fsReadDay_', 'fsReadsToday_', 'AUTO_READ_BUDGET', 'deliveryYmd_', 'fillStaffDeliveryNames_', 'planRegDeletion_', 'deleteDialogHtml_', 'DELETE_DIALOG_SCRIPT'];
   env.g = vm.runInContext(src + '\n;({' + names.join(',') + '})', ctx);
   // テストは時刻に関係なく Discord を送る（知らせる時間帯を 0-24 に）。時間帯のテストは env.setHours で変える
   env.setHours = (h) => { const st = env.admin.getSheetByName('設定'); const r = st && st.rows.findIndex(x => x[0] === '催促する時間帯（ベトナム時間）'); if (r >= 0) st.set(r + 1, 2, h); };
@@ -692,10 +739,10 @@ test('15分ごとの自動実行：転記 → 15分たった「未送信」だ�
   // アプリが完了を予定のまとめに書く → 次の自動実行で制作済みへ（タスクは読まない）
   const snapDoc = 'workspaces/liebe-asia-team/data/scheduleSnapshot';
   env.fs.docs[snapDoc] = { value: { stringValue: JSON.stringify({ updatedAt: Date.now(), items: { 'RIC34::EX1::1': { s: null, e: null, a: '', st: '完了' }, 'RIC34::EX1::2': { st: '予定' } } }) } };
-  const q0 = env.fs.queries || 0;
+  const q0 = env.fs.taskReads || 0;
   r = env.g.autoRun();
   assert.ok(r.indexOf('制作済みへ1件') >= 0, r);
-  assert.equal(env.fs.queries || 0, q0, '完了の確認でタスクを読まない（Firestore の読み取りを使わない）');
+  assert.equal(env.fs.taskReads || 0, q0, '完了の確認でタスクを読まない（Firestore の読み取りを使わない）');
   same(filled(eng.getSheetByName('制作済み')), ['RIC.34 EX1']);
   same(filled(doing), ['REN.72 EXM1', 'NEWCO.1 IN1', 'RIC.34 EX1']);
   r = env.g.autoRun();
@@ -1477,8 +1524,7 @@ test('登録の削除：エンジニアの削除依頼 →『登録一覧』に�
   const { link, at } = linkAt(admin);
   same([at(2, '取込キー'), at(3, '取込キー')], ['RIC34::EX1::1', 'RIC34::EX2::1']);
   // 工程図にタスクがある（EX1 のカラーは工程図で消された記録あり）
-  const T = 'workspaces/liebe-asia-team/tasks/';
-  [['t1', 'RIC34::EX1::1::white'], ['t2', 'RIC34::EX2::1::white']].forEach(([id, ext]) => { env.fs.docs[T + id] = { id: { stringValue: id }, externalId: { stringValue: ext } }; });
+  [['t1', 'RIC34::EX1::1::white'], ['t2', 'RIC34::EX2::1::white']].forEach(([id, ext]) => env.fs.putTask(id, { id: { stringValue: id }, externalId: { stringValue: ext } }));
   env.fs.docs['workspaces/liebe-asia-team/data/deletedExternalIds'] = { value: { stringValue: JSON.stringify(['RIC34::EX1::1::color', 'OTHER::IN1::1::white']) } };
 
   // エンジニアが削除依頼 → 『登録一覧』に日時・Discord で知らせる（1回だけ）。外すと消える
@@ -1866,11 +1912,11 @@ test('連携スクリプトの読み取りの目安：読んだ件数を数え�
   const { at, set } = linkAt(admin);
   set(2, '転記日時', new Date(Date.now() - 3600000));
   env.props.FS_READS = JSON.stringify({ day: env.g.fsReadDay_(), n: env.g.AUTO_READ_BUDGET });
-  const q0 = env.fs.queries || 0;
+  const q0 = env.fs.taskReads || 0;
   const r = env.g.autoRun();
   assert.ok(r.includes('目安'), r);
   assert.equal(at(2, '状態'), '未送信', '目安を超えたら自動では送らない');
-  assert.equal(env.fs.queries || 0, q0, '工程図のタスクを読まない');
+  assert.equal(env.fs.taskReads || 0, q0, '工程図のタスクを読まない');
   assert.equal(env.discord.filter(m => m.includes('目安')).length, 1, 'Discord で1回知らせる');
   env.g.autoRun();
   assert.equal(env.discord.filter(m => m.includes('目安')).length, 1, '何度も知らせない');
@@ -1878,6 +1924,29 @@ test('連携スクリプトの読み取りの目安：読んだ件数を数え�
   env.props.FS_READS = JSON.stringify({ day: '2000-01-01', n: 99999 });
   env.g.autoRun();
   assert.equal(at(2, '状態'), '登録済み');
+});
+
+test('タスクのまとめ保存：スクリプトの割り振りはアプリと同じ／まとめ保存なら旧 tasks に読み書きしない', () => {
+  const taskPackOf = appTaskPackOf;
+  const admin = adminSheet();
+  const env = makeEnv({ admin, files: { [NEW_ID]: engineerFile() } });
+  for (let i = 0; i < 500; i++) assert.equal(env.g.taskPackOf_('task_' + i + '_x', 64), taskPackOf('task_' + i + '_x', 64));
+  assert.equal(env.g.taskPackOf_('abc', 123), taskPackOf('abc', 123));
+  if (!env.fs.packMode) return;
+  env.g.quickSetup();
+  const reg = admin.getSheetByName('登録一覧');
+  const rh = reg.header();
+  ['会社コード', '案件番号', '社外案件名', '新規or修正', '視点', 'サーバーリンク', 'White', 'Color'].forEach((h, j) => reg.set(2, rh.indexOf(h) + 1, ['RIC', 34, 'マンション', NEWR, 'EX1', LINK, 3, 2][j]));
+  env.g.syncRegistrationsNow();
+  env.g.autoRun();
+  const { at, set } = linkAt(admin);
+  set(2, '転記日時', new Date(Date.now() - 3600000));
+  env.g.autoRun();
+  assert.equal(at(2, '状態'), '登録済み');
+  same(env.fs.tasks().map(t => t.externalId).sort(), ['RIC34::EX1::1::color', 'RIC34::EX1::1::white']);
+  assert.equal(Object.keys(env.fs.docs).filter(k => k.indexOf('/tasks/') >= 0).length, 0, '旧 tasks には書かない');
+  const white = env.fs.tasks().find(t => t.externalId === 'RIC34::EX1::1::white');
+  assert.ok(env.fs.docs[env.fs.packOf(white.id)].t.mapValue.fields[white.id], 'アプリと同じまとめに入る');
 });
 
 console.log(`\n${passed} tests passed`);

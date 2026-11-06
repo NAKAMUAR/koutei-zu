@@ -258,8 +258,45 @@ function blEncode_(v) {
   Object.keys(v).forEach(k => { f[k] = blEncode_(v[k]); });
   return { mapValue: { fields: f } };
 }
+// ---- 工程図のタスクのまとめ保存（2026-11-06）：目印 data/taskPacks があれば、まとめ（data/taskPacks/packs/p00〜）を読み書きする ----
+function blTaskPacks_() {
+  const props = PropertiesService.getDocumentProperties();
+  const known = Number(props.getProperty('TASK_PACKS') || 0);
+  if (known > 0) return known;
+  let d = null;
+  try { d = blFetch_(blBase_() + '/workspaces/' + BL.workspaceId + '/data/taskPacks', 'get'); } catch (e) { d = null; }
+  const m = d && d.fields ? blDecodeFields_(d.fields) : null;
+  if (m && Number(m.v) === 1) { const n = Number(m.packs) || 64; props.setProperty('TASK_PACKS', String(n)); return n; }
+  return 0;
+}
+/** タスクid → まとめの名前（工程図アプリの src/lib/taskPacks.js と同じ計算） */
+function blTaskPackOf_(id, packs) {
+  const s = String(id);
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  const n = (h >>> 0) % (packs || 64);
+  return 'p' + (n < 10 ? '0' : '') + n;
+}
+function blQuoteSeg_(k) {
+  const s = String(k);
+  return /^[A-Za-z_][A-Za-z_0-9]*$/.test(s) ? s : '`' + s.replace(/`/g, '\\`') + '`';
+}
 /** 工程図の作業（金額の確認に使う項目だけ） */
 function blListTasks_() {
+  if (blTaskPacks_()) {
+    const out = [];
+    let tk = '';
+    do {
+      const j = blFetch_(blBase_() + '/workspaces/' + BL.workspaceId + '/data/taskPacks/packs?pageSize=300' + (tk ? '&pageToken=' + encodeURIComponent(tk) : ''), 'get');
+      (j.documents || []).forEach(d => {
+        const t = d.fields && d.fields.t && d.fields.t.mapValue && d.fields.t.mapValue.fields;
+        if (!t) return;
+        Object.keys(t).forEach(id => { const o = blDecodeFields_((t[id].mapValue && t[id].mapValue.fields) || {}); o.id = id; out.push(o); });
+      });
+      tk = j.nextPageToken || '';
+    } while (tk);
+    return out;
+  }
   const mask = ['projectName', 'projectNameInternal', 'companyName', 'viewpointName', 'viewpointNameExternal', 'stepName', 'stepAmount',
     'stepCompletedDate', 'stepDeliveryNameOverride', 'invoiceCheckedAt', 'completedAt', 'createdAt', 'status'];
   const q = mask.map(f => 'mask.fieldPaths=' + f).join('&');
@@ -296,6 +333,17 @@ function blSaveAppDoc_(doc) {
   blFetch_(url, 'patch', { fields: { value: blEncode_(JSON.stringify(doc)), updatedAt: blEncode_(Date.now()) } });
 }
 function blMarkInvoiced_(taskIds, at) {
+  const packs = blTaskPacks_();
+  if (packs) {
+    (taskIds || []).forEach(id => {
+      const fp = 't.' + blQuoteSeg_(id) + '.invoiceCheckedAt';
+      const url = blBase_() + '/workspaces/' + BL.workspaceId + '/data/taskPacks/packs/' + blTaskPackOf_(id, packs) + '?updateMask.fieldPaths=' + encodeURIComponent(fp);
+      const inner = {};
+      inner[id] = { mapValue: { fields: { invoiceCheckedAt: blEncode_(at) } } };
+      blFetch_(url, 'patch', { fields: { t: { mapValue: { fields: inner } } } });
+    });
+    return;
+  }
   (taskIds || []).forEach(id => {
     const url = blBase_() + '/workspaces/' + BL.workspaceId + '/tasks/' + id + '?updateMask.fieldPaths=invoiceCheckedAt';
     blFetch_(url, 'patch', { fields: { invoiceCheckedAt: blEncode_(at) } });
