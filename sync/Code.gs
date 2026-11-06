@@ -1296,6 +1296,57 @@ function moveStaffRows_(cfg) {
 }
 const PROP_DONE_CHECKED_AT = 'DONE_CHECKED_AT';
 const DONE_CHECK_INTERVAL_MS = 55 * 60000; // 15分ごとの自動実行のうち、1時間に1回だけ
+/**
+ * 入力シート（入力前・制作中・制作済み）の納品名が空の行に、納品名を入れる（登録No の無い古い行も。2026-11-06）。
+ * 社外視点名は『連携』の同じ取込キーの行（人が直した名前）→ 無ければ視点コードから自動 → それも無ければ視点名そのもの。
+ * 入っている納品名は変えない。入れた件数
+ */
+function fillStaffDeliveryNames_(cfg, ss) {
+  const link = ss.getSheetByName(SHEET.LINK);
+  const byKey = new Map();
+  if (link && link.getLastRow() >= 2) {
+    const col = headerMap_(link);
+    link.getRange(2, 1, link.getLastRow() - 1, link.getLastColumn()).getValues().forEach(v => {
+      const k = trimStr_(v[col.key - 1]);
+      if (k) byKey.set(k, { name: trimStr_(v[col.name - 1]), ext: col.extName ? trimStr_(v[col.extName - 1]) : '' });
+    });
+  }
+  const views = readMasters_(ss).views;
+  const file = SpreadsheetApp.openById(cfg.fileId);
+  const counts = new Map();
+  let filled = 0;
+  staffTabNames_(cfg).map(name => file.getSheetByName(name)).filter(Boolean).forEach(sheet => {
+    const hr = findStaffHeaderRow_(sheet);
+    if (hr < 0 || sheet.getLastRow() <= hr) return;
+    const sc = mapStaffColumns_(sheet.getRange(hr, 1, 1, sheet.getLastColumn()).getValues()[0]);
+    if (!sc.delivery || !sc.code || !sc.cut) return;
+    const w = Math.max.apply(null, Object.keys(sc).map(k => sc[k]));
+    const vals = sheet.getRange(hr + 1, 1, sheet.getLastRow() - hr, w).getValues();
+    const out = vals.map(v => [v[sc.delivery - 1]]);
+    let changed = false;
+    vals.forEach((v, i) => {
+      const code = joinCode_(v[sc.code - 1], sc.number ? v[sc.number - 1] : '');
+      const cut = trimStr_(v[sc.cut - 1]);
+      if (!code || !cut) return;
+      const pattern = sc.pattern ? v[sc.pattern - 1] : '';
+      const vp = viewpointNameOf_(cut, pattern);
+      const base = normCode_(code) + '::' + normCut_(vp);
+      const n = (counts.get(base) || 0) + 1;
+      counts.set(base, n);
+      if (trimStr_(v[sc.delivery - 1]) !== '') return;
+      const l = byKey.get(base + '::' + n) || {};
+      const name = trimStr_(v[sc.name - 1]) || l.name || '';
+      const sp = formSplitCut_(cut);
+      const ext = l.ext || formAutoExt_(sp.code, sp.room, normPattern_(pattern), views) || vp;
+      const dn = [name, ext, 'YYMMDD'].filter(Boolean).join('_');
+      out[i] = [dn];
+      changed = true;
+      filled++;
+    });
+    if (changed) sheet.getRange(hr + 1, sc.delivery, out.length, 1).setValues(out);
+  });
+  return filled;
+}
 /** 社内案件名（RIC.34 など）のタスクだけを読む（projectNameInternal で絞る。30件ずつ） */
 function fsTasksByProjects_(auth, cfg, codes) {
   const out = [];
@@ -1434,6 +1485,12 @@ function autoRun() {
       if (mv.toDoing || mv.toDone) parts.push('入力シート 制作中へ' + mv.toDoing + '件・制作済みへ' + mv.toDone + '件');
     } catch (e) {
       parts.push('入力シートの移動エラー：' + String(e && e.message || e));
+    }
+    try {
+      const dn = fillStaffDeliveryNames_(cfg, SpreadsheetApp.getActiveSpreadsheet());
+      if (dn) parts.push('納品名を入れた ' + dn + '件');
+    } catch (e) {
+      parts.push('納品名のエラー：' + String(e && e.message || e));
     }
     notifyQuotaOnce_();
   } catch (e) {

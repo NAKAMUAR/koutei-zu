@@ -280,7 +280,7 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
   };
   vm.createContext(ctx);
   const names = ['onAdminEdit', 'renderRegMessage_', 'onStaffEdit', 'syncRegistrationsNow', 'saveDiscordWebhook_', 'inNotifyHours_', 'isReminderDue_', 'calcDeadlineOf_', 'regState_', 'REG_STATE', 'quickSetup', 'createStaffInputTab', 'transferFromStaffSheet', 'autoRun', 'readSettings_', 'readStaffRows_', 'collectSourceRows_', 'findStaffHeaderRow_',
-    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'FORM_NO_COL', 'updateEntryForm', 'normRegNo_', 'formRegGroup_', 'formEnsureEditRow_', 'FORM_L', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_', 'deleteRegistrations', 'cancelDeleteRegistrations', 'planRegDeletion_', 'deleteDialogHtml_', 'DELETE_DIALOG_SCRIPT'];
+    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'FORM_NO_COL', 'updateEntryForm', 'normRegNo_', 'formRegGroup_', 'formEnsureEditRow_', 'FORM_L', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_', 'deleteRegistrations', 'cancelDeleteRegistrations', 'fillStaffDeliveryNames_', 'planRegDeletion_', 'deleteDialogHtml_', 'DELETE_DIALOG_SCRIPT'];
   env.g = vm.runInContext(src + '\n;({' + names.join(',') + '})', ctx);
   // テストは時刻に関係なく Discord を送る（知らせる時間帯を 0-24 に）。時間帯のテストは env.setHours で変える
   env.setHours = (h) => { const st = env.admin.getSheetByName('設定'); const r = st && st.rows.findIndex(x => x[0] === '催促する時間帯（ベトナム時間）'); if (r >= 0) st.set(r + 1, 2, h); };
@@ -1739,6 +1739,32 @@ test('Discord は知らせる時間帯（既定 8-18）の中だけ。外の通�
   assert.ok(r.includes('時間帯の外の通知 1件'), r);
   assert.ok(env.discord[env.discord.length - 1].includes('削除依頼'), '貯めた通知を送る');
   assert.ok(!('DISCORD_QUEUE' in env.props));
+});
+
+test('納品名：登録No の無い古い行（制作中・制作済み）にも入れる。社外視点名は『連携』→ 視点コードから自動 → 視点名そのもの。入っている名前は変えない', () => {
+  const admin = adminSheet();
+  const eng = engineerFile();
+  const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
+  env.g.quickSetup();
+  const done = eng.getSheetByName('制作済み');
+  const sh = done.header(2).map(h => h.split('\n')[0]);
+  const C = (name) => sh.indexOf(name) + 1;
+  const put = (r, o) => Object.keys(o).forEach(h => done.set(r, C(h), o[h]));
+  put(3, { '会社コード': 'REN', '案件番号': 100, '社外案件名': '王子PJ', '視点': 'IN1', '新規or修正': NEWR, 'White躯体': 2 });
+  put(4, { '会社コード': 'REN', '案件番号': 100, '社外案件名': '王子PJ', '視点': 'IN2', '新規or修正': NEWR, 'White躯体': 2 });
+  put(5, { '会社コード': 'CG', '案件番号': 36, '社外案件名': '深沢', '視点': 'House1', '新規or修正': NEWR, 'White躯体': 2 });
+  put(6, { '会社コード': 'REN', '案件番号': 100, '社外案件名': '王子PJ', '視点': 'IN1', '新規or修正': FIXR, 'Color': 1 });
+  put(7, { '会社コード': 'REN', '案件番号': 100, '社外案件名': '王子PJ', '視点': 'IN3', '新規or修正': NEWR, 'White躯体': 1, '納品名': '手で付けた名前' });
+  // 『連携』で人が社外視点名を直した行（REN100::IN2::1）
+  const { link } = linkAt(admin);
+  const lh = link.header();
+  link.set(2, lh.indexOf('取込キー') + 1, 'REN100::IN2::1');
+  link.set(2, lh.indexOf('社外視点名') + 1, 'リビング');
+  const n = env.g.fillStaffDeliveryNames_(env.g.readSettings_(), admin);
+  assert.equal(n, 4);
+  const D = (r) => done.rows[r - 1][C('納品名') - 1];
+  same([D(3), D(4), D(5), D(6), D(7)], ['王子PJ_内観目線視点①_YYMMDD', '王子PJ_リビング_YYMMDD', '深沢_House1_YYMMDD', '王子PJ_内観目線視点①_YYMMDD', '手で付けた名前']);
+  assert.equal(env.g.fillStaffDeliveryNames_(env.g.readSettings_(), admin), 0, '2回目は何もしない');
 });
 
 console.log(`\n${passed} tests passed`);
