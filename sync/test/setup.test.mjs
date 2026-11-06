@@ -40,6 +40,7 @@ class FakeRange {
   setFontSize() { return this; }
   setFontColor() { return this; }
   setBackground() { return this; }
+  setBackgrounds(arr) { this.sheet.bgs = { row: this.row, col: this.col, arr }; return this; }
   setWrap() { return this; }
   breakApart() { return this; }
   setVerticalAlignment() { return this; }
@@ -62,6 +63,11 @@ class FakeSheet {
   // 行を差し込む（下の行を n 行ずつ下へずらす。シートの最後に足すときは大きさが増えるだけ）
   insertRowsAfter(after, n) { this.maxRows += n; if (this.rows.length > after) this.rows.splice(after, 0, ...Array.from({ length: n }, () => [])); return this; }
   insertColumnsAfter(after, n) { this.maxCols += n; return this; }
+  deleteColumns(c, n) { this.maxCols -= n; return this; }
+  deleteRows(r, n) { this.maxRows -= n; this.rows.splice(r - 1, n); return this; }
+  setFrozenColumns(n) { this.frozenCols = n; return this; }
+  setColumnWidths() { return this; }
+  setTabColor() { return this; }
   // 列を差し込む（右の値を1つずつ右へずらす）
   deleteRow(r) { this.rows.splice(r - 1, 1); return this; }
   insertColumnAfter(after) { this.maxCols += 1; this.rows.forEach(r => { if (r.length > after) r.splice(after, 0, ''); }); return this; }
@@ -280,7 +286,7 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
   };
   vm.createContext(ctx);
   const names = ['onAdminEdit', 'renderRegMessage_', 'onStaffEdit', 'syncRegistrationsNow', 'saveDiscordWebhook_', 'inNotifyHours_', 'isReminderDue_', 'calcDeadlineOf_', 'regState_', 'REG_STATE', 'quickSetup', 'createStaffInputTab', 'transferFromStaffSheet', 'autoRun', 'readSettings_', 'readStaffRows_', 'collectSourceRows_', 'findStaffHeaderRow_',
-    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'FORM_NO_COL', 'updateEntryForm', 'normRegNo_', 'formRegGroup_', 'formEnsureEditRow_', 'FORM_L', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_', 'deleteRegistrations', 'cancelDeleteRegistrations', 'writeScheduleToLink_', 'deliveryYmd_', 'fillStaffDeliveryNames_', 'planRegDeletion_', 'deleteDialogHtml_', 'DELETE_DIALOG_SCRIPT'];
+    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'FORM_NO_COL', 'updateEntryForm', 'normRegNo_', 'formRegGroup_', 'formEnsureEditRow_', 'FORM_L', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_', 'deleteRegistrations', 'cancelDeleteRegistrations', 'writeScheduleToLink_', 'writeAssigneeTabs_', 'deliveryYmd_', 'fillStaffDeliveryNames_', 'planRegDeletion_', 'deleteDialogHtml_', 'DELETE_DIALOG_SCRIPT'];
   env.g = vm.runInContext(src + '\n;({' + names.join(',') + '})', ctx);
   // テストは時刻に関係なく Discord を送る（知らせる時間帯を 0-24 に）。時間帯のテストは env.setHours で変える
   env.setHours = (h) => { const st = env.admin.getSheetByName('設定'); const r = st && st.rows.findIndex(x => x[0] === '催促する時間帯（ベトナム時間）'); if (r >= 0) st.set(r + 1, 2, h); };
@@ -1812,6 +1818,34 @@ test('工程図の予定：アプリが書いた data/scheduleSnapshot を1件�
   env.props.FS_QUOTA_UNTIL = String(Date.now() + 3600000);
   assert.equal(env.g.writeScheduleToLink_(env.g.readSettings_(), admin).skipped, true);
   assert.ok(g0 >= 0);
+});
+
+test('担当者ごとの予定表：plan から『予定_担当者名』タブを作り、2週間×30分の枠に色を塗る（同じまとめなら書き直さない）', () => {
+  const admin = adminSheet();
+  const env = makeEnv({ admin, files: { [NEW_ID]: engineerFile() } });
+  const now = new Date(2026, 10, 6, 9, 0).getTime();
+  const snap = { updatedAt: now, plan: { from: '2026-11-06', days: 14, rows: [
+    { a: 'Quynh', p: 'REN100', v: 'IN1', s: 'ホワイト', st: '作業中', dl: '2026-11-10', b: now, e: now + 3600000, sl: [[0, 480, 600], [3, 780, 840]] },
+    { a: 'Linh', p: 'SAN27', v: 'EX1', s: 'カラー', st: '予定', dl: '', b: now, e: now, sl: [[1, 480, 510]] },
+  ] } };
+  const r = env.g.writeAssigneeTabs_(admin, snap);
+  same([r.tabs, r.rows, r.skipped], [2, 2, false]);
+  const q = admin.getSheetByName('予定_Quynh');
+  assert.ok(q && admin.getSheetByName('予定_Linh'));
+  const perDay = (1020 - 480) / 30; // 8:00〜17:00
+  same([q.getMaxColumns(), q.getMaxRows(), q.frozen, q.frozenCols], [7 + 14 * perDay, 6, 3, 7], '中身ぴったりの大きさ');
+  same(q.rows[3].slice(0, 3), ['REN100', 'IN1', 'ホワイト']);
+  same([q.rows[1][7], q.rows[2][7]], ['11/6（金）', '8']);
+  const bg = q.bgs.arr;
+  assert.equal(bg[3][7], '#78909c', '8:00 は作業中のホワイト');
+  assert.notEqual(bg[3][7 + 4], '#78909c', '10:00 からは空き');
+  assert.equal(bg[3][7 + 3 * perDay + 10], '#78909c', '4日目の 13:00');
+  // 同じまとめなら書き直さない
+  assert.equal(env.g.writeAssigneeTabs_(admin, snap).skipped, true);
+  // Linh の予定がなくなったら、タブは残して「予定なし」
+  const snap2 = { updatedAt: now + 1, plan: { from: '2026-11-06', days: 14, rows: [snap.plan.rows[0]] } };
+  env.g.writeAssigneeTabs_(admin, snap2);
+  assert.equal(admin.getSheetByName('予定_Linh').rows[3][0], '今日から2週間の予定はありません');
 });
 
 console.log(`\n${passed} tests passed`);

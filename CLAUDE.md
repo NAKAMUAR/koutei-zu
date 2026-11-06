@@ -84,7 +84,7 @@ src/
   - 2026-11-05 から、視点の番号はどの区分も20まで（`VIEW_OPTION_COUNT_DEFAULT`）。Discord 通知はすべて『設定』の時間帯（既定 8-18）だけ、外の分は `DISCORD_QUEUE` に貯めて時間帯に入ったら送る（`notifyDiscord_`・`flushDiscordQueue_`）。
   - 2026-11-06 から、自動実行の最後に入力シート3タブの空の納品名を埋める（`fillStaffDeliveryNames_`。登録No の無い古い行も。社外視点名は『連携』→自動→視点名）。
   - 2026-11-06 から、一度『制作済み』へ移したキー（`DONE_MOVED_KEYS`）は、人が『制作中』へ戻したらもう自動では移さない。
-  - 2026-11-06 から、アプリが計算した予定を取込キーごとにまとめて `data/scheduleSnapshot` に書き（`src/lib/useScheduleSnapshot.js`。変わったときだけ・10分に1回まで）、連携スクリプトがそれを1件読んで『連携』の「開始予定（工程図）」「終了予定（工程図）」「担当（工程図）」「工程図の状態」に入れる（`writeScheduleToLink_`）。
+  - 2026-11-06 から、アプリが計算した予定を取込キーごとにまとめて `data/scheduleSnapshot` に書き（`src/lib/useScheduleSnapshot.js`。変わったときだけ・10分に1回まで）、連携スクリプトがそれを1件読んで『連携』の「開始予定（工程図）」「終了予定（工程図）」「担当（工程図）」「工程図の状態」に入れる（`writeScheduleToLink_`）。同じまとめに今日から2週間・30分刻みの作業枠（`plan`、`buildAssigneePlan`）も入れ、管理者用シートの『予定_担当者名』タブに担当者ごとの予定表を書く（`writeAssigneeTabs_`。数式・条件付き書式なしで値と背景色だけ・タブは中身ぴったりの大きさ・まとめが変わったときだけ書き直す）。
   - 実際のシートへのスクリプトの設置・初期設定・動作確認の引き継ぎは `docs/09_引き継ぎ_連携スクリプトの設置.md`（設置と承認は kei.n412@gmail.com で行う）。
   - 工程図への書き込みは Firestore REST API。認証は実行アカウント（Firebase オーナー）の OAuth トークン、または サービスアカウント鍵（スクリプトプロパティに保存。**鍵ファイルはリポジトリに入れない**、`.gitignore` 済み）。Firestore ルールはこの経路に適用されないので、ルール変更は不要。
   - 同期で作るタスクは `externalId`（`案件コード::視点名(パターン込み)::n回目::ステップ種類`）を持ち、`stepRoundType`（新規→initial・追加→add・修正/変更→fix）と `viewpointNameExternal`（外観視点①_パターンA）を自動で入れる。アプリ側で削除すると `data/deletedExternalIds` に記録され、再送信しても復活しない（App.jsx の既存挙動）。

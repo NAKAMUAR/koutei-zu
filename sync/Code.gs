@@ -1380,7 +1380,7 @@ function writeScheduleToLink_(cfg, ss) {
   try { snap = JSON.parse(raw); } catch (e) { return { rows: 0, updatedAt: null }; }
   const items = (snap && snap.items) || {};
   const link = ensureLinkSheet_(ss);
-  if (link.getLastRow() < 2) return { rows: 0, updatedAt: snap.updatedAt || null };
+  if (link.getLastRow() < 2) return { rows: 0, updatedAt: snap.updatedAt || null, snap };
   const col = headerMap_(link);
   const n = link.getLastRow() - 1;
   const keys = link.getRange(2, col.key, n, 1).getValues().map(v => trimStr_(v[0]));
@@ -1401,7 +1401,124 @@ function writeScheduleToLink_(cfg, ss) {
       rows++;
     }
   });
-  return { rows: want.filter(w => w[0] || w[3]).length, changed: rows > 0, updatedAt: snap.updatedAt || null };
+  return { rows: want.filter(w => w[0] || w[3]).length, changed: rows > 0, updatedAt: snap.updatedAt || null, snap };
+}
+/** 担当者ごとの予定表のタブ名（『予定_担当者名』。シート名に使えない文字は _ に） */
+const PLAN_TAB_PREFIX = '予定_';
+function planTabName_(who) {
+  return (PLAN_TAB_PREFIX + String(who || '').replace(/[\[\]\*\?\/\\:]/g, '_')).slice(0, 90);
+}
+/** 予定表の1日の時間帯（分）。全員の作業枠が入るように、30分単位で 8:00〜17:00 より広げる */
+function planDayRange_(rows) {
+  let lo = 480, hi = 1020;
+  rows.forEach(r => (r.sl || []).forEach(x => { lo = Math.min(lo, x[1]); hi = Math.max(hi, x[2]); }));
+  return { lo: Math.floor(lo / 30) * 30, hi: Math.ceil(hi / 30) * 30 };
+}
+const PLAN_COLORS = { white: '#cfd8dc', whiteNow: '#78909c', color: '#ffe0b2', colorNow: '#fb8c00', other: '#dcedc8', otherNow: '#7cb342' };
+function planColorOf_(step, st) {
+  const kind = /ホワイト|white/i.test(step) ? 'white' : /カラー|color/i.test(step) ? 'color' : 'other';
+  return PLAN_COLORS[kind + (st === '作業中' ? 'Now' : '')];
+}
+/**
+ * 担当者ごとの予定表（管理者用シートの『予定_担当者名』タブ）を書く（2026-11-06）。
+ * 中身はアプリが data/scheduleSnapshot に書いた plan（今日から2週間・30分刻みの作業枠）。数式・条件付き書式は使わず、
+ * 値と背景色だけを一度に書くので軽い。まとめが変わったとき・日付が変わったときだけ書き直す。戻り値 { tabs, rows, skipped }
+ */
+function writeAssigneeTabs_(ss, snap) {
+  const plan = snap && snap.plan;
+  if (!plan || !plan.from || !Array.isArray(plan.rows)) return { tabs: 0, rows: 0, skipped: true };
+  const props = PropertiesService.getScriptProperties();
+  const sig = String(snap.updatedAt || '') + '|' + plan.from;
+  const existing = ss.getSheets().filter(sh => sh.getName().indexOf(PLAN_TAB_PREFIX) === 0);
+  const byWho = {};
+  plan.rows.forEach(r => { (byWho[r.a] = byWho[r.a] || []).push(r); });
+  const names = Object.keys(byWho).sort();
+  const allThere = names.every(w => ss.getSheetByName(planTabName_(w)));
+  if (props.getProperty('PLAN_TABS_SIG') === sig && allThere) return { tabs: 0, rows: 0, skipped: true };
+
+  const days = plan.days || 14;
+  const range = planDayRange_(plan.rows);
+  const perDay = (range.hi - range.lo) / 30;
+  const LEFT = ['案件', '視点', '工程', '開始予定', '終了予定', '納期', '状態'];
+  const L = LEFT.length;
+  const width = L + days * perDay;
+  const base = new Date(plan.from + 'T00:00:00');
+  const dayDate = i => new Date(base.getFullYear(), base.getMonth(), base.getDate() + i);
+  const WD = ['日', '月', '火', '水', '木', '金', '土'];
+  const updated = snap.updatedAt ? fmtDateTime_(new Date(snap.updatedAt)) : '';
+
+  const writeTab = (who, rows) => {
+    const name = planTabName_(who);
+    let sh = ss.getSheetByName(name);
+    if (!sh) { sh = ss.insertSheet(name); if (sh.setTabColor) sh.setTabColor('#5c6bc0'); }
+    const height = Math.max(4 + rows.length, 6);
+    sh.clear();
+    sh.getRange(1, 1, Math.max(sh.getMaxRows(), 1), Math.max(sh.getMaxColumns(), 1)).breakApart();
+    // 大きさを中身ぴったりにする（余分な行・列があると重くなる）
+    if (sh.getMaxColumns() < width) sh.insertColumnsAfter(sh.getMaxColumns(), width - sh.getMaxColumns());
+    else if (sh.getMaxColumns() > width) sh.deleteColumns(width + 1, sh.getMaxColumns() - width);
+    if (sh.getMaxRows() < height) sh.insertRowsAfter(sh.getMaxRows(), height - sh.getMaxRows());
+    else if (sh.getMaxRows() > height) sh.deleteRows(height + 1, sh.getMaxRows() - height);
+
+    const grid = Array.from({ length: height }, () => Array(width).fill(''));
+    const bg = Array.from({ length: height }, () => Array(width).fill(null));
+    grid[0][0] = who + ' の予定（工程図・今日から2週間）';
+    grid[0][L] = updated ? '工程図を最後に開いたとき（' + updated + '）の予定です。工程図を開くと15分ほどで新しくなります。' : '';
+    LEFT.forEach((h, j) => { grid[2][j] = h; bg[2][j] = '#e8eaf6'; });
+    for (let d = 0; d < days; d++) {
+      const dt = dayDate(d);
+      const wd = dt.getDay();
+      const c0 = L + d * perDay;
+      grid[1][c0] = (dt.getMonth() + 1) + '/' + dt.getDate() + '（' + WD[wd] + '）';
+      for (let k = 0; k < perDay; k++) {
+        const m = range.lo + k * 30;
+        grid[2][c0 + k] = m % 60 === 0 ? String(m / 60) : '';
+        const dayBg = d === 0 ? '#fff8e1' : (wd === 0 || wd === 6) ? '#eeeeee' : (d % 2 ? '#fafafa' : '#ffffff');
+        bg[1][c0 + k] = d === 0 ? '#ffe082' : (wd === 0 || wd === 6) ? '#e0e0e0' : '#e8eaf6';
+        bg[2][c0 + k] = bg[1][c0 + k];
+        for (let r = 3; r < height; r++) bg[r][c0 + k] = dayBg;
+      }
+    }
+    rows.forEach((r, i) => {
+      const rr = 3 + i;
+      grid[rr][0] = r.p; grid[rr][1] = r.v; grid[rr][2] = r.s;
+      grid[rr][3] = r.b ? new Date(r.b) : ''; grid[rr][4] = r.e ? new Date(r.e) : '';
+      grid[rr][5] = r.dl || ''; grid[rr][6] = r.st || '';
+      const color = planColorOf_(r.s, r.st);
+      (r.sl || []).forEach(x => {
+        if (x[0] < 0 || x[0] >= days) return;
+        for (let k = 0; k < perDay; k++) {
+          const m = range.lo + k * 30;
+          if (m < x[2] && m + 30 > x[1]) bg[rr][L + x[0] * perDay + k] = color;
+        }
+      });
+    });
+    if (!rows.length) grid[3][0] = '今日から2週間の予定はありません';
+    const all = sh.getRange(1, 1, height, width);
+    all.setValues(grid);
+    all.setBackgrounds(bg);
+    for (let d = 0; d < days; d++) sh.getRange(2, L + d * perDay + 1, 1, perDay).merge().setHorizontalAlignment('center');
+    sh.getRange(1, 1).setFontWeight('bold').setFontSize(12);
+    sh.getRange(3, 1, 1, width).setFontWeight('bold');
+    sh.getRange(2, L + 1, 2, days * perDay).setFontSize(8).setHorizontalAlignment('center');
+    if (rows.length) sh.getRange(4, 4, rows.length, 2).setNumberFormat('m/d hh:mm');
+    sh.setFrozenRows(3);
+    sh.setFrozenColumns(L);
+    sh.setColumnWidth(1, 150); sh.setColumnWidth(2, 110); sh.setColumnWidth(3, 70);
+    sh.setColumnWidth(4, 80); sh.setColumnWidth(5, 80); sh.setColumnWidth(6, 75); sh.setColumnWidth(7, 55);
+    sh.setColumnWidths(L + 1, days * perDay, 16);
+    return rows.length;
+  };
+  let tabs = 0, count = 0;
+  names.forEach(w => { count += writeTab(w, byWho[w]); tabs++; });
+  // 予定がなくなった担当者のタブは消さずに「予定なし」にする
+  existing.forEach(sh => {
+    if (names.some(w => planTabName_(w) === sh.getName())) return;
+    writeTab(sh.getName().slice(PLAN_TAB_PREFIX.length), []);
+    tabs++;
+  });
+  props.setProperty('PLAN_TABS_SIG', sig);
+  return { tabs, rows: count, skipped: false };
 }
 /** 社内案件名（RIC.34 など）のタスクだけを読む（projectNameInternal で絞る。30件ずつ） */
 function fsTasksByProjects_(auth, cfg, codes) {
@@ -1545,6 +1662,14 @@ function autoRun() {
     try {
       const sp = writeScheduleToLink_(cfg, SpreadsheetApp.getActiveSpreadsheet());
       if (sp.updatedAt && sp.changed) parts.push('工程図の予定を入れた ' + sp.rows + '件（' + fmtDateTime_(new Date(sp.updatedAt)) + ' 時点）');
+      if (sp.snap) {
+        try {
+          const pt = writeAssigneeTabs_(SpreadsheetApp.getActiveSpreadsheet(), sp.snap);
+          if (!pt.skipped) parts.push('担当者ごとの予定表 ' + pt.tabs + 'タブ・' + pt.rows + '件');
+        } catch (e) {
+          parts.push('担当者ごとの予定表のエラー：' + String(e && e.message || e));
+        }
+      }
     } catch (e) {
       parts.push('工程図の予定のエラー：' + String(e && e.message || e));
     }

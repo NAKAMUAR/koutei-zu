@@ -45,3 +45,46 @@ export function buildScheduleSnapshot(scheduled) {
   });
   return { items };
 }
+
+const pad2 = n => String(n).padStart(2, '0');
+const ymdOf = d => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+
+/**
+ * 担当者ごとの予定表（管理者用シートの『予定_担当者名』タブ）用に、今日から days 日ぶんの作業枠をまとめる（2026-11-06・純ロジック）。
+ * 戻り値：{ from:'YYYY-MM-DD', days, rows:[{ a 担当, p 案件, v 視点, s 工程, st 状態, dl 納期, b 開始ms, e 終了ms, sl:[[日の番号, 開始分, 終了分], …] }] }
+ * 連携で作ったタスクに限らず、担当者が決まっていて期間内に作業枠がある作業をすべて入れる。
+ */
+export function buildAssigneePlan(scheduled, now = new Date(), days = 14) {
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dayIndex = new Map();
+  for (let i = 0; i < days; i++) {
+    const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
+    dayIndex.set(ymdOf(d), i);
+  }
+  const rows = [];
+  (scheduled.active || []).forEach(t => {
+    const a = String(t.assignee || '').trim();
+    if (!a || !Array.isArray(t.slots)) return;
+    const sl = [];
+    t.slots.forEach(x => {
+      if (!(x.date instanceof Date)) return;
+      const i = dayIndex.get(ymdOf(x.date));
+      if (i == null) return;
+      sl.push([i, Math.round(x.startMin), Math.round(x.endMin)]);
+    });
+    if (!sl.length) return;
+    rows.push({
+      a,
+      p: String(t.projectName || t.projectNameInternal || ''),
+      v: String(t.viewpointName || ''),
+      s: String(t.stepName || ''),
+      st: t.status === 'in_progress' || t.status === 'doing' ? '作業中' : '予定',
+      dl: String(t.deadline || t.projectDeadline || ''),
+      b: tsOf(t.scheduledStart, t.scheduledStartMin),
+      e: tsOf(t.scheduledEnd, t.scheduledEndMin),
+      sl,
+    });
+  });
+  rows.sort((x, y) => (x.a < y.a ? -1 : x.a > y.a ? 1 : (x.b || 0) - (y.b || 0)));
+  return { from: ymdOf(start), days, rows };
+}
