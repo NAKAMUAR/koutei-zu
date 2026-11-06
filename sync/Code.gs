@@ -1158,7 +1158,7 @@ function runSend_(dryRun, opts) {
     return '対象なし';
   }
 
-  if (auto && fsQuotaBlocked_()) return '対象なし（工程図の1日の読み取り上限のため、戻ってから送ります）';
+  if (auto && fsAutoBlocked_()) return '対象なし（工程図の1日の読み取り上限・目安のため、戻ってから送ります）';
   const auth = getAuth_();
   // 送る行の案件のタスクだけを読む（全タスクを読むと Firestore の1日の読み取り上限を使い切る。2026-11-05）
   const existing = fsTasksForRows_(auth, cfg, targets.map(t => t.row));
@@ -1257,10 +1257,10 @@ const AUTO_EVERY_MINUTES = 15;
 /**
  * 入力シートの行を、状態に合わせてタブ間で移す（15分ごとの自動実行の最後）。
  * 入力前 → 制作中：『連携』で工程図に登録済み（登録済み・更新あり）になった行
- * 制作中 → 制作済み：工程図のタスク（その視点・その回）がすべて完了になった行
+ * 制作中 → 制作済み：工程図のタスク（その視点・その回）がすべて完了になった行（snapItems＝予定のまとめの items で見る。無ければ移さない）
  * 取込キー（n回目）は 制作済み→制作中→入力前 の順に数えるので、移しても変わらない。合計など式の列は書かない
  */
-function moveStaffRows_(cfg) {
+function moveStaffRows_(cfg, snapItems) {
   const out = { toDoing: 0, toDone: 0 };
   if (cfg.tabName !== STAFF_TAB_DEFAULT) return out;
   const file = SpreadsheetApp.openById(cfg.fileId);
@@ -1290,16 +1290,11 @@ function moveStaffRows_(cfg) {
   } else movedDone = parseJsonArray_(movedDone);
   const held = new Set(movedDone);
   const doingRows = rows.filter(r => r.tab === STAFF_TAB_DOING && keyByLoc.has(String(r.srcRow)) && !held.has(keyByLoc.get(String(r.srcRow))));
-  // 工程図の完了を見るのは1時間に1回、制作中の案件のタスクだけ（全タスクを毎回読むと Firestore の無料枠＝1日の読み取り回数を使い切る。2026-11-05）
-  const props = PropertiesService.getScriptProperties();
-  const lastCheck = Number(props.getProperty(PROP_DONE_CHECKED_AT) || 0);
-  if (doingRows.length && Date.now() - lastCheck >= DONE_CHECK_INTERVAL_MS && !fsQuotaBlocked_()) {
-    props.setProperty(PROP_DONE_CHECKED_AT, String(Date.now()));
-    const codes = [];
-    doingRows.forEach(r => { if (r.code && codes.indexOf(r.code) < 0) codes.push(r.code); });
-    const tasks = fsTasksByProjects_(getAuth_(), cfg, codes);
-    const doneKeys = staffDoneKeys_(tasks);
-    toDone = doingRows.filter(r => doneKeys.has(keyByLoc.get(String(r.srcRow))));
+  // 工程図で完了になったかは、アプリが書く予定のまとめ（data/scheduleSnapshot。自動実行で1件だけ読む）の「完了」で見る（2026-11-06）。
+  // 以前は1時間に1回、制作中の案件のタスクを読んでいたが、それだけで1回に約1,900件・1日に4万件以上を読み、
+  // Firestore の無料枠（1日5万件）を使い切って工程図が止まっていた。完了はアプリで付けるので、まとめで足りる
+  if (doingRows.length && snapItems) {
+    toDone = doingRows.filter(r => { const it = snapItems[keyByLoc.get(String(r.srcRow))]; return it && it.st === '完了'; });
   }
   out.toDoing = moveStaffTabRows_(before, doing, toDoing.map(r => r.row));
   out.toDone = moveStaffTabRows_(doing, done, toDone.map(r => r.row));
@@ -1310,8 +1305,6 @@ function moveStaffRows_(cfg) {
   return out;
 }
 const PROP_DONE_MOVED = 'DONE_MOVED_KEYS';
-const PROP_DONE_CHECKED_AT = 'DONE_CHECKED_AT';
-const DONE_CHECK_INTERVAL_MS = 55 * 60000; // 15分ごとの自動実行のうち、1時間に1回だけ
 /**
  * 入力シート（入力前・制作中・制作済み）の納品名が空の行に、納品名を入れる（登録No の無い古い行も。2026-11-06）。
  * 社外視点名は『連携』の同じ取込キーの行（人が直した名前）→ 無ければ視点コードから自動 → それも無ければ視点名そのもの。
@@ -1372,12 +1365,17 @@ function fillStaffDeliveryNames_(cfg, ss) {
  * 予定はアプリが計算して data/scheduleSnapshot に書いたまとめを1件読むだけ（全タスクは読まない）。
  * アプリを開いていないあいだは、最後に開いたときの予定のまま。戻り値 { rows, updatedAt }
  */
-function writeScheduleToLink_(cfg, ss) {
-  if (fsQuotaBlocked_()) return { rows: 0, updatedAt: null, skipped: true };
+/** 予定のまとめ（data/scheduleSnapshot）を1件読む。読めない・上限のあいだは null */
+function readScheduleSnapshot_(cfg) {
+  if (fsAutoBlocked_()) return null;
   const raw = fsGetValueString_(getAuth_(), cfg, 'scheduleSnapshot');
-  if (!raw) return { rows: 0, updatedAt: null };
-  let snap;
-  try { snap = JSON.parse(raw); } catch (e) { return { rows: 0, updatedAt: null }; }
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch (e) { return null; }
+}
+function writeScheduleToLink_(cfg, ss, preloaded) {
+  if (preloaded === undefined && fsAutoBlocked_()) return { rows: 0, updatedAt: null, skipped: true };
+  const snap = preloaded === undefined ? readScheduleSnapshot_(cfg) : preloaded;
+  if (!snap) return { rows: 0, updatedAt: null };
   const items = (snap && snap.items) || {};
   const link = ensureLinkSheet_(ss);
   if (link.getLastRow() < 2) return { rows: 0, updatedAt: snap.updatedAt || null, snap };
@@ -1616,6 +1614,7 @@ function autoRun() {
     try { const fq = flushDiscordQueue_(cfg); if (fq) parts.push('時間帯の外の通知 ' + fq + '件を Discord で送った'); } catch (e) { parts.push('Discord 送信エラー：' + String(e && e.message || e)); }
     // 工程図の1日の読み取り上限：止まっている間は工程図を読まない（シートの同期・転記は続ける）。Discord で1回だけ知らせる
     if (fsQuotaBlocked_()) parts.push('工程図の読み取り上限のため、工程図への登録・削除・完了の確認は ' + fmtDateTime_(new Date(fsQuotaUntil_())) + ' ごろまで待ちます');
+    else if (fsOverBudget_()) parts.push('連携スクリプトの今日の読み取りが目安（' + AUTO_READ_BUDGET + '件）に達したため、自動の登録・完了の確認は ' + fmtDateTime_(new Date(fsQuotaResetAt_(Date.now()))) + ' ごろまで待ちます（工程図アプリの分を残すため。手で「登録」したものはそのまま送ります）');
     try {
       const pd = processPendingDeletes_(cfg);
       if (pd) parts.push('工程図から作業を削除 ' + pd + '件');
@@ -1646,21 +1645,24 @@ function autoRun() {
     if (cfg.autoSend) {
       try {
         const res = runSend_(false, { auto: true, waitingKeys });
-        parts.push(res === '対象なし' ? '自動登録 対象なし' : '自動登録 ' + res.split('\n')[1]);
+        parts.push(String(res).indexOf('対象なし') === 0 ? '自動登録 ' + res : '自動登録 ' + (String(res).split('\n')[1] || res));
       } catch (e) {
         parts.push('自動登録エラー：' + String(e && e.message || e));
       }
     } else {
       parts.push('自動登録はしない設定');
     }
+    // 予定のまとめは1回の自動実行で1件だけ読み、制作済みの確認・『連携』の予定・担当者ごとの予定表に使い回す
+    let snap = null;
+    try { snap = readScheduleSnapshot_(cfg); } catch (e) { parts.push('工程図の予定を読めませんでした：' + String(e && e.message || e)); }
     try {
-      const mv = moveStaffRows_(cfg);
+      const mv = moveStaffRows_(cfg, snap && snap.items);
       if (mv.toDoing || mv.toDone) parts.push('入力シート 制作中へ' + mv.toDoing + '件・制作済みへ' + mv.toDone + '件');
     } catch (e) {
       parts.push('入力シートの移動エラー：' + String(e && e.message || e));
     }
     try {
-      const sp = writeScheduleToLink_(cfg, SpreadsheetApp.getActiveSpreadsheet());
+      const sp = writeScheduleToLink_(cfg, SpreadsheetApp.getActiveSpreadsheet(), snap);
       if (sp.updatedAt && sp.changed) parts.push('工程図の予定を入れた ' + sp.rows + '件（' + fmtDateTime_(new Date(sp.updatedAt)) + ' 時点）');
       if (sp.snap) {
         try {
@@ -1680,6 +1682,7 @@ function autoRun() {
       parts.push('納品名のエラー：' + String(e && e.message || e));
     }
     notifyQuotaOnce_();
+    notifyBudgetOnce_();
   } catch (e) {
     parts.push('エラー：' + String(e && e.message || e));
   } finally {
@@ -3828,7 +3831,7 @@ function deleteRegistrations(nos) {
       const pending = parseJsonArray_(props.getProperty(PROP_PENDING_DELETES));
       keys.forEach(k => { if (pending.indexOf(k) < 0) pending.push(k); });
       props.setProperty(PROP_PENDING_DELETES, JSON.stringify(pending));
-      try { fsNote = '工程図の作業 ' + processPendingDeletes_(cfg) + '件を削除'; }
+      try { fsNote = '工程図の作業 ' + processPendingDeletes_(cfg, true) + '件を削除'; }
       catch (e) { fsNote = '工程図の作業は次の自動実行（15分以内）で削除します'; console.log('deleteRegistrations: ' + (e && e.message || e)); }
     }
     const parts = [];
@@ -3849,11 +3852,11 @@ function cancelDeleteRegistrations(nos) {
   vals.forEach((v, i) => { if ((nos || []).indexOf(trimStr_(v[rc.no - 1])) >= 0 && trimStr_(v[rc.state - 1]) !== REG_STATE.DELETED) reg.getRange(i + 2, rc.del).setValue(false); });
 }
 /** 消す予定の取込キーの作業を工程図から消す（deletedExternalIds からも外して、同じ視点をまた登録できるようにする）。消した件数 */
-function processPendingDeletes_(cfg) {
+function processPendingDeletes_(cfg, manual) {
   const props = PropertiesService.getScriptProperties();
   const keys = parseJsonArray_(props.getProperty(PROP_PENDING_DELETES));
   if (!keys.length) return 0;
-  if (fsQuotaBlocked_()) throw new Error('工程図の1日の読み取り上限のため、戻ってから消します');
+  if (manual ? fsQuotaBlocked_() : fsAutoBlocked_()) throw new Error('工程図の1日の読み取り上限（または連携スクリプトの今日の目安）のため、戻ってから消します');
   const auth = getAuth_();
   const hit = (ext) => keys.some(k => String(ext || '').indexOf(k + '::') === 0);
   const tasks = fsTasksByKeys_(auth, cfg, keys);
@@ -5092,6 +5095,7 @@ function fsFetch_(auth, url, method, body) {
     // 「ドキュメントが無い」は null。データベースそのものが無い 404 は接続の誤りなので、空として扱わずにエラーにする
     const text404 = res.getContentText();
     if (/database .* does not exist/i.test(text404)) throw new Error('工程図のデータベースが見つかりません（プロジェクト ' + url.split('/projects/')[1].split('/')[0] + '・データベース ' + FIRESTORE_DATABASE_ID + '）: ' + text404.slice(0, 300));
+    fsCountReads_(1);
     return null;
   }
   if (code === 429 || (code >= 400 && /RESOURCE_EXHAUSTED|Quota/i.test(res.getContentText()))) {
@@ -5100,7 +5104,56 @@ function fsFetch_(auth, url, method, body) {
   }
   if (code >= 300) throw new Error('Firestore ' + method.toUpperCase() + ' ' + code + ': ' + res.getContentText().slice(0, 500));
   const text = res.getContentText();
-  return text ? JSON.parse(text) : {};
+  const json = text ? JSON.parse(text) : {};
+  if (method === 'get' || /:runQuery$/.test(url)) fsCountReads_(fsReadCountOf_(json));
+  return json;
+}
+// ---- 連携スクリプトの読み取りの目安（2026-11-06） ----
+// Firestore の無料枠は1日5万件の読み取りを「工程図アプリ」と「連携スクリプト」で分け合う。
+// スクリプトが読んだ件数を数えて、自動の処理は1日 AUTO_READ_BUDGET 件までにする（アプリの分を必ず残す）。
+// 手で「登録」した分（ダイアログ）は止めない。日の区切りは無料枠と同じ米国太平洋時間の0時
+const AUTO_READ_BUDGET = 8000;
+const PROP_FS_READS = 'FS_READS';
+const PROP_FS_BUDGET_NOTIFIED = 'FS_BUDGET_NOTIFIED';
+/** 応答 → 読み取り件数（runQuery は結果の件数・一覧は documents の件数・1件取得は1。0件でも1と数える） */
+function fsReadCountOf_(json) {
+  if (Array.isArray(json)) return Math.max(1, json.filter(x => x && x.document).length);
+  if (json && Array.isArray(json.documents)) return Math.max(1, json.documents.length);
+  return 1;
+}
+function fsReadDay_() {
+  try { return Utilities.formatDate(new Date(), 'America/Los_Angeles', 'yyyy-MM-dd'); } catch (e) { return ''; }
+}
+function fsCountReads_(n) {
+  try {
+    const p = PropertiesService.getScriptProperties();
+    const day = fsReadDay_();
+    let cur = {};
+    try { cur = JSON.parse(p.getProperty(PROP_FS_READS) || '{}') || {}; } catch (e) { cur = {}; }
+    p.setProperty(PROP_FS_READS, JSON.stringify({ day, n: (cur.day === day ? Number(cur.n) || 0 : 0) + n }));
+  } catch (e) { /* 数えられなくても続ける */ }
+}
+/** 今日（太平洋時間）スクリプトが読んだ件数 */
+function fsReadsToday_() {
+  try {
+    const cur = JSON.parse(PropertiesService.getScriptProperties().getProperty(PROP_FS_READS) || '{}') || {};
+    return cur.day === fsReadDay_() ? Number(cur.n) || 0 : 0;
+  } catch (e) { return 0; }
+}
+function fsOverBudget_() { return fsReadsToday_() >= AUTO_READ_BUDGET; }
+/** 自動の処理で工程図を読まない時間なら true（上限に達した・今日の目安を超えた） */
+function fsAutoBlocked_() { return fsQuotaBlocked_() || fsOverBudget_(); }
+function notifyBudgetOnce_() {
+  if (fsQuotaBlocked_() || !fsOverBudget_()) return;
+  const props = PropertiesService.getScriptProperties();
+  const day = fsReadDay_();
+  if (props.getProperty(PROP_FS_BUDGET_NOTIFIED) === day) return;
+  props.setProperty(PROP_FS_BUDGET_NOTIFIED, day);
+  const url = props.getProperty(PROP_DISCORD);
+  if (!url) return;
+  try {
+    notifyDiscord_(url, '⚠ 連携スクリプトの今日の読み取りが目安（' + AUTO_READ_BUDGET + '件）に達しました。工程図アプリが止まらないよう、自動の登録・完了の確認は ' + fmtDateTime_(new Date(fsQuotaResetAt_(Date.now()))) + ' ごろ（ベトナム時間）まで待ちます。手で「登録」したものはそのまま送ります');
+  } catch (e) { /* 知らせられなくても続ける */ }
 }
 // ---- 1日の読み取り上限（無料枠）に達したときは、戻るまで工程図を読みに行かない（2026-11-05） ----
 const PROP_FS_QUOTA_UNTIL = 'FS_QUOTA_UNTIL';

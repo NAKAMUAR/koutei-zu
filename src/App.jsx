@@ -5,7 +5,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { AppCtx } from './appContext.js';
 import { COMPANY_PRESETS, DEFAULT_SETTINGS, VIEWPOINT_PRESETS, withAssigneeHours, assignProjectColors, dateToDtLocal, expandHolidayDates, fmtHM, fmtYMD, genId, getHoursPerDay, kanaNormalize, makeEmptyStep, makeViewpointFromPreset, normalizeCustomerMaster, parseHM, startOfDay, syncHolidays, syncWorkdays } from './lib/utils.js';
 import { DEFAULT_STEP_TYPES, deliveryBaseName, findStepType, normalizeHistory, normalizeStepTypes, num as vpNum, resolveViewpointSteps, roundTypeOf, stepDeliveryName } from './viewpoint/viewpointUtils.js';
-import { billingStore, memberList, salesStore, signIn, signOutUser, storage, subscribeAuth, tasksStore } from './firebase.js';
+import { billingStore, checkFirestoreQuota, memberList, salesStore, signIn, signOutUser, storage, subscribeAuth, tasksStore } from './firebase.js';
 import { computeDeadlineReorder, computeProjectOrder, deadlineInsertPriority, deadlineKey, isOnLeaveAt, latestActualEnd, migrateTask, normalizePriorities, projectEndTs, scheduleTasks, simulateFormSchedule, workingHoursBetweenTs } from './lib/schedule.js';
 import { collectDeliveryNames, collectSalesSyncRows, reconcileLedger } from './viewpoint/salesSync.js';
 import { blankDoc, blankItem, issuerFromDocs } from './billing/billingUtils.js';
@@ -201,7 +201,15 @@ export default function App() {
     );
 
     // セーフティ：何らかの理由で onSnapshot が発火しない場合の保険
-    const loadTimeout = setTimeout(() => setTasksLoaded(true), 15000);
+    // 1日の読み取り上限のときは、このブラウザに保存してある分で開き、そのことを知らせる（2026-11-06）
+    const loadTimeout = setTimeout(() => {
+      setTasksLoaded(true);
+      checkFirestoreQuota().then(r => {
+        if (r === 'quota' && !cancelled) {
+          notify('データベースの今日の読み込み上限のため、このブラウザに保存してある内容で表示しています（新しい変更は日本時間17時ごろから反映）', { type: 'error', duration: 15000 });
+        }
+      });
+    }, 15000);
 
     // レガシー：旧 1ドキュメント保存（workspaces/{wid}/data/tasks）から
     //          新サブコレクション（workspaces/{wid}/tasks/{taskId}）へ並行で移行

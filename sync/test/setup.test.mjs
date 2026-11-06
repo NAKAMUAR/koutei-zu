@@ -286,7 +286,7 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
   };
   vm.createContext(ctx);
   const names = ['onAdminEdit', 'renderRegMessage_', 'onStaffEdit', 'syncRegistrationsNow', 'saveDiscordWebhook_', 'inNotifyHours_', 'isReminderDue_', 'calcDeadlineOf_', 'regState_', 'REG_STATE', 'quickSetup', 'createStaffInputTab', 'transferFromStaffSheet', 'autoRun', 'readSettings_', 'readStaffRows_', 'collectSourceRows_', 'findStaffHeaderRow_',
-    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'FORM_NO_COL', 'updateEntryForm', 'normRegNo_', 'formRegGroup_', 'formEnsureEditRow_', 'FORM_L', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_', 'deleteRegistrations', 'cancelDeleteRegistrations', 'writeScheduleToLink_', 'writeAssigneeTabs_', 'deliveryYmd_', 'fillStaffDeliveryNames_', 'planRegDeletion_', 'deleteDialogHtml_', 'DELETE_DIALOG_SCRIPT'];
+    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'FORM_NO_COL', 'updateEntryForm', 'normRegNo_', 'formRegGroup_', 'formEnsureEditRow_', 'FORM_L', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_', 'deleteRegistrations', 'cancelDeleteRegistrations', 'writeScheduleToLink_', 'writeAssigneeTabs_', 'fsReadDay_', 'fsReadsToday_', 'AUTO_READ_BUDGET', 'deliveryYmd_', 'fillStaffDeliveryNames_', 'planRegDeletion_', 'deleteDialogHtml_', 'DELETE_DIALOG_SCRIPT'];
   env.g = vm.runInContext(src + '\n;({' + names.join(',') + '})', ctx);
   // テストは時刻に関係なく Discord を送る（知らせる時間帯を 0-24 に）。時間帯のテストは env.setHours で変える
   env.setHours = (h) => { const st = env.admin.getSheetByName('設定'); const r = st && st.rows.findIndex(x => x[0] === '催促する時間帯（ベトナム時間）'); if (r >= 0) st.set(r + 1, 2, h); };
@@ -688,12 +688,14 @@ test('15分ごとの自動実行：転記 → 15分たった「未送信」だ�
   // 工程図で RIC.34 EX1（1回目）のタスクがすべて完了 → 『制作済み』へ。2回目（修正）は制作中のまま
   env.fs.tasks().filter(t => String(t.externalId).indexOf('RIC34::EX1::1::') === 0).forEach(t => env.fs.setTask(t.id, { status: 'done' }));
   r = env.g.autoRun();
-  assert.ok(r.indexOf('制作済みへ') < 0, '工程図の完了を見るのは1時間に1回（Firestore の読み取りを減らす）：' + r);
-  delete env.props.DONE_CHECKED_AT; // 1時間たった
+  assert.ok(r.indexOf('制作済みへ') < 0, '完了は予定のまとめ（アプリが書く）で見る。まとめがまだ古ければ移さない：' + r);
+  // アプリが完了を予定のまとめに書く → 次の自動実行で制作済みへ（タスクは読まない）
+  const snapDoc = 'workspaces/liebe-asia-team/data/scheduleSnapshot';
+  env.fs.docs[snapDoc] = { value: { stringValue: JSON.stringify({ updatedAt: Date.now(), items: { 'RIC34::EX1::1': { s: null, e: null, a: '', st: '完了' }, 'RIC34::EX1::2': { st: '予定' } } }) } };
   const q0 = env.fs.queries || 0;
   r = env.g.autoRun();
   assert.ok(r.indexOf('制作済みへ1件') >= 0, r);
-  assert.ok((env.fs.queries || 0) > q0, '全タスクではなく、制作中の案件のタスクだけを読む（runQuery）');
+  assert.equal(env.fs.queries || 0, q0, '完了の確認でタスクを読まない（Firestore の読み取りを使わない）');
   same(filled(eng.getSheetByName('制作済み')), ['RIC.34 EX1']);
   same(filled(doing), ['REN.72 EXM1', 'NEWCO.1 IN1', 'RIC.34 EX1']);
   r = env.g.autoRun();
@@ -706,7 +708,6 @@ test('15分ごとの自動実行：転記 → 15分たった「未送信」だ�
   doing.rows.splice(doing.rows.findIndex((v, i) => i >= 2 && v.every(x => x === '' || x === false)) >= 0 ? doing.rows.findIndex((v, i) => i >= 2 && v.every(x => x === '' || x === false)) : doing.rows.length, 0, moved);
   doneTab.deleteRow(dIdx + 1);
   assert.ok(JSON.parse(env.props.DONE_MOVED_KEYS).includes('RIC34::EX1::1'));
-  delete env.props.DONE_CHECKED_AT;
   r = env.g.autoRun();
   assert.ok(r.indexOf('制作済みへ') < 0, '戻した行は移さない：' + r);
   assert.ok(filled(doing).includes('RIC.34 EX1'));
@@ -1846,6 +1847,37 @@ test('担当者ごとの予定表：plan から『予定_担当者名』タブ�
   const snap2 = { updatedAt: now + 1, plan: { from: '2026-11-06', days: 14, rows: [snap.plan.rows[0]] } };
   env.g.writeAssigneeTabs_(admin, snap2);
   assert.equal(admin.getSheetByName('予定_Linh').rows[3][0], '今日から2週間の予定はありません');
+});
+
+test('連携スクリプトの読み取りの目安：読んだ件数を数え、今日の目安を超えたら自動の登録は待つ（手で登録した分は止めない）', () => {
+  const admin = adminSheet();
+  const eng = engineerFile();
+  const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
+  env.g.quickSetup();
+  env.g.saveDiscordWebhook_('https://discord.com/api/webhooks/123/abc-DEF');
+  const reg = admin.getSheetByName('登録一覧');
+  const rh = reg.header();
+  const setR = (r, name, v) => reg.set(r, rh.indexOf(name) + 1, v);
+  ['会社コード', '案件番号', '社外案件名', '新規or修正', '視点', 'サーバーリンク', 'White', 'Color'].forEach((h, j) => setR(2, h, ['RIC', 34, 'マンション', NEWR, 'EX1', LINK, 3, 2][j]));
+  env.g.syncRegistrationsNow();
+  const n0 = env.g.fsReadsToday_();
+  env.g.autoRun();
+  assert.ok(env.g.fsReadsToday_() > n0, '読んだ件数を数える');
+  const { at, set } = linkAt(admin);
+  set(2, '転記日時', new Date(Date.now() - 3600000));
+  env.props.FS_READS = JSON.stringify({ day: env.g.fsReadDay_(), n: env.g.AUTO_READ_BUDGET });
+  const q0 = env.fs.queries || 0;
+  const r = env.g.autoRun();
+  assert.ok(r.includes('目安'), r);
+  assert.equal(at(2, '状態'), '未送信', '目安を超えたら自動では送らない');
+  assert.equal(env.fs.queries || 0, q0, '工程図のタスクを読まない');
+  assert.equal(env.discord.filter(m => m.includes('目安')).length, 1, 'Discord で1回知らせる');
+  env.g.autoRun();
+  assert.equal(env.discord.filter(m => m.includes('目安')).length, 1, '何度も知らせない');
+  // 次の日（太平洋時間）になれば戻る
+  env.props.FS_READS = JSON.stringify({ day: '2000-01-01', n: 99999 });
+  env.g.autoRun();
+  assert.equal(at(2, '状態'), '登録済み');
 });
 
 console.log(`\n${passed} tests passed`);
