@@ -1278,7 +1278,16 @@ function moveStaffRows_(cfg) {
   const toDoing = rows.filter(r => r.tab === STAFF_TAB_DEFAULT && keyByLoc.has(String(r.srcRow)) &&
     [STATUS.SENT, STATUS.UPDATED].indexOf(status.get(keyByLoc.get(String(r.srcRow)))) >= 0);
   let toDone = [];
-  const doingRows = rows.filter(r => r.tab === STAFF_TAB_DOING && keyByLoc.has(String(r.srcRow)));
+  // 一度『制作済み』へ移した取込キー。人が『制作中』に戻した行はもう自動では移さない（2026-11-06）。
+  // 初めて動いたときは、今『制作済み』にある行のキーを入れておく
+  const props0 = PropertiesService.getScriptProperties();
+  let movedDone = props0.getProperty(PROP_DONE_MOVED);
+  if (movedDone === null) {
+    movedDone = rows.filter(r => r.tab === STAFF_TAB_DONE && keyByLoc.has(String(r.srcRow))).map(r => keyByLoc.get(String(r.srcRow)));
+    props0.setProperty(PROP_DONE_MOVED, JSON.stringify(movedDone));
+  } else movedDone = parseJsonArray_(movedDone);
+  const held = new Set(movedDone);
+  const doingRows = rows.filter(r => r.tab === STAFF_TAB_DOING && keyByLoc.has(String(r.srcRow)) && !held.has(keyByLoc.get(String(r.srcRow))));
   // 工程図の完了を見るのは1時間に1回、制作中の案件のタスクだけ（全タスクを毎回読むと Firestore の無料枠＝1日の読み取り回数を使い切る。2026-11-05）
   const props = PropertiesService.getScriptProperties();
   const lastCheck = Number(props.getProperty(PROP_DONE_CHECKED_AT) || 0);
@@ -1292,8 +1301,13 @@ function moveStaffRows_(cfg) {
   }
   out.toDoing = moveStaffTabRows_(before, doing, toDoing.map(r => r.row));
   out.toDone = moveStaffTabRows_(doing, done, toDone.map(r => r.row));
+  if (toDone.length) {
+    const next = movedDone.concat(toDone.map(r => keyByLoc.get(String(r.srcRow)))).filter((k, i, a) => a.indexOf(k) === i);
+    props0.setProperty(PROP_DONE_MOVED, JSON.stringify(next.slice(-3000)));
+  }
   return out;
 }
+const PROP_DONE_MOVED = 'DONE_MOVED_KEYS';
 const PROP_DONE_CHECKED_AT = 'DONE_CHECKED_AT';
 const DONE_CHECK_INTERVAL_MS = 55 * 60000; // 15分ごとの自動実行のうち、1時間に1回だけ
 /**

@@ -693,6 +693,17 @@ test('15分ごとの自動実行：転記 → 15分たった「未送信」だ�
   r = env.g.autoRun();
   assert.ok(r.indexOf('転記 追加0・更新0') >= 0, '移しても取込キー（n回目）は変わらない：' + r);
   assert.equal(at(2, '状態'), '登録済み');
+  // 人が『制作済み』から『制作中』へ戻した行は、工程図で完了のままでも自動では制作済みへ戻さない
+  const doneTab = eng.getSheetByName('制作済み');
+  const dIdx = doneTab.rows.findIndex((v, i) => i >= 2 && v[0] === 'RIC');
+  const moved = doneTab.rows[dIdx].slice();
+  doing.rows.splice(doing.rows.findIndex((v, i) => i >= 2 && v.every(x => x === '' || x === false)) >= 0 ? doing.rows.findIndex((v, i) => i >= 2 && v.every(x => x === '' || x === false)) : doing.rows.length, 0, moved);
+  doneTab.deleteRow(dIdx + 1);
+  assert.ok(JSON.parse(env.props.DONE_MOVED_KEYS).includes('RIC34::EX1::1'));
+  delete env.props.DONE_CHECKED_AT;
+  r = env.g.autoRun();
+  assert.ok(r.indexOf('制作済みへ') < 0, '戻した行は移さない：' + r);
+  assert.ok(filled(doing).includes('RIC.34 EX1'));
 
   // 『設定』の自動登録を「しない」にすると転記だけ
   const st = admin.getSheetByName('設定');
