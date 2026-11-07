@@ -998,6 +998,19 @@ test('催促の時間帯と判定', () => {
   assert.equal(env.g.inNotifyHours_(at(7, 59), '8:00-20:00'), false);
   assert.equal(env.g.inNotifyHours_(at(23), '22-6'), true);
   assert.equal(env.g.inNotifyHours_(at(3), ''), true);
+  // 曜日ごと（2030-01-07 は月曜・01-12 は土曜・01-13 は日曜）
+  const W = '8-18 / 土 8-13 / 日 なし';
+  const day = (d, h, m = 0) => new Date(2030, 0, d, h, m);
+  assert.equal(env.g.inNotifyHours_(day(7, 17, 59), W), true, '月曜 17:59');
+  assert.equal(env.g.inNotifyHours_(day(7, 18), W), false, '月曜 18:00');
+  assert.equal(env.g.inNotifyHours_(day(12, 12, 59), W), true, '土曜 12:59');
+  assert.equal(env.g.inNotifyHours_(day(12, 13), W), false, '土曜 13:00');
+  assert.equal(env.g.inNotifyHours_(day(12, 7, 59), W), false, '土曜 7:59');
+  assert.equal(env.g.inNotifyHours_(day(13, 10), W), false, '日曜は送らない');
+  assert.equal(env.g.inNotifyHours_(day(13, 10), '平日 8-18'), true, '書いていない曜日は止めない');
+  assert.equal(env.g.inNotifyHours_(day(13, 10), '8-18／土日 なし'), false, '「土日」まとめ・全角の区切り');
+  assert.equal(env.g.inNotifyHours_(day(9, 10), '8-18／土日 なし'), true);
+  assert.equal(env.g.readSettings_().notifyHours !== undefined, true);
   const vn = (h, m = 0) => new Date(Date.UTC(2030, 0, 7, h - 7, m)); // ベトナム時間
   // 期限＝登録 10:00＋90分（8-12,13-17 だけ数える）＝ 11:30。昼休みをまたぐと延びる
   const cfg = { notifyFirst: 2, notifyRepeat: 1, calcMinutes: 90, calcHours: '8-12,13-17' };
@@ -1976,6 +1989,51 @@ test('『案件入力』の登録の確認画面：「登録する」を押し�
   assert.ok(changed.log.includes('copy:連絡文 13:25まで'), '時刻が変わったらもう一度コピー');
   const blocked = run({ interp: '連絡文 13:25まで', execOk: false });
   assert.ok(blocked.msg.includes('コピーし直してください'), blocked.msg);
+});
+
+test('「通知オフ」にした案件は Discord で催促・削除依頼を知らせない／「資料待ち」の行は状態が資料待ちになり催促しない', () => {
+  const admin = adminSheet();
+  const eng = engineerFile();
+  const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
+  env.g.quickSetup();
+  env.g.saveDiscordWebhook_('https://discord.com/api/webhooks/123/abc-DEF');
+  const reg = admin.getSheetByName('登録一覧');
+  const rh = reg.header();
+  assert.ok(rh.indexOf('通知オフ') >= 0, '『登録一覧』に「通知オフ」の列');
+  const tab = inTab(eng);
+  const sh = tab.rows[1].map(h => String(h).split('\n')[0]);
+  assert.ok(sh.indexOf('資料待ち') >= 0, 'エンジニア入力シートに「資料待ち」の列');
+  const setR = (r, name, v) => reg.set(r, rh.indexOf(name) + 1, v);
+  const R = (r, name) => reg.rows[r - 1][rh.indexOf(name)];
+  [[2, 'EX1'], [3, 'EX2']].forEach(([r, cut]) => ['会社コード', '案件番号', '社外案件名', '新規or修正', '視点', 'サーバーリンク'].forEach((h, j) => setR(r, h, ['RIC', 34, 'マンション', NEWR, cut, LINK][j])));
+  env.g.syncRegistrationsNow();
+  [2, 3].forEach(r => setR(r, '登録日時', new Date(Date.now() - 3 * 86400000)));
+  // 通知オフ（1行にチェックすると同じ案件の行すべて）
+  setR(2, '通知オフ', true);
+  let msg = env.g.syncRegistrationsNow();
+  assert.equal(env.discord.length, 0, '通知オフの案件は催促しない：' + msg);
+  // エンジニアの削除依頼も知らせない（日時は入る）
+  const rowOf = (cut) => tab.rows.findIndex(x => x[sh.indexOf('視点')] === cut) + 1;
+  tab.set(rowOf('EX2'), sh.indexOf('削除依頼') + 1, true);
+  env.g.syncRegistrationsNow();
+  assert.ok(R(3, '削除依頼') instanceof Date || String(R(3, '削除依頼')) !== '');
+  assert.equal(env.discord.length, 0);
+  tab.set(rowOf('EX2'), sh.indexOf('削除依頼') + 1, false);
+  // 外すと催促が届く
+  setR(2, '通知オフ', false);
+  env.g.syncRegistrationsNow();
+  assert.equal(env.discord.length, 1);
+  assert.ok(env.discord[0].includes('EX1') && env.discord[0].includes('EX2'));
+  // 資料待ちにチェック → 状態「資料待ち」・催促しない
+  tab.set(rowOf('EX1'), sh.indexOf('資料待ち') + 1, true);
+  [2, 3].forEach(r => setR(r, '最後の催促', new Date(Date.now() - 2 * 3600000)));
+  env.g.syncRegistrationsNow();
+  assert.equal(R(2, '状態'), '資料待ち');
+  assert.equal(env.discord.length, 2);
+  assert.ok(!env.discord[1].includes('EX1-') && !/EX1（/.test(env.discord[1]) && env.discord[1].includes('EX2'), env.discord[1]);
+  tab.set(rowOf('EX1'), sh.indexOf('資料待ち') + 1, false);
+  env.g.syncRegistrationsNow();
+  assert.notEqual(R(2, '状態'), '資料待ち', '外すと元の状態');
 });
 
 console.log(`\n${passed} tests passed`);

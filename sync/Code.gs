@@ -128,7 +128,7 @@ const SETTING_DEFAULTS = {
   notify: 'する',
   notifyFirst: 2,
   notifyRepeat: 1,
-  notifyHours: '8-18',
+  notifyHours: '8-18 / 土 8-13 / 日 なし',
   regMessage: '{社内案件名}の資料を共有します。\n{サーバーリンク}\n\n{計算期限}までに制作時間の計算をお願いします。',
   calcMinutes: 90,
   calcHours: '8-12,13-17',
@@ -157,7 +157,7 @@ const SETTING_NOTES = {
   calcHours: '{計算期限} を数える時間帯（ベトナム時間）。「8-12,13-17」＝ 8〜12時と13〜17時だけ数える（12〜13時の昼休みと17時以降は数えず、次の日の8時から続きを数える）。時間帯を気にせず足すなら「0-24」',
   interpMessage: '『登録一覧』の「通訳向け連絡文」列と、『案件入力』で登録するときの確認画面のひな形。使える文字は「登録時の連絡文」と同じ。{通訳へのメッセージ} には登録のときに書いた「通訳へのメッセージ」が入る（空なら行ごと消える）',
   manualRun: 'チェックすると、その場で 案件登録→入力シート・転記・工程図への登録 をまとめて動かす（終わるとチェックは外れ、結果は「最後の自動実行」に出る）',
-  notifyHours: 'Discord で知らせるのはこの時間帯だけ（例 8-18 ＝ 8時〜18時。時刻はベトナム時間）。催促・登録後の変更・削除依頼・読み取り上限のお知らせすべて。時間外の分は、時間帯に入ったら知らせる',
+  notifyHours: 'Discord で知らせるのはこの時間帯だけ（例 8-18 ＝ 8時〜18時。時刻はベトナム時間）。曜日ごとに変えるときは「/」で区切って曜日を前に付ける（例 8-18 / 土 8-13 / 日 なし ＝ 平日8〜18時・土曜8〜13時・日曜は送らない）。催促・登録後の変更・削除依頼・読み取り上限のお知らせすべて。時間外の分は、時間帯に入ったら知らせる',
   lastAuto: '15分ごとの自動実行が最後に動いた日時と結果（自動で書き込み）',
 };
 
@@ -232,6 +232,8 @@ const STAFF_INPUT_COLUMNS = [
     note: '納品するファイルの名前（自動）：社外案件名_社外視点名_日付（YYMMDD）。日付は毎日その日に変わり、制作済みになったら止まる。そのままコピーして使える\nTên file giao (tự động): Tên dự án_Tên góc nhìn_ngày (YYMMDD). Ngày tự đổi theo ngày hôm nay, dừng khi đã hoàn thành. Có thể sao chép dùng ngay' },
   { key: 'delReq', label: '削除依頼', vi: 'Yêu cầu xóa', width: 8, checkbox: true, input: true,
     note: '登録の間違い・二重登録などで、この行を消してほしいときにチェック。管理者が確認して消します（自分で行を消さない）\nĐánh dấu khi muốn xóa dòng này (đăng ký nhầm, trùng…). Quản lý sẽ kiểm tra và xóa (không tự xóa dòng)' },
+  { key: 'waiting', label: '資料待ち', vi: 'Chờ tài liệu', width: 8, checkbox: true, input: true,
+    note: 'お客様の資料・回答が足りず作業を進められないときにチェック（届いたら外す）。チェックの間は『登録一覧』の状態が「資料待ち」になり、時間計算の催促も止まります\nĐánh dấu khi thiếu tài liệu / câu trả lời của khách nên chưa thể làm (có rồi thì bỏ đánh dấu). Trong thời gian này trạng thái là「資料待ち」và không bị nhắc nhập giờ' },
 ];
 const STAFF_INPUT_HEADERS = STAFF_INPUT_COLUMNS.map(c => c.label);
 // 『入力シート』1行目の案内（見出しの上が空のときだけ書く）
@@ -372,6 +374,7 @@ function transfer_() {
   const cellUpdates = []; // { row(1-based), col, value }
   let updated = 0;
   const changedAfterSend = []; // 工程図に登録した後で入力シートの内容が変わった行（Discord で確認を頼む）
+  const mutedCodes = readNotifyOff_(ss); // 『登録一覧』で「通知オフ」にした案件は知らせない
   const seen = new Set();
   const waiting = new Set(sourceRows.waitingKeys || []);
 
@@ -401,7 +404,7 @@ function transfer_() {
         cellUpdates.push({ row: r + 1, col: col.transferredAt, value: stamp });
         if (status === STATUS.SENT) cellUpdates.push({ row: r + 1, col: col.status, value: STATUS.UPDATED });
         if (status === STATUS.SENT || status === STATUS.UPDATED) {
-          changedAfterSend.push(joinCode_(s.code, '') + ' ' + viewpointNameOf_(s.cut, s.pattern) + '（' + diffs.join('、') + '）');
+          if (!mutedCodes.has(normCode_(joinCode_(s.code, '')))) changedAfterSend.push(joinCode_(s.code, '') + ' ' + viewpointNameOf_(s.cut, s.pattern) + '（' + diffs.join('、') + '）');
         }
       }
       // 一度消えた行がまた出てきたら「要確認」に戻す（自動登録の前に人が見る）
@@ -581,6 +584,7 @@ function mapStaffColumns_(headers) {
     delivery: find(['納品名']),
     toInterp: find(['管理者からの連絡']),
     delReq: find(['削除依頼']),
+    waiting: find(['資料待ち']),
   };
   // 会社コードの列の見出しが「社外案件名」になっている（社外案件名が2つあり、1つ目が案件番号のすぐ左）→ 1つ目を会社コードとみなす
   if (!m.code && m.number && m.name === m.number - 1) {
@@ -1849,9 +1853,9 @@ const REG_H = {
   translated: '翻訳済み', translatedAt: '翻訳日時', transNote: '翻訳メモ', white: 'White', color: 'Color', other: 'pts', total: '合計', split: '作業の分け方',
   estimator: '時間入力者', estimatedAt: '時間入力日時',
   regDate: '登録日時', delivery: '納品名', message: '連絡文',
-  manual: '今すぐ連携', copy: 'コピー', del: '削除', delReq: '削除依頼', toInterp: '通訳へのメッセージ', interpMessage: '通訳向け連絡文', copiedAt: '入力シートへ写した日時', notifiedAt: '最後の催促', notifyCount: '催促回数',
+  manual: '今すぐ連携', copy: 'コピー', del: '削除', delReq: '削除依頼', notifyOff: '通知オフ', toInterp: '通訳へのメッセージ', interpMessage: '通訳向け連絡文', copiedAt: '入力シートへ写した日時', notifiedAt: '最後の催促', notifyCount: '催促回数',
 };
-const REG_ORDER = ['no', 'state', 'manual', 'regDate', 'copy', 'del', 'delReq', 'code', 'number', 'name', 'internal', 'assignee', 'request', 'cut', 'pattern', 'extName', 'link', 'deadline', 'order', 'memo', 'toInterp',
+const REG_ORDER = ['no', 'state', 'manual', 'regDate', 'copy', 'del', 'delReq', 'notifyOff', 'code', 'number', 'name', 'internal', 'assignee', 'request', 'cut', 'pattern', 'extName', 'link', 'deadline', 'order', 'memo', 'toInterp',
   'translated', 'translatedAt', 'transNote', 'white', 'color', 'other', 'total', 'split', 'estimator', 'estimatedAt', 'copiedAt', 'notifiedAt', 'notifyCount', 'delivery', 'message', 'interpMessage'];
 // 2026-11-03：管理者が書くのは『案件登録』（入力専用）。「登録」にチェックした行に登録No を付け、
 // エンジニア入力シートへ写して『登録一覧』へ移す（『案件登録』からは消える）。それまでの『案件登録』は『登録一覧』に名前を変える。
@@ -1863,19 +1867,20 @@ const ENTRY_NOTES = {
   state: '自動：記入中（足りない項目）／登録できます（「登録」にチェックで送る）',
 };
 // 無くても動く列（あとから足した列。初期設定・登録のときに差し込む）
-const REG_OPTIONAL = ['extName', 'del', 'delReq'];
+const REG_OPTIONAL = ['extName', 'del', 'delReq', 'notifyOff'];
 // 管理者が書く列（ほかの列は自動で入る）
 const REG_INPUT = ['code', 'number', 'name', 'assignee', 'request', 'cut', 'pattern', 'link', 'deadline', 'order', 'memo', 'toInterp'];
 // エンジニア入力シートへ写す列（案件登録 → 入力シート。担当者・納期・注文書・管理者メモは写さない）
 const REG_COPY = ['code', 'number', 'name', 'link', 'request', 'cut', 'pattern', 'toInterp'];
-const REG_STATE = { DRAFT: '記入中', TRANSLATE: '翻訳待ち', ESTIMATE: '時間計算待ち', DONE: '時間入力済み', MISSING: '入力シートに無い', DELETED: '削除済み' };
+const REG_STATE = { DRAFT: '記入中', TRANSLATE: '翻訳待ち', ESTIMATE: '時間計算待ち', DONE: '時間入力済み', MISSING: '入力シートに無い', DELETED: '削除済み', WAITING: '資料待ち' };
 const REG_NOTES = {
   no: '自動で入る番号。入力シートの「登録No」と同じ。消すと次の自動実行でもう一度写す（入力シートに同じ行が2つできるので注意）',
-  state: '自動：記入中（会社コード・案件番号・視点・新規or修正のどれかが空）／翻訳待ち／時間計算待ち（翻訳済み・時間が空）／時間入力済み／入力シートに無い（入力シートで行が消された）',
+  state: '自動：記入中（会社コード・案件番号・視点・新規or修正のどれかが空）／翻訳待ち／時間計算待ち（翻訳済み・時間が空）／時間入力済み／資料待ち（エンジニア入力シートの「資料待ち」にチェック。催促しない）／入力シートに無い（入力シートで行が消された）',
   code: 'REN・RIC など（『会社マスタ』の英字）', number: '案件の番号（数字）', name: 'お客様の案件名（工程図の案件名）',
   internal: '自動：会社コード＋案件番号（RIC.34）', assignee: '工程図の担当者（入力シートには写さない）',
   request: 'その視点の初回は「新規」、2回目以降は「修正」', cut: 'EX1・IN2 など（『視点マスタ』のキーワード＋番号）', pattern: 'パターン違いがあれば A・B…',
   del: 'この登録を消すときにチェック → 確認の画面で「削除する」。エンジニア入力シートの行と工程図の作業を消す（この行はチェックが付いたまま残り、状態が「削除済み」になる）。チェックを外すと元に戻る。同じ視点のあとの回（2回目など）がある行は、あとの回から消す',
+  notifyOff: 'チェックすると、この案件（同じ社内案件名の行すべて）の Discord 通知（時間計算の催促・登録後の変更・削除依頼）を送らない。外すとまた送る',
   delReq: '自動：エンジニアが入力シートで「削除依頼」にチェックした日時。確かめて消すなら「削除」にチェック。消さないならエンジニアにチェックを外してもらう',
   extName: 'お客様向けの視点名（工程図の社外視点名に入る）。空なら『視点マスタ』から自動（外観目線視点①_パターンA など）。『案件入力』タブで書き換えた名前が入る',
   link: '保存先フォルダのリンク', deadline: '納期（入力シートには写さない。工程図の納期に入る）', order: '注文書のファイルのリンクなど（入力シートには写さない）',
@@ -1961,7 +1966,7 @@ function formatRegSheet_(sheet, masters, codes) {
     if (!rc[k]) return;
     const head = sheet.getRange(1, rc[k]);
     // 人が書く列＝黄色、自動の列＝灰色（『連携』と同じ色分け）
-    head.setNote(REG_NOTES[k] || '').setFontWeight('bold').setBackground(REG_INPUT.indexOf(k) >= 0 || k === 'extName' || k === 'manual' || k === 'copy' || k === 'del' || k === 'white' || k === 'color' || k === 'other' ? '#fff2cc' : '#e6e6e6');
+    head.setNote(REG_NOTES[k] || '').setFontWeight('bold').setBackground(REG_INPUT.indexOf(k) >= 0 || k === 'extName' || k === 'manual' || k === 'copy' || k === 'del' || k === 'notifyOff' || k === 'white' || k === 'color' || k === 'other' ? '#fff2cc' : '#e6e6e6');
   });
   // 社内案件名（会社コード＋案件番号）と合計（White＋Color＋pts）は式。値はスクリプトから書かない
   const fm = regFormulas_(rc);
@@ -1970,6 +1975,7 @@ function formatRegSheet_(sheet, masters, codes) {
   sheet.getRange(2, rc.manual, n - 1, 1).setDataValidation(dv().requireCheckbox().build());
   sheet.getRange(2, rc.copy, n - 1, 1).setDataValidation(dv().requireCheckbox().build());
   if (rc.del) sheet.getRange(2, rc.del, n - 1, 1).setDataValidation(dv().requireCheckbox().build());
+  if (rc.notifyOff) sheet.getRange(2, rc.notifyOff, n - 1, 1).setDataValidation(dv().requireCheckbox().build());
   if (rc.delReq) sheet.getRange(2, rc.delReq, n - 1, 1).setNumberFormat('yyyy-mm-dd hh:mm');
   if (codes && codes.length) sheet.getRange(2, rc.code, n - 1, 1).setDataValidation(list(codes, true));
   sheet.getRange(2, rc.number, n - 1, 1).setDataValidation(dv().requireNumberBetween(1, 99999).setAllowInvalid(false).build());
@@ -3011,17 +3017,75 @@ function regHeaderMap_(sheet) {
 function regState_(r) {
   if (!trimStr_(r.code) || !trimStr_(r.number) || !trimStr_(r.cut) || !trimStr_(r.request)) return REG_STATE.DRAFT;
   if (r.missing) return REG_STATE.MISSING;
+  // エンジニア入力シートの「資料待ち」にチェック（お客様の資料・回答待ち）。チェックの間は催促しない
+  if (r.waitingDocs) return REG_STATE.WAITING;
   if (toHours_(r.white) + toHours_(r.color) + toHours_(r.other) > 0) return REG_STATE.DONE;
   return r.translated ? REG_STATE.ESTIMATE : REG_STATE.TRANSLATE;
 }
-/** 催促の時間帯（'8-20' / '8:00-20:00'）に now が入っているか。空・読めないときは常に true */
+/** 『登録一覧』の値（1行目＝見出し）→「通知オフ」にチェックした案件（社内案件名を正規化したもの）の集まり（純ロジック） */
+function notifyOffSetOf_(data, rc) {
+  const out = new Set();
+  if (!rc.notifyOff) return out;
+  for (let r = 1; r < data.length; r++) {
+    const v = data[r];
+    if (isChecked_(v[rc.notifyOff - 1])) out.add(normCode_(joinCode_(v[rc.code - 1], rc.number ? v[rc.number - 1] : '')));
+  }
+  return out;
+}
+/** 管理者用シートの『登録一覧』から「通知オフ」の案件を読む（タブ・列が無ければ空） */
+function readNotifyOff_(ss) {
+  const sh = ss && ss.getSheetByName(SHEET.REG);
+  if (!sh || sh.getLastRow() < 2) return new Set();
+  const data = sh.getRange(1, 1, sh.getLastRow(), Math.max(sh.getLastColumn(), 1)).getValues();
+  const heads = data[0].map(v => trimStr_(v));
+  const at = (h) => heads.indexOf(h) + 1;
+  return notifyOffSetOf_(data, { notifyOff: at(REG_H.notifyOff), code: at(REG_H.code), number: at(REG_H.number) });
+}
+/** ベトナム時間の曜日（0＝日〜6＝土） */
+function dayOfWeekVN_(d) {
+  if (typeof Utilities !== 'undefined') return parseInt(Utilities.formatDate(d, APP_TIME_ZONE, 'u'), 10) % 7;
+  return d.getDay();
+}
+const WEEKDAY_JA = '日月火水木金土';
+/**
+ * 通知の時間帯の書き方（純ロジック）→ 曜日ごとの時間帯。例 '8-18 / 土 8-13 / 日 なし'
+ * 「/」で区切り、先頭に曜日（月〜日・平日。「土日」のように続けても可）があればその曜日だけ、無ければ全部の曜日。
+ * 時間は '8-18' / '8:30-18:00'、止めるなら「なし」。戻り値：{ 0..6: { from, to } | 'none' }（読めない曜日は入らない）
+ */
+function parseNotifyHours_(spec) {
+  const out = {};
+  const parts = String(spec || '').replace(/[〜～~]/g, '-').replace(/[／;；\n]/g, '/').split('/');
+  const days = (p) => {
+    if (/^平日/.test(p)) return { list: [1, 2, 3, 4, 5], rest: p.replace(/^平日[：:\s]*/, '') };
+    const m = p.match(/^([日月火水木金土](?:[・、,]?[日月火水木金土])*)(?:曜日?)?[：:\s]*/);
+    if (!m) return { list: null, rest: p };
+    return { list: m[1].replace(/[・、,]/g, '').split('').map(c => WEEKDAY_JA.indexOf(c)), rest: p.slice(m[0].length) };
+  };
+  const base = [], special = [];
+  parts.map(p => p.trim()).filter(Boolean).forEach(p => {
+    const d = days(p);
+    const body = d.rest.trim();
+    let val = null;
+    if (/^(なし|無し|しない|止める|off)$/i.test(body)) val = 'none';
+    else {
+      const m = body.match(/^(\d{1,2})(?::(\d{2}))?\s*-\s*(\d{1,2})(?::(\d{2}))?$/);
+      if (m) val = { from: +m[1] * 60 + +(m[2] || 0), to: +m[3] * 60 + +(m[4] || 0) };
+    }
+    if (val === null) return;
+    (d.list ? special : base).push({ list: d.list || [0, 1, 2, 3, 4, 5, 6], val });
+  });
+  base.concat(special).forEach(x => x.list.forEach(i => { out[i] = x.val; }));
+  return out;
+}
+/** 通知の時間帯に now が入っているか（曜日ごと。'8-18 / 土 8-13 / 日 なし'）。空・読めないときは常に true */
 function inNotifyHours_(now, spec) {
-  const m = String(spec || '').replace(/[〜～~]/g, '-').match(/^\s*(\d{1,2})(?::(\d{2}))?\s*-\s*(\d{1,2})(?::(\d{2}))?\s*$/);
-  if (!m) return true;
+  const map = parseNotifyHours_(spec);
+  if (!Object.keys(map).length) return true;
+  const v = map[dayOfWeekVN_(now)];
+  if (v === undefined) return true;
+  if (v === 'none') return false;
   const cur = minutesOfDayVN_(now);
-  const from = +m[1] * 60 + +(m[2] || 0);
-  const to = +m[3] * 60 + +(m[4] || 0);
-  return from <= to ? (cur >= from && cur < to) : (cur >= from || cur < to);
+  return v.from <= v.to ? (cur >= v.from && cur < v.to) : (cur >= v.from || cur < v.to);
 }
 /**
  * 制作時間の計算の期限（純ロジック）＝ 連絡文の {計算期限} と同じ：登録日時＋calcMinutes 分（calcHours の時間帯だけ数える）。
@@ -3150,6 +3214,8 @@ function syncRegistrations_(now) {
   const due = [];
   let copied = 0, updated = 0, estimate = 0, missing = 0;
   const delReqs = []; // 新しく届いた削除依頼（Discord で知らせる）
+  const muted = notifyOffSetOf_(data, rc); // 「通知オフ」にチェックした案件（Discord で知らせない）
+  const isMuted = (row) => muted.has(normCode_(joinCode_(row.code, row.number)));
   const setReg = (r, k, value) => { if (!rc[k]) return; if (!sameCell_(data[r][rc[k] - 1], value)) { regUpdates.push({ row: r + 1, col: rc[k], value }); data[r][rc[k] - 1] = value; } };
 
   for (let r = 1; r < data.length; r++) {
@@ -3210,6 +3276,7 @@ function syncRegistrations_(now) {
       setReg(r, 'split', trimStr_(sv('split')));
       setReg(r, 'transNote', trimStr_(sv('transNote')));
       setReg(r, 'estimator', trimStr_(sv('estimator')));
+      row.waitingDocs = !!(ssc.waiting && isChecked_(sv('waiting')));
       // 入力シートの自動列（編集の瞬間に入らなかったときの保険：ここで入れる）
       putStaff('transAt', st.transAt || '');
       putStaff('estimatedAt', st.estimatedAt || '');
@@ -3228,7 +3295,7 @@ function syncRegistrations_(now) {
       if (rc.delReq && ssc.delReq) {
         const want = isChecked_(sv('delReq'));
         const cur = row.delReq;
-        if (want && trimStr_(cur) === '') { setReg(r, 'delReq', now); delReqs.push(no + ' ' + regLabel_(row)); }
+        if (want && trimStr_(cur) === '') { setReg(r, 'delReq', now); if (!isMuted(row)) delReqs.push(no + ' ' + regLabel_(row)); }
         else if (!want && trimStr_(cur) !== '') setReg(r, 'delReq', '');
       }
     }
@@ -3236,7 +3303,7 @@ function syncRegistrations_(now) {
     setReg(r, 'state', row.state);
     if (row.state === REG_STATE.MISSING) missing++;
     if (row.state === REG_STATE.ESTIMATE) estimate++;
-    if (isReminderDue_(row, now, cfg)) {
+    if (isReminderDue_(row, now, cfg) && !isMuted(row)) {
       const d = calcDeadlineOf_(row, cfg);
       due.push({
         r, label: regLabel_(row), count: parseInt(row.notifyCount, 10) || 0, waiting: row.state === REG_STATE.TRANSLATE,
@@ -3286,7 +3353,7 @@ function syncRegistrations_(now) {
       staff.insertRowsAfter(a, list.length);
       writeRows(a + 1, list);
       if (totalF && sc.total) staff.getRange(a + 1, sc.total, list.length, 1).setFormulaR1C1(totalF);
-      ['translated', 'delReq'].forEach(k => { if (sc[k]) staff.getRange(a + 1, sc[k], list.length, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build()).setValues(list.map(() => [false])); });
+      ['translated', 'delReq', 'waiting'].forEach(k => { if (sc[k]) staff.getRange(a + 1, sc[k], list.length, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build()).setValues(list.map(() => [false])); });
     });
   }
 
@@ -4107,7 +4174,7 @@ function restoreDeleted_(ss, row) {
     Object.keys(staffB.vals).forEach(k => { if (sc[k] && k !== 'total') s.getRange(r, sc[k]).setValue(k === 'delReq' ? false : cellFromJson_(staffB.vals[k])); });
     const f = staffTotalFormula_(sc);
     if (f && sc.total) s.getRange(r, sc.total).setFormulaR1C1(f);
-    ['translated', 'delReq'].forEach(k => { if (sc[k]) s.getRange(r, sc[k]).setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build()); });
+    ['translated', 'delReq', 'waiting'].forEach(k => { if (sc[k]) s.getRange(r, sc[k]).setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build()); });
   }
   // 『登録一覧』：残っている行は「削除」を外すだけ（状態は次の同期で入る）。無ければ中身がある最後の行の下へ
   if (regRow) {
@@ -4119,12 +4186,12 @@ function restoreDeleted_(ss, row) {
     lv.forEach((x, i) => { if (trimStr_(x[rc.no - 1]) !== '' || REG_INPUT.some(k => trimStr_(x[rc[k] - 1]) !== '')) last = i + 2; });
     const r = last + 1;
     ensureSize_(reg, r, reg.getLastColumn());
-    const skip = ['internal', 'total', 'manual', 'copy', 'del', 'delReq'];
+    const skip = ['internal', 'total', 'manual', 'copy', 'del', 'delReq', 'notifyOff'];
     Object.keys(regB).forEach(k => { if (rc[k] && skip.indexOf(k) < 0) reg.getRange(r, rc[k]).setValue(cellFromJson_(regB[k])); });
     const fm = regFormulas_(rc);
     reg.getRange(r, rc.internal).setFormulaR1C1(fm.internal);
     reg.getRange(r, rc.total).setFormulaR1C1(fm.total);
-    ['manual', 'copy', 'del'].forEach(k => { if (rc[k]) reg.getRange(r, rc[k]).setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build()).setValue(false); });
+    ['manual', 'copy', 'del', 'notifyOff'].forEach(k => { if (rc[k]) reg.getRange(r, rc[k]).setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build()).setValue(false); });
   }
   // 『連携』：いちばん下へ
   let linkNote = '';
@@ -4618,7 +4685,7 @@ function staffValidation_(key, choices) {
       return list(PATTERN_OPTIONS, true, 'パターン違いが無ければ空欄 / Không có phương án khác thì để trống');
     case 'white': case 'whiteBody': case 'whiteFurn': case 'color': case 'other':
       return list(HOUR_OPTIONS, true, '時間（h）/ Số giờ');
-    case 'translated': case 'delReq':
+    case 'translated': case 'delReq': case 'waiting':
       return dv().requireCheckbox().build();
     default:
       return null;
