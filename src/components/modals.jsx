@@ -104,8 +104,16 @@ function EndPromptModal({ viewpoints, now, settings, onComplete, onAddRevision, 
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, padding: 16 }}>
       <div style={{ background: '#fff', border: `1px solid ${colors.border}`, borderRadius: 8, width: '100%', maxWidth: 600, maxHeight: '85vh', display: 'flex', flexDirection: 'column', fontFamily: fontJP, boxShadow: '0 12px 48px rgba(0,0,0,0.25)' }}>
         <div style={{ padding: '18px 22px', borderBottom: `1px solid ${colors.border}` }}>
-          <h3 style={{ fontFamily: fontDisplay, fontSize: 17, margin: 0, fontWeight: 600, color: colors.accent }}>終了予定を過ぎた視点があります</h3>
-          <p style={{ fontSize: 11, color: colors.textMute, margin: '6px 0 0 0' }}>視点ごとに対応を選んでください（「確認中」で30分後に再通知）。</p>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+            <div>
+              <h3 style={{ fontFamily: fontDisplay, fontSize: 17, margin: 0, fontWeight: 600, color: colors.accent }}>終了予定を過ぎた視点があります</h3>
+              <p style={{ fontSize: 11, color: colors.textMute, margin: '6px 0 0 0' }}>視点ごとに対応を選んでください。スケジュールを調整する場合は「確認中」で閉じると、1時間後にもう一度表示します。</p>
+            </div>
+            <button type="button" onClick={() => onSnooze(viewpoints.map(v => ({ key: v.key, endTs: v.endTs })))}
+              style={btn('#fff', colors.text, colors.text)} title="すべての視点を確認中にして閉じます。1時間後にもう一度表示します。">
+              すべて確認中（1時間後に再表示）
+            </button>
+          </div>
         </div>
         <div style={{ overflowY: 'auto', padding: '8px 16px 16px', flex: 1 }}>
           {viewpoints.map(vp => {
@@ -129,7 +137,7 @@ function EndPromptModal({ viewpoints, now, settings, onComplete, onAddRevision, 
                   <button type="button" onClick={() => open(vp, 'revision')} style={btn('#fff', colors.border, colors.text)}>② 追加修正</button>
                   <button type="button" onClick={() => open(vp, 'delay')} style={btn('#fff', colors.border, colors.text)} title="遅れて終了予定を後ろへ。差分の作業時間を加算します。">③ 遅延</button>
                   <button type="button" onClick={() => open(vp, 'adjust')} style={btn('#fff', colors.border, colors.text)} title="終了予定時間だけを直します（作業時間は加算しません・早め/遅め可）。">④ 終了予定の修正</button>
-                  <button type="button" onClick={() => onSnooze(vp.key, vp.endTs)} style={btn('#fff', colors.border, colors.textMute)} title="今は確認中。30分後にもう一度通知します。">⑤ 確認中（30分後に通知）</button>
+                  <button type="button" onClick={() => onSnooze([{ key: vp.key, endTs: vp.endTs }])} style={btn('#fff', colors.border, colors.textMute)} title="今は確認中。その間にスケジュールを調整してください。1時間後にもう一度表示します。">⑤ 確認中（1時間後に再表示）</button>
                 </div>
 
                 {isOpen && active.action === 'complete' && (

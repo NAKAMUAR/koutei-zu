@@ -686,9 +686,10 @@ export default function App() {
   };
   // 終了超過ポップアップの制御状態（視点ごとの snooze / 表示済み終了予定）を更新
   // key は視点キー（assignee::projectName::viewpointName）
-  const setEndPromptFor = (key, patch) => {
+  // updates: [[key, patch], ...]（まとめて1回で保存。1件ずつ保存すると後の保存が前の分を上書きする）
+  const setEndPromptFor = (updates) => {
     const eps = { ...(settings.endPromptState || {}) };
-    eps[key] = { ...(eps[key] || {}), ...patch };
+    for (const [key, patch] of updates) eps[key] = { ...(eps[key] || {}), ...patch };
     saveSettings({ ...settings, endPromptState: eps });
   };
 
@@ -2051,9 +2052,11 @@ export default function App() {
       t.id === last.id ? { ...t, manualEnd: newEndStr } : t
     )));
   };
-  // ⑤ 確認中（30分後に通知）＝30分スヌーズ。key は視点キー
-  const endPromptSnooze = (key, endTs) => {
-    setEndPromptFor(key, { snoozedUntil: Date.now() + 30 * 60000, lastPromptedEnd: endTs });
+  // 確認中（1時間後にもう一度通知）＝1時間スヌーズ。その間にスケジュールを調整してもらう。
+  // list: [{ key, endTs }]（1件でも「すべて確認中」でも同じ）
+  const endPromptSnooze = (list) => {
+    const until = Date.now() + 60 * 60000;
+    setEndPromptFor(list.map(({ key, endTs }) => [key, { snoozedUntil: until, lastPromptedEnd: endTs }]));
   };
 
   const setTaskCompletedHours = (id, completed) => {
