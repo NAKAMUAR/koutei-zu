@@ -960,12 +960,14 @@ function buildTaskRecords_(row, ctx) {
 
   const key = vpKey_(projectName, viewpointName);
   const vpTasks = (ctx.byVp && ctx.byVp.get(key)) || [];
-  // 担当者：シート → 既存視点の担当者（最新） → 作業の種類ごとの既定（『設定』） → 既定
+  // 担当者：シート → 既存視点の担当者（最新） → 会社の担当者（工程図の従業員マスタの「担当会社」）
+  //   → 作業の種類ごとの既定（『設定』） → 既定
   let baseAssignee = trimStr_(row.assignee);
   if (!baseAssignee && vpTasks.length) {
     const latest = vpTasks.slice().sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))[0];
     baseAssignee = trimStr_(latest.assignee);
   }
+  if (!baseAssignee) baseAssignee = companyAssigneeOf_(ctx.employeeMaster, row.company);
   const kindAssignees = ctx.kindAssignees || {};
   const assigneeFor = (kindKey) => baseAssignee || trimStr_(kindAssignees[kindKey]) || ctx.defaultAssignee || '未割当';
   const notes = [];
@@ -1179,6 +1181,7 @@ function runSend_(dryRun, opts) {
   }
   const companies = new Set(customerMaster.map(c => trimStr_(c && c.company)).filter(Boolean));
   const stepTypes = normalizeStepTypes_(parseJsonArray_(fsGetValueString_(auth, cfg, 'stepTypeMaster')));
+  const employeeMaster = parseJsonArray_(fsGetValueString_(auth, cfg, 'employeeMaster'));
 
   const byExt = new Map();
   const byVp = new Map();
@@ -1189,7 +1192,7 @@ function runSend_(dryRun, opts) {
     byVp.get(k).push(t);
   });
 
-  const ctx = { now: nowDate.getTime(), today: fmtYMD_(nowDate), defaultAssignee: cfg.defaultAssignee, stepTypes, byVp, byExt, deleted,
+  const ctx = { now: nowDate.getTime(), today: fmtYMD_(nowDate), defaultAssignee: cfg.defaultAssignee, stepTypes, byVp, byExt, deleted, employeeMaster,
     kindAssignees: { white: cfg.assigneeWhite, color: cfg.assigneeColor, other: cfg.assigneeOther, single: cfg.assigneeSingle } };
   const stamp = nowDate;
   const lines = [];
@@ -4850,6 +4853,17 @@ function editDistance_(a, b) {
  * ④ 片方がもう片方を含む（3文字以上）⑤ 1〜2文字の打ち間違い（8割以上同じ）。
  * ③〜⑤ は候補が1社に決まるときだけ使う。見つからなければ null
  */
+/**
+ * 会社の担当者：工程図の従業員マスタ（employeeMaster）で「担当会社」にその会社を選んでいる人。
+ * 複数いれば従業員マスタの上の人。いなければ ''。アプリの assigneesForCompany（src/lib/companyAssignee.js）と同じ決め方。
+ */
+function companyAssigneeOf_(employeeMaster, company) {
+  const key = (n) => String(n || '').trim().replace(/株式会社|有限会社|合同会社|（株）|\(株\)|㈱/g, '').replace(/[\s\u3000]/g, '').toLowerCase();
+  const k = key(company);
+  if (!k) return '';
+  const hit = (employeeMaster || []).find(e => e && trimStr_(e.name) && (e.companies || []).some(c => key(c) === k));
+  return hit ? trimStr_(hit.name) : '';
+}
 function resolveCompanyName_(name, master) {
   const n = trimStr_(name);
   if (!n) return null;

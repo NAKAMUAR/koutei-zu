@@ -72,6 +72,20 @@ function MasterView() {
   const addEmployee = () => { editingEmployees.current = false; const next = [...employees, { id: newId('emp'), name: '', role: '' }]; setEmployees(next); saveEmployeeMaster(next); };
   const setEmployeeField = (id, field, val) => { editingEmployees.current = true; setEmployees(es => es.map(e => e.id === id ? { ...e, [field]: val } : e)); };
   const commitEmployees = () => { editingEmployees.current = false; saveEmployeeMaster(employees); };
+  // 担当会社（companies：お客様マスタの会社名）。選んだ会社の案件の担当者に自動で入る
+  const [openCompanies, setOpenCompanies] = useState(null);
+  const masterCompanies = [...new Set((customerMaster || []).map(c => (c.company || '').trim()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, 'ja'));
+  const toggleEmployeeCompany = (id, company) => {
+    editingEmployees.current = false;
+    const next = employees.map(e => {
+      if (e.id !== id) return e;
+      const cur = e.companies || [];
+      return { ...e, companies: cur.includes(company) ? cur.filter(c => c !== company) : [...cur, company] };
+    });
+    setEmployees(next);
+    saveEmployeeMaster(next);
+  };
   // 担当者ごとの稼働時間（workHours。null で全体設定に戻す）
   const [openHours, setOpenHours] = useState(null);
   const saveEmployeeHours = (id, workHours) => {
@@ -390,6 +404,7 @@ function MasterView() {
         <p style={{ fontSize: 12, color: colors.textMute, margin: '0 0 16px 0' }}>
           制作担当者（従業員）を登録します。案件入力時の「担当者」の候補に表示されます。<br />
           ここでの並び順が、カレンダー・担当者別・サマリーの担当者の表示順になります（つまみをドラッグ＆ドロップ、または▲▼で変更）。<br />
+          「担当会社」でお客様マスタの会社を選ぶと、その会社の案件の担当者に自動で入ります（案件入力・スプレッドシート連携。同じ会社を複数人にしたときは上の人が優先）。<br />
           「稼働時間」で担当者ごとの午前・午後の時間を設定できます（ベトナム側など時差のある担当者向け。未設定なら上の全体設定の時間）。
         </p>
 
@@ -397,6 +412,7 @@ function MasterView() {
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '0 2px' }}>
             <div style={{ width: 48, flexShrink: 0, ...labelStyle }}>順</div>
             <div style={{ flex: '1 1 0', ...labelStyle }}>氏名</div>
+            <div style={{ flex: '1.3 1 0', ...labelStyle }}>担当会社</div>
             <div style={{ flex: '1 1 0', ...labelStyle }}>役割・備考</div>
             <div style={{ width: 190, flexShrink: 0, ...labelStyle }}>稼働時間</div>
             <div style={{ width: 34, flexShrink: 0 }} />
@@ -450,11 +466,19 @@ function MasterView() {
                 onChange={(ev) => setEmployeeField(e.id, 'name', ev.target.value)}
                 onBlur={commitEmployees}
                 placeholder="例: 田中" style={{ ...inputStyle, flex: '1 1 0' }} />
+              <button type="button" onClick={() => { setOpenCompanies(openCompanies === e.id ? null : e.id); setOpenHours(null); }}
+                title="この担当者が受け持つ会社を選ぶ（お客様マスタの会社名）"
+                style={{ flex: '1.3 1 0', minWidth: 0, textAlign: 'left', padding: '7px 9px', background: openCompanies === e.id ? colors.accentSoft : '#fff', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, color: (e.companies || []).length ? colors.text : colors.textMute, display: 'flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {(e.companies || []).length ? e.companies.join('、') : '会社を選ぶ'}
+                </span>
+                {openCompanies === e.id ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+              </button>
               <input type="text" value={e.role || ''}
                 onChange={(ev) => setEmployeeField(e.id, 'role', ev.target.value)}
                 onBlur={commitEmployees}
                 placeholder="例: パース担当 / 主任" style={{ ...inputStyle, flex: '1 1 0' }} />
-              <button type="button" onClick={() => setOpenHours(openHours === e.id ? null : e.id)}
+              <button type="button" onClick={() => { setOpenHours(openHours === e.id ? null : e.id); setOpenCompanies(null); }}
                 title="この担当者の稼働時間（午前・午後）を設定"
                 style={{ width: 190, flexShrink: 0, textAlign: 'left', padding: '7px 9px', background: openHours === e.id ? colors.accentSoft : '#fff', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, color: isValidWorkHours(e.workHours) ? colors.text : colors.textMute, display: 'flex', alignItems: 'center', gap: 4 }}>
                 <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -466,6 +490,11 @@ function MasterView() {
                 <Trash2 size={14} />
               </button>
             </div>
+            {openCompanies === e.id && (
+              <CompanyPicker employee={e} employees={employees} companies={masterCompanies}
+                onToggle={(c) => toggleEmployeeCompany(e.id, c)} onClose={() => setOpenCompanies(null)}
+                colors={colors} fontJP={fontJP} />
+            )}
             {openHours === e.id && (
               <WorkHoursEditor employee={e} settings={settings} onSave={(wh) => saveEmployeeHours(e.id, wh)} colors={colors} fontJP={fontJP} />
             )}
@@ -594,6 +623,50 @@ function MasterView() {
 }
 
 // ============ 残業の登録（担当者ごとの稼働枠追加） ============
+// ---- 担当会社の選択（従業員マスタの companies。お客様マスタの会社名から選ぶ）----
+function CompanyPicker({ employee, employees, companies, onToggle, onClose, colors, fontJP }) {
+  const [q, setQ] = useState('');
+  const mine = employee.companies || [];
+  // お客様マスタから消えた会社も、選んだままなら外せるように出す
+  const all = [...companies, ...mine.filter(c => !companies.includes(c))];
+  const query = q.trim().toLowerCase();
+  const shown = query ? all.filter(c => c.toLowerCase().includes(query)) : all;
+  const othersOf = (c) => employees.filter(o => o.id !== employee.id && (o.name || '').trim() && (o.companies || []).includes(c)).map(o => o.name.trim());
+  return (
+    <div style={{ margin: '4px 0 8px 58px', padding: 12, border: `1px solid ${colors.border}`, borderRadius: 5, background: '#fbf9f4' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+        <span style={{ fontSize: 12, color: colors.textMute }}>
+          {(employee.name || '').trim() || 'この担当者'} が受け持つ会社にチェック（選んだその場で保存されます）
+        </span>
+        <input type="text" value={q} onChange={(ev) => setQ(ev.target.value)} placeholder="会社名で絞り込み"
+          style={{ marginLeft: 'auto', padding: '5px 8px', border: `1px solid ${colors.border}`, borderRadius: 4, fontFamily: fontJP, fontSize: 12, width: 160 }} />
+        <button type="button" onClick={onClose} title="閉じる"
+          style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: colors.textMute, display: 'flex' }}>
+          <X size={14} />
+        </button>
+      </div>
+      {all.length === 0 ? (
+        <div style={{ fontSize: 12, color: colors.textMute }}>お客様マスタに会社がありません。「お客様設定」で会社を登録してください。</div>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 4, maxHeight: 260, overflowY: 'auto' }}>
+          {shown.map(c => {
+            const on = mine.includes(c);
+            const others = othersOf(c);
+            const missing = !companies.includes(c);
+            return (
+              <label key={c} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 6px', borderRadius: 4, cursor: 'pointer', fontSize: 12, background: on ? colors.accentSoft : 'transparent' }}>
+                <input type="checkbox" checked={on} onChange={() => onToggle(c)} />
+                <span style={{ color: missing ? colors.textMute : colors.text }}>{c}{missing ? '（お客様マスタに無し）' : ''}</span>
+                {others.length > 0 && <span style={{ marginLeft: 'auto', fontSize: 10.5, color: colors.textMute, whiteSpace: 'nowrap' }}>{others.join('・')}</span>}
+              </label>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---- 担当者ごとの稼働時間の編集（従業員マスタの workHours）----
 // 時刻はチーム共通の時間（カレンダーと同じ時計）で入れる。「全体から±N時間」で時差のある担当者をまとめて入れられる
 function WorkHoursEditor({ employee, settings, onSave, colors, fontJP }) {
