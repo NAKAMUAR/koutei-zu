@@ -464,6 +464,13 @@ function staffWhite_(v, sc) {
   const at = (c) => (c ? v[c - 1] : '');
   return sc.whiteBody ? Math.round((toHours_(at(sc.whiteBody)) + toHours_(at(sc.whiteFurn))) * 100) / 100 : toHours_(at(sc.white));
 }
+/** 制作時間を「0」と書いた行か（純ロジック。2026-11-10）：時間の欄のどれかに 0 が書いてあり、合計が 0。空欄だけの行は違う */
+function staffZeroHours_(v, sc) {
+  const cols = ['whiteBody', 'whiteFurn', 'white', 'color', 'other'].map(k => sc[k]).filter(Boolean);
+  const vals = cols.map(c => v[c - 1]);
+  if (!vals.some(x => trimStr_(x) !== '')) return false;
+  return vals.every(x => trimStr_(x) === '' || toHours_(x) === 0);
+}
 /** 読むタブの名前（取込キーの n回目 が変わらないよう、古い順＝制作済み→制作中→入力前）。旧レイアウトのタブ名なら、そのタブだけ */
 function staffTabNames_(cfg) {
   return cfg.tabName === STAFF_TAB_DEFAULT ? [STAFF_TAB_DONE, STAFF_TAB_DOING, STAFF_TAB_DEFAULT] : [cfg.tabName];
@@ -2010,10 +2017,10 @@ const REG_OPTIONAL = ['branch', 'extName', 'del', 'delReq', 'notifyOff'];
 const REG_INPUT = ['code', 'number', 'name', 'assignee', 'request', 'cut', 'pattern', 'link', 'deadline', 'order', 'memo', 'toInterp'];
 // エンジニア入力シートへ写す列（案件登録 → 入力シート。お客様担当者・納期・注文書・管理者メモは写さない）
 const REG_COPY = ['code', 'number', 'name', 'link', 'request', 'cut', 'pattern', 'toInterp'];
-const REG_STATE = { DRAFT: '記入中', TRANSLATE: '翻訳待ち', ESTIMATE: '時間計算待ち', DONE: '時間入力済み', MISSING: '入力シートに無い', DELETED: '削除済み', WAITING: '資料待ち' };
+const REG_STATE = { DRAFT: '記入中', TRANSLATE: '翻訳待ち', ESTIMATE: '時間計算待ち', DONE: '時間入力済み', MISSING: '入力シートに無い', DELETED: '削除済み', WAITING: '資料待ち', ZERO: '制作なし（0時間）' };
 const REG_NOTES = {
   no: '自動で入る番号。入力シートの「登録No」と同じ。消すと次の自動実行でもう一度写す（入力シートに同じ行が2つできるので注意）',
-  state: '自動：記入中（会社コード・案件番号・視点・新規or修正のどれかが空）／翻訳待ち／時間計算待ち（翻訳済み・時間が空）／時間入力済み／資料待ち（エンジニア入力シートの「資料待ち」にチェック。催促しない）／入力シートに無い（入力シートで行が消された）',
+  state: '自動：記入中（会社コード・案件番号・視点・新規or修正のどれかが空）／翻訳待ち／時間計算待ち（翻訳済み・時間が空）／時間入力済み／資料待ち（エンジニア入力シートの「資料待ち」にチェック。催促しない）／制作なし（0時間）（エンジニアが制作時間を 0 と書いた。催促せず、入力シートでは行を隠す）／入力シートに無い（入力シートで行が消された）',
   code: 'REN・RIC など（『会社マスタ』の英字）', number: '案件の番号（数字）', name: 'お客様の案件名（工程図の案件名）',
   internal: '自動：会社コード＋案件番号（RIC.34）', assignee: 'お客様の担当者（竹内様 など）。工程図の「お客様担当者」に入る（作業をするエンジニアの担当者ではない。入力シートには写さない）',
   request: 'その視点の初回は「新規」、2回目以降は「修正」', cut: 'EX1・IN2 など（『視点マスタ』のキーワード＋番号）', pattern: 'パターン違いがあれば A・B…',
@@ -3465,6 +3472,8 @@ function regState_(r) {
   // エンジニア入力シートの「資料待ち」にチェック（お客様の資料・回答待ち）。チェックの間は催促しない
   if (r.waitingDocs) return REG_STATE.WAITING;
   if (toHours_(r.white) + toHours_(r.color) + toHours_(r.other) > 0) return REG_STATE.DONE;
+  // 制作時間を 0 と書いた（作業なし）：催促しない・入力シートでは行を隠す
+  if (r.zeroHours) return REG_STATE.ZERO;
   return r.translated ? REG_STATE.ESTIMATE : REG_STATE.TRANSLATE;
 }
 /** 『登録一覧』の値（1行目＝見出し）→「通知オフ」にチェックした案件（社内案件名を正規化したもの）の集まり（純ロジック） */
@@ -3659,6 +3668,7 @@ function syncRegistrations_(now) {
   const due = [];
   let copied = 0, updated = 0, estimate = 0, missing = 0;
   const delReqs = []; // 新しく届いた削除依頼（Discord で知らせる）
+  const rowVis = []; // 入力シートで隠す・表示に戻す行（制作時間 0）
   const muted = notifyOffSetOf_(data, rc); // 「通知オフ」にチェックした案件（Discord で知らせない）
   const isMuted = (row) => muted.has(normCode_(joinCode_(row.code, row.number)));
   const setReg = (r, k, value) => { if (!rc[k]) return; if (!sameCell_(data[r][rc[k] - 1], value)) { regUpdates.push({ row: r + 1, col: rc[k], value }); data[r][rc[k] - 1] = value; } };
@@ -3722,6 +3732,12 @@ function syncRegistrations_(now) {
       setReg(r, 'transNote', trimStr_(sv('transNote')));
       setReg(r, 'estimator', trimStr_(sv('estimator')));
       row.waitingDocs = !!(ssc.waiting && isChecked_(sv('waiting')));
+      // 制作時間 0 の行は、エンジニア入力シートで隠す（時間が入ったら表示に戻す）。『制作済み』はそのまま
+      row.zeroHours = staffZeroHours_(srow, ssc);
+      if (hit && hit.sheet.getName() !== STAFF_TAB_DONE && hit.sheet.hideRows) {
+        if (row.zeroHours) rowVis.push({ sheet: hit.sheet, row: hit.row, hide: true });
+        else if (toHours_(row.white) + toHours_(row.color) + toHours_(row.other) > 0) rowVis.push({ sheet: hit.sheet, row: hit.row, hide: false });
+      }
       // 入力シートの自動列（編集の瞬間に入らなかったときの保険：ここで入れる）
       putStaff('transAt', st.transAt || '');
       putStaff('estimatedAt', st.estimatedAt || '');
@@ -3776,6 +3792,12 @@ function syncRegistrations_(now) {
 
   // 入力シートへの書き込み（追加は最後に中身がある行の下へ）
   staffUpdates.forEach(u => u.sheet.getRange(u.row, u.col).setValue(u.value));
+  // 制作時間 0 の行を隠す（隠れていない行だけ）・時間が入った行は表示に戻す（行を差し込む前に行う）
+  rowVis.forEach(x => {
+    const hidden = x.sheet.isRowHiddenByUser ? x.sheet.isRowHiddenByUser(x.row) : false;
+    if (x.hide && !hidden) x.sheet.hideRows(x.row);
+    else if (!x.hide && hidden) x.sheet.showRows(x.row);
+  });
   if (appends.length) {
     // 写す列と登録Noだけを書く（行ごと書くと、合計などの式を消してしまう）。続いた列はまとめて書く
     const cols = REG_COPY.map(k => sc[k]).concat([sc.regNo, sc.delivery], regHoursCols_(sc).map(x => x.c)).filter(Boolean).sort((a, b) => a - b);
@@ -3850,41 +3872,58 @@ function syncRegistrations_(now) {
 function adoptStaffRows_(ss, reg, rc, cfg, now) {
   if (cfg.tabName !== STAFF_TAB_DEFAULT) return 0;
   const file = SpreadsheetApp.openById(cfg.fileId);
-  const staff = file.getSheetByName(STAFF_TAB_DEFAULT);
-  if (!staff) return 0;
-  const hr = findStaffHeaderRow_(staff);
-  if (hr < 0 || staff.getLastRow() <= hr) return 0;
-  const sc = mapStaffColumns_(staff.getRange(hr, 1, 1, staff.getLastColumn()).getValues()[0]);
-  if (!sc.regNo || !sc.number) return 0;
-  const w = Math.max.apply(null, Object.keys(sc).map(k => sc[k]));
-  const vals = staff.getRange(hr + 1, 1, staff.getLastRow() - hr, w).getValues();
-  const at = (v, k) => (sc[k] ? v[sc[k] - 1] : '');
+  // 『入力前』と『制作中』の 登録No の無い行（エンジニアが自分で足した行・登録の仕組みより前の行）。『制作済み』は取り込まない（2026-11-10）
   const picks = [];
-  vals.forEach((v, i) => {
-    if (trimStr_(at(v, 'regNo'))) return;
-    if (!trimStr_(at(v, 'code')) || !trimStr_(at(v, 'number')) || !trimStr_(at(v, 'cut')) || !trimStr_(at(v, 'request'))) return;
-    const hours = staffWhite_(v, sc) + toHours_(at(v, 'color')) + toHours_(at(v, 'other'));
-    if (!isChecked_(at(v, 'translated')) && hours <= 0) return;
-    picks.push({ row: hr + 1 + i, v });
+  [STAFF_TAB_DEFAULT, STAFF_TAB_DOING].forEach(name => {
+    const staff = file.getSheetByName(name);
+    if (!staff) return;
+    const hr = findStaffHeaderRow_(staff);
+    if (hr < 0 || staff.getLastRow() <= hr) return;
+    const sc = mapStaffColumns_(staff.getRange(hr, 1, 1, staff.getLastColumn()).getValues()[0]);
+    if (!sc.regNo || !sc.number) return;
+    const w = Math.max.apply(null, Object.keys(sc).map(k => sc[k]));
+    const vals = staff.getRange(hr + 1, 1, staff.getLastRow() - hr, w).getValues();
+    const at = (v, k) => (sc[k] ? v[sc[k] - 1] : '');
+    vals.forEach((v, i) => {
+      if (trimStr_(at(v, 'regNo'))) return;
+      if (!trimStr_(at(v, 'code')) || !trimStr_(at(v, 'number')) || !trimStr_(at(v, 'cut'))) return;
+      // 『入力前』の書きかけ（翻訳済みも時間も無い）は待つ（取り込むと『登録一覧』の内容が入力シートへ写るため）。
+      // 新規or修正が空の行も取り込み、『登録一覧』で「記入中」として管理者が直す（直すまで入力シートは書き換えない）
+      if (name === STAFF_TAB_DEFAULT) {
+        const hours = staffWhite_(v, sc) + toHours_(at(v, 'color')) + toHours_(at(v, 'other'));
+        if (!isChecked_(at(v, 'translated')) && hours <= 0) return;
+      }
+      picks.push({ staff, sc, row: hr + 1 + i, v, at: (k) => at(v, k) });
+    });
   });
   if (!picks.length) return 0;
   const regRows = formRegRows_(ss);
   const next = nextRegNo_(regRows.map(r => { const a = []; a[rc.no - 1] = r.no; return a; }), rc, trashNos_(ss));
   const views = readMasters_(ss).views;
   const rows = picks.map(p => {
-    const v = p.v;
-    const known = formKnownProject_(regRows, [], at(v, 'code'), at(v, 'number'));
+    const at = p.at;
+    const known = formKnownProject_(regRows, [], at('code'), at('number'));
     // 納期は同じ案件のいちばん新しい登録から
-    const key = normCode_(joinCode_(at(v, 'code'), at(v, 'number')));
+    const key = normCode_(joinCode_(at('code'), at('number')));
     const same = regRows.filter(r => normCode_(joinCode_(r.code, r.number)) === key && trimStr_(r.deadline) !== '').sort((a, b) => (regGroupKey_(a) < regGroupKey_(b) ? 1 : -1));
-    const cut = formSplitCut_(trimStr_(at(v, 'cut')));
-    const pattern = normPattern_(at(v, 'pattern'));
-    return {
-      code: trimStr_(at(v, 'code')).toUpperCase(), number: at(v, 'number'), name: trimStr_(at(v, 'name')) || known.name, assignee: known.assignee,
-      request: trimStr_(at(v, 'request')), cut: trimStr_(at(v, 'cut')).toUpperCase(), pattern, link: trimStr_(at(v, 'link')),
-      deadline: same.length ? same[0].deadline : '', extName: formAutoExt_(cut.code, cut.room, pattern, views),
-      memo: 'エンジニア入力シートで追加',
-    };
+    const pattern = normPattern_(at('pattern'));
+    let extName = '';
+    try { const cut = formSplitCut_(trimStr_(at('cut'))); extName = formAutoExt_(cut.code, cut.room, pattern, views); } catch (e) { extName = ''; }
+    const hours = {};
+    // 時間も『登録一覧』に入れる（管理者が見て直せるように。White は躯体＋家具の合計）
+    const wv = staffWhite_(p.v, p.sc);
+    if (wv > 0) hours.white = wv;
+    if (toHours_(at('color')) > 0) hours.color = toHours_(at('color'));
+    if (toHours_(at('other')) > 0) hours.other = toHours_(at('other'));
+    // 『制作中』の行は工程図に登録済み。『登録一覧』から写し戻したときに入力シートの値が変わらないよう（変わると「更新あり」になる）、書いてあるとおりに取り込む
+    const asIs = p.staff.getName() === STAFF_TAB_DOING;
+    return Object.assign({
+      code: asIs ? trimStr_(at('code')) : trimStr_(at('code')).toUpperCase(), number: at('number'),
+      name: asIs ? trimStr_(at('name')) : (trimStr_(at('name')) || known.name), assignee: known.assignee,
+      request: trimStr_(at('request')), cut: asIs ? trimStr_(at('cut')) : trimStr_(at('cut')).toUpperCase(), pattern: asIs ? trimStr_(at('pattern')) : pattern, link: trimStr_(at('link')),
+      deadline: same.length ? same[0].deadline : '', extName,
+      memo: 'エンジニア入力シート（' + p.staff.getName() + '）で追加',
+    }, hours);
   });
   const placed = insertRegRows_(reg, rc, rows);
   placed.forEach((r, i) => {
@@ -3892,7 +3931,7 @@ function adoptStaffRows_(ss, reg, rc, cfg, now) {
     reg.getRange(r, rc.no).setValue(no);
     reg.getRange(r, rc.regDate).setValue(now);
     reg.getRange(r, rc.copiedAt).setValue(now);
-    staff.getRange(picks[i].row, sc.regNo).setValue(no);
+    picks[i].staff.getRange(picks[i].row, picks[i].sc.regNo).setValue(no);
   });
   return placed.length;
 }

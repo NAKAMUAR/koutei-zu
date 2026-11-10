@@ -62,7 +62,10 @@ class FakeSheet {
   getMaxRows() { return this.maxRows; }
   getMaxColumns() { return this.maxCols; }
   // 行を差し込む（下の行を n 行ずつ下へずらす。シートの最後に足すときは大きさが増えるだけ）
-  insertRowsAfter(after, n) { this.maxRows += n; if (this.rows.length > after) this.rows.splice(after, 0, ...Array.from({ length: n }, () => [])); return this; }
+  insertRowsAfter(after, n) { this.maxRows += n; if (this.rows.length > after) this.rows.splice(after, 0, ...Array.from({ length: n }, () => [])); if (this.hidden) this.hidden = new Set([...this.hidden].map(r => (r > after ? r + n : r))); return this; }
+  hideRows(r) { (this.hidden = this.hidden || new Set()).add(r); return this; }
+  showRows(r) { if (this.hidden) this.hidden.delete(r); return this; }
+  isRowHiddenByUser(r) { return !!(this.hidden && this.hidden.has(r)); }
   insertColumnsAfter(after, n) { this.maxCols += n; return this; }
   deleteColumns(c, n) { this.maxCols -= n; return this; }
   deleteRows(r, n) { this.maxRows -= n; this.rows.splice(r - 1, n); return this; }
@@ -334,7 +337,7 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
   };
   vm.createContext(ctx);
   const names = ['onAdminEdit', 'renderRegMessage_', 'onStaffEdit', 'syncRegistrationsNow', 'saveDiscordWebhook_', 'inNotifyHours_', 'isReminderDue_', 'calcDeadlineOf_', 'regState_', 'REG_STATE', 'quickSetup', 'createStaffInputTab', 'transferFromStaffSheet', 'autoRun', 'readSettings_', 'readStaffRows_', 'collectSourceRows_', 'findStaffHeaderRow_',
-    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'FORM_NO_COL', 'updateEntryForm', 'normRegNo_', 'formRegGroup_', 'formEnsureEditRow_', 'FORM_L', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_', 'deleteRegistrations', 'cancelDeleteRegistrations', 'writeScheduleToLink_', 'writeAssigneeTabs_', 'withBranchRoom_', 'FORM_BR', 'saveBranchViews', 'taskPackOf_', 'fsReadDay_', 'fsReadsToday_', 'AUTO_READ_BUDGET', 'deliveryYmd_', 'fillStaffDeliveryNames_', 'planRegDeletion_', 'deleteDialogHtml_', 'DELETE_DIALOG_SCRIPT', 'regHeaderMap_', 'fixClientContactAssignees'];
+    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'FORM_NO_COL', 'updateEntryForm', 'normRegNo_', 'formRegGroup_', 'formEnsureEditRow_', 'FORM_L', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_', 'deleteRegistrations', 'cancelDeleteRegistrations', 'writeScheduleToLink_', 'writeAssigneeTabs_', 'withBranchRoom_', 'FORM_BR', 'saveBranchViews', 'taskPackOf_', 'fsReadDay_', 'fsReadsToday_', 'AUTO_READ_BUDGET', 'deliveryYmd_', 'fillStaffDeliveryNames_', 'planRegDeletion_', 'deleteDialogHtml_', 'DELETE_DIALOG_SCRIPT', 'regHeaderMap_', 'fixClientContactAssignees', 'staffZeroHours_'];
   env.g = vm.runInContext(src + '\n;({' + names.join(',') + '})', ctx);
   // テストは時刻に関係なく Discord を送る（知らせる時間帯を 0-24 に）。時間帯のテストは env.setHours で変える
   env.setHours = (h) => { const st = env.admin.getSheetByName('設定'); const r = st && st.rows.findIndex(x => x[0] === '催促する時間帯（ベトナム時間）'); if (r >= 0) st.set(r + 1, 2, h); };
@@ -1779,7 +1782,7 @@ test('エンジニアが入力シート『入力前』で足した行（登録No
   assert.equal(tab.rows[newRow - 1][C('登録No') - 1], 'R0004', '入力シートの行に登録No');
   assert.ok(rowB > 0);
   // 『登録一覧』では INE4-B のすぐ下（RIC.34 の前）に入る。担当者は同じ案件の前の登録から
-  same([R(4, '登録No'), R(4, '視点'), R(4, 'パターン'), R(4, 'お客様担当者'), R(4, '管理者メモ'), R(5, '登録No')], ['R0004', 'IN4', 'C', '井戸澤様', 'エンジニア入力シートで追加', 'R0003']);
+  same([R(4, '登録No'), R(4, '視点'), R(4, 'パターン'), R(4, 'お客様担当者'), R(4, '管理者メモ'), R(5, '登録No')], ['R0004', 'IN4', 'C', '井戸澤様', 'エンジニア入力シート（入力前）で追加', 'R0003']);
   assert.equal(R(4, 'Color'), 0.5);
   assert.equal(R(4, '社外視点名'), '内観目線視点④_パターンC', '社外視点名も入る');
   assert.equal(String(R(4, '納期')), String(new Date(2030, 0, 20)), '納期は同じ案件の前の登録から');
@@ -1789,6 +1792,23 @@ test('エンジニアが入力シート『入力前』で足した行（登録No
   env.g.syncRegistrationsNow();
   assert.equal(reg.rows.filter(v => v[rh.indexOf('パターン')] === 'C').length, 1);
   assert.equal(tab.rows.filter(v => v[C('パターン') - 1] === 'C').length, 1);
+  // 『制作中』の登録No の無い行（新規or修正が空でも）も取り込む → 『登録一覧』では「記入中」。管理者が直すと入力シートも直る
+  const doing = eng.getSheetByName('制作中');
+  const dh = doing.header(2).map(h => h.split('\n')[0]);
+  const D = (name) => dh.indexOf(name) + 1;
+  const dRow = Math.max(doing.getLastRow(), 2) + 1;
+  [['会社コード', 'TANAKA'], ['案件番号', 365], ['視点', 'EXE1'], ['White躯体', 4], ['Color', 2.5]].forEach(([h, v]) => doing.set(dRow, D(h), v));
+  const msg2 = env.g.syncRegistrationsNow();
+  assert.ok(msg2.includes('入力シートで足した行を取り込み 1件'), msg2);
+  const dNo = doing.rows[dRow - 1][D('登録No') - 1];
+  assert.equal(dNo, 'R0005', '『制作中』の行にも登録No');
+  const rr = reg.rows.findIndex(v => v[rh.indexOf('登録No')] === 'R0005') + 1;
+  same([R(rr, '会社コード'), R(rr, '視点'), R(rr, '新規or修正'), R(rr, 'White'), R(rr, '状態'), R(rr, '管理者メモ')], ['TANAKA', 'EXE1', '', 4, '記入中', 'エンジニア入力シート（制作中）で追加']);
+  setR(rr, '新規or修正', NEWR);
+  setR(rr, '社外案件名', '田中邸');
+  env.g.syncRegistrationsNow();
+  same([doing.rows[dRow - 1][D('新規or修正') - 1], doing.rows[dRow - 1][D('社外案件名') - 1]], [NEWR, '田中邸'], '管理者が直した内容が『制作中』の行にも入る');
+  assert.equal(reg.rows.filter(v => v[rh.indexOf('視点')] === 'EXE1').length, 1, '二重にしない');
 });
 
 test('Discord は知らせる時間帯（既定 8-18）の中だけ。外の通知は貯めて、時間帯に入ったら自動実行でまとめて送る', () => {
@@ -2226,6 +2246,37 @@ test('お客様担当者：『登録一覧』の「担当者」はお客様の�
   same([snap.items['RIC34::EX1::1'].a, snap.plan.rows[0].a], ['未割当・Mr.Dung', '未割当']);
   same([!!admin.getSheetByName('予定_竹内 様'), !!admin.getSheetByName('予定_Mr.Dung')], [false, true], 'お客様の名前の予定表タブだけ消す');
   assert.equal(env.discord.length, 0, 'Discord には送らない');
+});
+
+test('制作時間を 0 と書いた行：『登録一覧』は「制作なし（0時間）」で催促しない・エンジニア入力シートでは行を隠す（時間が入ったら表示に戻す）', () => {
+  const admin = adminSheet();
+  const eng = engineerFile();
+  const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
+  env.g.quickSetup();
+  env.g.saveDiscordWebhook_('https://discord.com/api/webhooks/123/abc-DEF');
+  const reg = admin.getSheetByName('登録一覧');
+  const rh = reg.header();
+  const R = (r, name) => reg.rows[r - 1][rh.indexOf(name)];
+  const setR = (r, name, v) => reg.set(r, rh.indexOf(name) + 1, v);
+  ['会社コード', '案件番号', '社外案件名', '新規or修正', '視点', 'サーバーリンク'].forEach((h, j) => setR(2, h, ['ESAKI', 46, '一宮', FIXR, 'EXE1', LINK][j]));
+  setR(2, '登録日時', new Date(2020, 0, 1));
+  env.g.syncRegistrationsNow();
+  const tab = inTab(eng);
+  const sh = tab.header(2).map(h => h.split('\n')[0]);
+  const C = (name) => sh.indexOf(name) + 1;
+  const row = tab.rows.findIndex(v => v[C('登録No') - 1] === 'R0001') + 1;
+  assert.equal(env.g.staffZeroHours_(tab.rows[row - 1], { color: C('Color'), whiteBody: C('White躯体') }), false, '空欄だけは 0 ではない');
+  tab.set(row, C('翻訳済み'), true);
+  tab.set(row, C('Color'), 0);
+  const sent = env.discord.length;
+  env.g.syncRegistrationsNow();
+  assert.equal(R(2, '状態'), '制作なし（0時間）');
+  assert.equal(tab.isRowHiddenByUser(row), true, '入力シートでは行を隠す');
+  assert.equal(env.discord.length, sent, '催促しない');
+  tab.set(row, C('Color'), 1);
+  env.g.syncRegistrationsNow();
+  assert.equal(R(2, '状態'), '時間入力済み');
+  assert.equal(tab.isRowHiddenByUser(row), false, '時間が入ったら表示に戻す');
 });
 
 console.log(`\n${passed} tests passed`);
