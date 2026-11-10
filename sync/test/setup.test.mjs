@@ -333,7 +333,7 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
   };
   vm.createContext(ctx);
   const names = ['onAdminEdit', 'renderRegMessage_', 'onStaffEdit', 'syncRegistrationsNow', 'saveDiscordWebhook_', 'inNotifyHours_', 'isReminderDue_', 'calcDeadlineOf_', 'regState_', 'REG_STATE', 'quickSetup', 'createStaffInputTab', 'transferFromStaffSheet', 'autoRun', 'readSettings_', 'readStaffRows_', 'collectSourceRows_', 'findStaffHeaderRow_',
-    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'FORM_NO_COL', 'updateEntryForm', 'normRegNo_', 'formRegGroup_', 'formEnsureEditRow_', 'FORM_L', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_', 'deleteRegistrations', 'cancelDeleteRegistrations', 'writeScheduleToLink_', 'writeAssigneeTabs_', 'withBranchRoom_', 'FORM_BR', 'taskPackOf_', 'fsReadDay_', 'fsReadsToday_', 'AUTO_READ_BUDGET', 'deliveryYmd_', 'fillStaffDeliveryNames_', 'planRegDeletion_', 'deleteDialogHtml_', 'DELETE_DIALOG_SCRIPT'];
+    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'FORM_NO_COL', 'updateEntryForm', 'normRegNo_', 'formRegGroup_', 'formEnsureEditRow_', 'FORM_L', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_', 'deleteRegistrations', 'cancelDeleteRegistrations', 'writeScheduleToLink_', 'writeAssigneeTabs_', 'withBranchRoom_', 'FORM_BR', 'saveBranchViews', 'taskPackOf_', 'fsReadDay_', 'fsReadsToday_', 'AUTO_READ_BUDGET', 'deliveryYmd_', 'fillStaffDeliveryNames_', 'planRegDeletion_', 'deleteDialogHtml_', 'DELETE_DIALOG_SCRIPT'];
   env.g = vm.runInContext(src + '\n;({' + names.join(',') + '})', ctx);
   // テストは時刻に関係なく Discord を送る（知らせる時間帯を 0-24 に）。時間帯のテストは env.setHours で変える
   env.setHours = (h) => { const st = env.admin.getSheetByName('設定'); const r = st && st.rows.findIndex(x => x[0] === '催促する時間帯（ベトナム時間）'); if (r >= 0) st.set(r + 1, 2, h); };
@@ -2073,25 +2073,57 @@ test('枝番（部屋・建物）：『案件入力』で枝番を書くと②�
   same([R(2, '会社コード'), R(2, '案件番号'), R(2, '枝番'), R(2, '視点'), R(2, '社外視点名')], ['OFFICE', 55, '2F', 'IN1_2F', '2F内観目線視点①'], '案件はそのまま（別の案件にしない）');
   assert.equal(cell(m.fields.branch, 2), '', '登録したら枝番も空に');
   // 別の枝番（3F）でも 視点① から。A棟（日本語）も使える
-  // 枝番が2つ以上：右の「① で視点を選ぶ枝番」で切り替えて、枝番ごとに①で視点を選ぶ
+  // 枝番が2つ以上：書いたとたんに「枝番ごとの視点」の画面が開き、全部の枝番の視点を1つの画面で選ぶ
+  env.dialogs.length = 0;
   edit(m.fields.branch, 2, '3F,A棟');
   const SEL = env.g.FORM_BR.sel1;
-  assert.equal(cell(m.fields.branch, env.g.FORM_BR.label1), '① で視点を選ぶ枝番 →', '枝番の右に切り替えの欄');
-  assert.equal(cell(m.fields.branch, SEL), '3F', '最初は1つ目の枝番');
+  assert.equal(cell(m.fields.branch, env.g.FORM_BR.label1), '枝番ごとの視点を画面で選ぶ →', '枝番の右に画面を開くチェック');
+  assert.equal(env.dialogs.length, 1, '枝番を2つ以上書くと画面が開く');
+  const dh = String(env.dialogs[0].html || env.dialogs[0]);
+  assert.ok(dh.includes('"3F"') && dh.includes('"A棟"') && dh.includes('内観目線'), '画面に全部の枝番と区分');
+  new vm.Script(dh.split('<script>')[1].split('</script>')[0]);
+  assert.ok(!dh.split('<script>')[1].includes('\\'), '画面のスクリプトにバックスラッシュが無い');
+  // 画面の動き（偽の DOM）：A棟の 内観目線1・2 を押して「3F と同じ」…「決定」で saveBranchViews に枝番ごとの視点が届く
+  {
+    const made = [];
+    const node = (tag) => { const n = { tag, children: [], className: '', textContent: '', handlers: {}, disabled: false, type: '',
+      appendChild(c) { this.children.push(c); return c; }, addEventListener(ev, fn) { this.handlers[ev] = fn; },
+      set innerHTML(v) { this.children = []; } }; made.push(n); return n; };
+    const els = { list: node('div'), msg: node('div'), go: node('button'), cancel: node('button') };
+    let sent = null;
+    const run = { withSuccessHandler() { return run; }, withFailureHandler() { return run; }, saveBranchViews(o) { sent = o; } };
+    vm.runInContext(dh.split('<script>')[1].split('</script>')[0], vm.createContext({ document: { getElementById: (id) => els[id], createElement: node }, google: { script: { run, host: { close() {} } } }, String, JSON }));
+    const buttons = () => { const out = []; const walk = (n) => { if (n.tag === 'button') out.push(n); n.children.forEach(walk); }; walk(els.list); return out; };
+    const blocks = () => els.list.children;
+    const numIn = (bi, label, i) => { const row = blocks()[bi].children.find(c => c.children && c.children[0] && c.children[0].textContent === label); return row.children[i]; };
+    numIn(1, '内観目線', 1).handlers.click();
+    numIn(1, '内観目線', 2).handlers.click();
+    numIn(0, '内観目線', 1).handlers.click();
+    els.go.handlers.click();
+    same(JSON.parse(JSON.stringify(sent)), { '3F': ['IN1'], 'A棟': ['IN1', 'IN2'] });
+    assert.ok(buttons().some(b => b.textContent === '3F と同じにする'), '2つ目からは「前の枝番と同じにする」');
+  }
   ['code', 'number', 'name', 'link'].forEach((k, j) => f.set(m.fields[k], 2, ['OFFICE', 55, 'オフィス', LINK][j]));
-  edit(inn, 2, true);
-  same(brief(), ['IN1_3F:3F内観目線視点①'], '①のチェックは選んでいる枝番（3F）だけに入る');
-  edit(m.fields.branch, SEL, 'A棟');
-  assert.equal(cell(inn, 2), false, 'A棟に切り替えると①はA棟の視点（まだ無い）');
-  edit(inn, 2, true); edit(inn, 3, true);
+  // 画面で「決定」：3F は 視点①、A棟 は 視点①②
+  let sv = env.g.saveBranchViews({ '3F': ['IN1'], 'A棟': ['IN1', 'IN2'] });
+  assert.equal(sv.ok, true);
   same(brief(), ['IN1_3F:3F内観目線視点①', 'IN1_A棟:A棟内観目線視点①', 'IN2_A棟:A棟内観目線視点②']);
-  edit(m.fields.branch, SEL, '3F');
-  same([cell(inn, 2), cell(inn, 3)], [true, false], '3F に戻すと 3F の視点にチェック');
-  edit(inn, 2, false);
-  same(brief(), ['IN1_A棟:A棟内観目線視点①', 'IN2_A棟:A棟内観目線視点②'], '外すとその枝番の行だけ消える');
-  edit(inn, 2, true);
+  same([cell(inn, 2), cell(inn, 3)], [true, true], '①はどれかの枝番にある視点にチェック');
+  assert.ok(String(cell(m.result, 2)).includes('3F 1件・A棟 2件'), cell(m.result, 2));
+  // ①で新しくチェックした視点は全部の枝番に、外した視点は全部の枝番から
+  edit(inn, 4, true);
+  same(brief(), ['IN1_3F:3F内観目線視点①', 'IN3_3F:3F内観目線視点③', 'IN1_A棟:A棟内観目線視点①', 'IN2_A棟:A棟内観目線視点②', 'IN3_A棟:A棟内観目線視点③']);
+  edit(inn, 4, false);
+  same(brief(), ['IN1_3F:3F内観目線視点①', 'IN1_A棟:A棟内観目線視点①', 'IN2_A棟:A棟内観目線視点②'], '画面で選んだ枝番ごとの違いは残る');
+  // チェックでもう一度画面を開ける。いまの選択が入っている
+  env.dialogs.length = 0;
+  edit(m.fields.branch, SEL, true);
+  assert.equal(env.dialogs.length, 1);
+  assert.ok(String(env.dialogs[0].html || env.dialogs[0]).includes('"A棟":["IN1","IN2"]'), 'いまの選択が画面に入る');
+  assert.equal(cell(m.fields.branch, SEL), false, 'チェックは外れる');
   // 枝番を一覧から消すと、その枝番の行も消える
   edit(m.fields.branch, 2, 'A棟,3F,B棟');
+  sv = env.g.saveBranchViews({ 'A棟': ['IN1', 'IN2'], '3F': ['IN1'], 'B棟': [] });
   same(brief(), ['IN1_A棟:A棟内観目線視点①', 'IN2_A棟:A棟内観目線視点②', 'IN1_3F:3F内観目線視点①'], '枝番の順に並ぶ');
   edit(m.fields.branch, 2, '3F,A棟');
   edit(m.submit, 2, true);
@@ -2101,7 +2133,7 @@ test('枝番（部屋・建物）：『案件入力』で枝番を書くと②�
   same(cuts.slice().sort(), ['IN1_2F', 'IN1_3F', 'IN1_A棟', 'IN2_2F', 'IN2_A棟']);
   const brOf = (cut) => reg.rows.find(r => r[rh.indexOf('視点')] === cut)[rh.indexOf('枝番')];
   same([brOf('IN1_3F'), brOf('IN2_A棟')], ['3F', 'A棟'], '『登録一覧』の枝番は行ごとにその枝番');
-  assert.equal(cell(m.fields.branch, SEL), '', '登録したら切り替えの欄も空に');
+  assert.equal(cell(m.fields.branch, SEL), false, '登録したら画面を開くチェックも外れる');
   // 前回の視点を呼び出す：枝番を書くとその枝番の視点だけ
   f.set(m.fields.code, 2, 'OFFICE'); f.set(m.fields.number, 2, 55); f.set(m.fields.branch, 2, '2F');
   edit(m.prev, 2, true);

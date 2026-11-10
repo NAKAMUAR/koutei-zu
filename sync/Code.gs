@@ -2407,13 +2407,13 @@ const FORM_NO_COL_OLD = 23; // 前の版の登録No の列（W）
 const FORM_EDIT_NOTE = '← 登録No（R0002 など。数字だけでも可）を入れると、その登録（同じ日に登録した同じ案件の視点）を呼び出します。直して「登録」にチェックすると上書きし、エンジニア入力シートも直ります。空にすると新規の登録に戻ります';
 const FORM_LIST_ROWS = 40;
 // ② の列：A 視点（日本語）、B:D 部屋名、E:F パターン、G ＋、H 外す、I:U 社外視点名、V 視点コード
-// 枝番の行：B:H＝枝番（「2F,3F」）、I:L＝見出し、M:U＝①で視点を選ぶ枝番（プルダウン）。2026-11-10
+// 枝番の行：B:H＝枝番（「2F,3F」）、I:L＝見出し、M＝チェックで「枝番ごとの視点」の画面を開く。2026-11-10
 const FORM_BR = { list1: 2, list2: 8, label1: 9, label2: 12, sel1: 13 };
-const FORM_BR_LABEL = '① で視点を選ぶ枝番 →';
+const FORM_BR_LABEL = '枝番ごとの視点を画面で選ぶ →';
 const FORM_LC = { label: 1, room: 2, pattern: 5, plus: 7, del: 8, ext: 9, white: 23, color: 24 }; // W・X：White・Color の時間（管理者が決めたときだけ）
 const FORM_FIELD_NOTES = {
   code: '必須。REN・RIC など', number: '必須。数字だけ（例 50）',
-  branch: '任意。部屋・建物ごとに分けるとき（2F・3F・A棟 など）。2つ以上は「2F,3F」。右の「① で視点を選ぶ枝番」で枝番を切り替え、枝番ごとに①で視点を選ぶ（2F内観目線視点①・3F内観目線視点① のように枝番ごとに①から数える）', assignee: '工程図の担当者（入力シートには写さない）',
+  branch: '任意。部屋・建物ごとに分けるとき（2F・3F・A棟 など）。2つ以上は「2F,3F」と書くと、枝番ごとの視点を1つの画面で選べる（2F内観目線視点①・3F内観目線視点① のように枝番ごとに①から数える）', assignee: '工程図の担当者（入力シートには写さない）',
   request: '必須。この案件の視点すべてに同じものが入る', deadline: '入力シートには写さない（工程図の納期に入る）',
   memo: '管理者だけのメモ（入力シートには写さない）',
 };
@@ -2507,12 +2507,6 @@ function formApplyBranch_(rows, oldBranch, newBranch, views) {
   const out = (rows || []).map(r => (r.room === '' || olds.indexOf(formRoom_(r.room)) >= 0) ? Object.assign({}, r, { room: nb, no: r.no }) : r);
   return formNormalizeRows_(out, views);
 }
-/** 枝番の一覧と、①で視点を選ぶ枝番（一覧に無ければ最初の枝番） */
-function formBranchState_(list, sel) {
-  const rooms = formBranchRooms_(list);
-  const s = formRoom_(sel);
-  return { rooms, cur: rooms.indexOf(s) >= 0 ? s : (rooms[0] || '') };
-}
 /**
  * 枝番の一覧を書き換えたとき（純ロジック）。
  * 1つ → 1つ（2F → 3F）なら、前の枝番の行と部屋名が空の行を新しい枝番にする（名前の付け替え）。
@@ -2536,22 +2530,43 @@ function formSortByBranch_(rows, rooms) {
   return rows.map((r, i) => ({ r, i })).sort((a, b) => at(a.r) - at(b.r) || a.i - b.i).map(x => x.r);
 }
 /**
- * ① のチェック（いま選んでいる枝番 cur の分）から ② を作り直す（純ロジック）。ほかの枝番の行はそのまま
+ * 枝番が2つ以上のときの ① のチェック（純ロジック）：前のチェック（どれかの枝番にある視点）と比べて、
+ * 新しくチェックした視点はすべての枝番に足し、外した視点はすべての枝番から消す。
+ * 枝番ごとに違う視点にするのは「枝番ごとの視点」の画面で
  */
-function formListMergeBranch_(codes, current, views, rooms, cur) {
-  const others = (current || []).filter(r => formRoom_(r.room) !== cur);
-  const mine = (current || []).filter(r => formRoom_(r.room) === cur);
-  const merged = [];
-  codes.forEach(c => {
-    const hit = mine.filter(r => trimStr_(r.code).toUpperCase() === c);
-    if (hit.length) hit.forEach(r => merged.push(r));
-    else merged.push({ code: c, room: cur, pattern: '', ext: '' });
-  });
-  return formSortByBranch_(formNormalizeRows_(others.concat(merged), views), rooms);
+function formListMergeAll_(codes, current, views, rooms) {
+  const before = new Set(formGridCodes_(current, rooms));
+  const now = new Set(codes);
+  const added = codes.filter(c => !before.has(c));
+  const out = (current || []).filter(r => rooms.indexOf(formRoom_(r.room)) < 0 || now.has(trimStr_(r.code).toUpperCase()));
+  rooms.forEach(room => added.forEach(c => out.push({ code: c, room, pattern: '', ext: '' })));
+  return formSortByBranch_(formNormalizeRows_(out, views), rooms);
 }
-/** ① に付けるチェック：枝番を選んでいれば、その枝番の視点だけ */
-function formGridCodes_(rows, rooms, cur) {
-  return (rows || []).filter(r => !rooms || !rooms.length || formRoom_(r.room) === cur).map(r => r.code);
+/** ① に付けるチェック：枝番があれば、どれかの枝番にある視点 */
+function formGridCodes_(rows, rooms) {
+  const out = [];
+  (rows || []).forEach(r => {
+    if (rooms && rooms.length && rooms.indexOf(formRoom_(r.room)) < 0) return;
+    if (out.indexOf(r.code) < 0) out.push(r.code);
+  });
+  return out;
+}
+/**
+ * 「枝番ごとの視点」の画面で選んだ内容 → ② の行（純ロジック）。sel = { 枝番: ['IN1', 'IN2'], … }
+ * 残した視点の行（パターン・社外視点名・登録No）はそのまま、外した視点の行は消し、足した視点は1行足す。枝番に無い部屋名の行はそのまま
+ */
+function formRowsFromBranchSel_(rows, sel, rooms, views) {
+  const out = (rows || []).filter(r => rooms.indexOf(formRoom_(r.room)) < 0);
+  rooms.forEach(room => {
+    const want = ((sel && sel[room]) || []).map(c => trimStr_(c).toUpperCase());
+    const mine = (rows || []).filter(r => formRoom_(r.room) === room);
+    want.forEach(c => {
+      const hit = mine.filter(r => trimStr_(r.code).toUpperCase() === c);
+      if (hit.length) hit.forEach(r => out.push(r));
+      else out.push({ code: c, room, pattern: '', ext: '' });
+    });
+  });
+  return formSortByBranch_(formNormalizeRows_(out, views), rooms);
 }
 /** 「＋」：その視点（同じ部屋）にパターンを1つ足す（純ロジック）。パターンなしなら A・B にする */
 function formAddPattern_(rows, i) {
@@ -2750,9 +2765,9 @@ function formEnsureBranchRow_(sheet) {
     sheet.getRange(r, 2).setValue(keep);
     sheet.getRange(r, FORM_BR.label1, 1, FORM_BR.label2 - FORM_BR.label1 + 1).merge();
     sheet.getRange(r, FORM_BR.label1).setValue(FORM_BR_LABEL).setFontColor('#666666').setHorizontalAlignment('right')
-      .setNote('枝番が2つ以上（2F,3F など）のとき、ここで枝番を切り替えると、①のチェックがその枝番の視点になる。チェックした視点はその枝番の視点として②に入る');
-    sheet.getRange(r, FORM_BR.sel1, 1, FORM_COLS - FORM_BR.sel1 + 1).merge();
-    sheet.getRange(r, FORM_BR.sel1).setBackground('#fff2cc').setFontWeight('bold');
+      .setNote('枝番が2つ以上（2F,3F など）のとき、全部の枝番の視点を1つの画面で選べる（枝番を書いたときにも自動で開く）。①でチェックした視点は全部の枝番に入る');
+    sheet.getRange(r, FORM_BR.sel1).clearDataValidations().setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build()).setValue(false).setBackground(null);
+    sheet.getRange(r, FORM_BR.sel1 + 1, 1, FORM_COLS - FORM_BR.sel1).merge();
   }
   sheet.getRange(r, 2).clearDataValidations().setNumberFormat('@');
 }
@@ -2832,23 +2847,63 @@ function formSetGrid_(sheet, m, codes) {
     sheet.getRange(g.row, 2, 1, n).setValues([vals]);
   });
 }
-/** 枝番の一覧から、①で選ぶ枝番のプルダウンをそろえ、①のチェックをその枝番の視点にする */
-function formSyncBranch_(sheet, m, rows, list, sel) {
-  const st = formBranchState_(list, sel);
-  if (m.branchSel) {
-    const c = sheet.getRange(m.fields.branch, FORM_BR.sel1);
-    if (st.rooms.length) c.setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(st.rooms, true).setAllowInvalid(false).build()).setValue(st.cur);
-    else c.clearDataValidations().setValue('');
-  }
-  formSetGrid_(sheet, m, formGridCodes_(rows, st.rooms, st.cur));
-  return st;
+/** ① のチェックを ② にそろえる（枝番があれば、どれかの枝番にある視点） */
+function formSyncBranch_(sheet, m, rows, list) {
+  const rooms = formBranchRooms_(list);
+  formSetGrid_(sheet, m, formGridCodes_(rows, rooms));
+  return { rooms };
+}
+/** 「枝番ごとの視点」の画面を開く（枝番が2つ以上のとき） */
+function formOpenBranchDialog_(sheet, m) {
+  const d = formRead_(sheet, m);
+  const rooms = formBranchRooms_(d.fields.branch);
+  if (m.branchSel) sheet.getRange(m.fields.branch, FORM_BR.sel1).setValue(false);
+  if (rooms.length < 1) { formResult_(sheet, m, '先に枝番（2F,3F など）を書いてください'); return; }
+  const labels = sheet.getRange(1, 1, m.sum, 1).getValues().map(r => trimStr_(r[0]));
+  const cats = m.grid.map(g => ({ k: g.keyword, label: labels[g.row - 1] || g.keyword, n: Math.min(VIEW_OPTION_COUNT[g.keyword] || VIEW_OPTION_COUNT_DEFAULT, FORM_COLS - 1) }));
+  const sel = {};
+  rooms.forEach(room => { sel[room] = []; d.rows.forEach(r => { if (formRoom_(r.room) === room && sel[room].indexOf(r.code) < 0) sel[room].push(r.code); }); });
+  const html = HtmlService.createHtmlOutput(formBranchDialogHtml_({ rooms, cats, sel })).setWidth(760).setHeight(640);
+  SpreadsheetApp.getUi().showModalDialog(html, '枝番ごとの視点（' + rooms.join('・') + '）');
+  formResult_(sheet, m, '画面で枝番ごとに視点を選び、「決定」を押してください');
+}
+/** 画面から呼ぶ：枝番ごとに選んだ視点を ② に入れる（名前が _ で終わる関数は google.script.run から呼べない） */
+function saveBranchViews(sel) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEET.FORM);
+  const m = formMap_(sheet);
+  const views = readMasters_(ss).views;
+  const d = formRead_(sheet, m);
+  const rooms = formBranchRooms_(d.fields.branch);
+  const rows = formRowsFromBranchSel_(d.rows, sel || {}, rooms, views);
+  formWriteList_(sheet, m, rows, views);
+  formSyncBranch_(sheet, m, rows, d.fields.branch);
+  const count = rooms.map(room => room + ' ' + rows.filter(r => formRoom_(r.room) === room).length + '件').join('・');
+  formResult_(sheet, m, '枝番ごとの視点を入れました（' + count + '）。②で確かめて「登録」にチェックしてください');
+  return { ok: true, msg: count };
+}
+function formBranchDialogHtml_(o) {
+  const json = (v) => JSON.stringify(v).replace(/</g, '\\u003c');
+  return '<!DOCTYPE html><html><head><base target="_top"><style>' +
+    'body{font-family:sans-serif;font-size:13px;margin:12px;color:#222}h4{margin:14px 0 6px;font-size:14px}' +
+    '.blk{border:1px solid #ddd;border-radius:8px;padding:8px 10px;margin-bottom:10px}' +
+    '.row{display:flex;align-items:center;gap:4px;margin:3px 0;flex-wrap:wrap}.lab{width:84px;color:#555}' +
+    'button.n{width:28px;height:26px;border:1px solid #bbb;background:#fff;border-radius:4px;cursor:pointer;font-size:12px;padding:0}' +
+    'button.n.on{background:#1a73e8;color:#fff;border-color:#1a73e8}' +
+    '.tools{float:right;font-size:12px}.tools button{margin-left:6px}.btns{position:sticky;bottom:0;background:#fff;padding:10px 0;text-align:right}' +
+    '.btns button{padding:8px 18px;font-size:14px;margin-left:8px}#go{background:#1a73e8;color:#fff;border:none;border-radius:6px}#msg{color:#c00}' +
+    '</style></head><body>' +
+    '<div>番号を押すと選ばれます（もう一度押すと外れます）。枝番ごとに選び、最後に「決定」。</div>' +
+    '<div id="list"></div><div id="msg"></div>' +
+    '<div class="btns"><button type="button" id="cancel">やめる</button><button type="button" id="go">決定</button></div>' +
+    '<script>var ROOMS=' + json(o.rooms) + ',CATS=' + json(o.cats) + ',SEL=' + json(o.sel) + ';' + FORM_BRANCH_SCRIPT + '</script></body></html>';
 }
 function formResult_(sheet, m, msg) { if (m.result) sheet.getRange(m.result, 2).setValue(msg); }
 /** フォームを空に戻す（会社コードも消す。新規or修正は「新規」に） */
 function formClear_(sheet, m, views) {
   FORM_FIELDS.forEach(k => { if (m.fields[k]) sheet.getRange(m.fields[k], 2).setValue(k === 'request' ? REQUEST_OPTIONS[0] : ''); });
   if (m.fields.branch) sheet.getRange(m.fields.branch, FORM_KEY_COL).setValue('');
-  if (m.branchSel) sheet.getRange(m.fields.branch, FORM_BR.sel1).clearDataValidations().setValue('');
+  if (m.branchSel) sheet.getRange(m.fields.branch, FORM_BR.sel1).setValue(false);
   if (m.edit) sheet.getRange(m.edit, 2).setValue('');
   formSetGrid_(sheet, m, []);
   formWriteList_(sheet, m, [], views);
@@ -2880,9 +2935,8 @@ function formLoadPrevious_(ss, sheet, m, views) {
   }
   const prev = formPrevious_(regRows, f.code, f.number, f.branch);
   if (!prev) { formResult_(sheet, m, '前回の登録が見つかりません（' + joinCode_(trimStr_(f.code).toUpperCase(), f.number) + (trimStr_(f.branch) ? ' 枝番 ' + trimStr_(f.branch) : '') + '）。会社コード・案件番号' + (trimStr_(f.branch) ? '・枝番' : '') + 'を確かめてください'); return; }
-  const st0 = formBranchState_(f.branch, f.branchSel);
-  const rows = formSortByBranch_(formNormalizeRows_(prev.rows.map(r => { const s = formSplitCut_(r.cut); return { code: s.code, room: s.room, pattern: r.pattern, ext: r.extName }; }), views), st0.rooms);
-  formSyncBranch_(sheet, m, rows, f.branch, f.branchSel);
+  const rows = formSortByBranch_(formNormalizeRows_(prev.rows.map(r => { const s = formSplitCut_(r.cut); return { code: s.code, room: s.room, pattern: r.pattern, ext: r.extName }; }), views), formBranchRooms_(f.branch));
+  formSyncBranch_(sheet, m, rows, f.branch);
   formWriteList_(sheet, m, rows, views);
   sheet.getRange(m.fields.request, 2).setValue(REQUEST_OPTIONS[1]);
   const first = prev.rows[0];
@@ -2978,7 +3032,7 @@ function formLoadByNo_(ss, sheet, m, views) {
   const brs = []; rows.forEach(r => { if (r.room && brs.indexOf(r.room) < 0) brs.push(r.room); });
   const blist = trimStr_(h.branch || '') && brs.length ? brs.join(',') : trimStr_(h.branch || '');
   if (m.fields.branch) { sheet.getRange(m.fields.branch, 2).setValue(blist); sheet.getRange(m.fields.branch, FORM_KEY_COL).setValue(blist); }
-  formSyncBranch_(sheet, m, rows, blist, '');
+  formSyncBranch_(sheet, m, rows, blist);
   formWriteList_(sheet, m, rows, views);
   formResult_(sheet, m, no + ' の登録を呼び出しました（' + joinCode_(trimStr_(h.code).toUpperCase(), h.number) + '・' + g.date + ' 登録の ' + rows.length + '件：' + rows.map(r => r.no).join('・') + '）。\n' +
     '直して「登録」にチェックすると上書きし、エンジニア入力シートも直ります。①で足した視点は新しく登録します。外した視点は『登録一覧』に残ります（消すときは『登録一覧』の行を消す）');
@@ -3037,6 +3091,57 @@ function submitFormSheet(toInterp) {
   return res;
 }
 // 確認画面の中で動くスクリプト。中ではバッククォート・ドル記号＋波かっこ・バックスラッシュを使わない
+const FORM_BRANCH_SCRIPT = `
+function el(id) { return document.getElementById(id); }
+var cur = {};
+ROOMS.forEach(function (r) { cur[r] = (SEL[r] || []).slice(); });
+function has(r, c) { return cur[r].indexOf(c) >= 0; }
+function draw() {
+  var box = el("list"); box.innerHTML = "";
+  ROOMS.forEach(function (r, ri) {
+    var b = document.createElement("div"); b.className = "blk";
+    var h = document.createElement("h4"); h.textContent = r + "（" + cur[r].length + "件）";
+    var tools = document.createElement("span"); tools.className = "tools";
+    if (ri > 0) {
+      var same = document.createElement("button"); same.type = "button"; same.textContent = ROOMS[ri - 1] + " と同じにする";
+      same.addEventListener("click", function () { cur[r] = cur[ROOMS[ri - 1]].slice(); draw(); });
+      tools.appendChild(same);
+    }
+    var clr = document.createElement("button"); clr.type = "button"; clr.textContent = "空にする";
+    clr.addEventListener("click", function () { cur[r] = []; draw(); });
+    tools.appendChild(clr);
+    h.appendChild(tools); b.appendChild(h);
+    CATS.forEach(function (c) {
+      var row = document.createElement("div"); row.className = "row";
+      var lab = document.createElement("span"); lab.className = "lab"; lab.textContent = c.label; row.appendChild(lab);
+      for (var i = 1; i <= c.n; i++) {
+        (function (code, i) {
+          var bt = document.createElement("button"); bt.type = "button"; bt.className = "n" + (has(r, code) ? " on" : ""); bt.textContent = i;
+          bt.addEventListener("click", function () {
+            var k = cur[r].indexOf(code);
+            if (k >= 0) cur[r].splice(k, 1); else cur[r].push(code);
+            draw();
+          });
+          row.appendChild(bt);
+        })(c.k + i, i);
+      }
+      b.appendChild(row);
+    });
+    box.appendChild(b);
+  });
+}
+draw();
+el("cancel").addEventListener("click", function () { google.script.host.close(); });
+el("go").addEventListener("click", function () {
+  el("go").disabled = true; el("msg").textContent = "入れています…";
+  // ① の並び（区分の順・番号の順）にそろえて送る
+  var order = []; CATS.forEach(function (c) { for (var i = 1; i <= c.n; i++) order.push(c.k + i); });
+  var out = {}; ROOMS.forEach(function (r) { out[r] = order.filter(function (x) { return has(r, x); }); });
+  google.script.run.withSuccessHandler(function () { google.script.host.close(); })
+    .withFailureHandler(function (e) { el("go").disabled = false; el("msg").textContent = (e && e.message) || String(e); })
+    .saveBranchViews(out);
+});
+`;
 const FORM_CONFIRM_SCRIPT = `
 function el(id) { return document.getElementById(id); }
 var NL = String.fromCharCode(10);
@@ -3116,10 +3221,8 @@ function onFormEdit_(ss, sheet, range) {
   if (m.edit && hit(m.edit) && range.getColumn() <= 2 && range.getLastColumn() >= 2) { formLoadByNo_(ss, sheet, m, views); return; }
   if ((hit(m.fields.code) || hit(m.fields.number)) && range.getColumn() <= 2 && range.getLastColumn() >= 2) { formFillKnown_(ss, sheet, m); return; }
   if (m.fields.branch && hit(m.fields.branch) && m.branchSel && range.getColumn() <= FORM_BR.sel1 && range.getLastColumn() >= FORM_BR.sel1) {
-    // ① で視点を選ぶ枝番を切り替えた：①のチェックをその枝番の視点にする
-    const d = formRead_(sheet, m);
-    const st = formSyncBranch_(sheet, m, d.rows, d.fields.branch, d.fields.branchSel);
-    if (st.cur) formResult_(sheet, m, '①は「' + st.cur + '」の視点です。チェックすると ' + st.cur + ' の視点として②に入ります');
+    // 「枝番ごとの視点を画面で選ぶ」にチェック：画面を開く
+    if (isChecked_(sheet.getRange(m.fields.branch, FORM_BR.sel1).getValue())) formOpenBranchDialog_(sheet, m);
     return;
   }
   if (m.fields.branch && hit(m.fields.branch) && range.getColumn() <= 2 && range.getLastColumn() >= 2) {
@@ -3129,17 +3232,19 @@ function onFormEdit_(ss, sheet, range) {
     const rows = formApplyBranchList_(d.rows, memo.getValue(), d.fields.branch, views);
     memo.setValue(trimStr_(d.fields.branch));
     formWriteList_(sheet, m, rows, views);
-    const st = formSyncBranch_(sheet, m, rows, d.fields.branch, d.fields.branchSel);
-    if (st.rooms.length > 1) formResult_(sheet, m, '枝番 ' + st.rooms.join('・') + '。右の「' + FORM_BR_LABEL.replace(' →', '') + '」で枝番を切り替えて、枝番ごとに①で視点を選んでください（いまは ' + st.cur + '）');
+    const st = formSyncBranch_(sheet, m, rows, d.fields.branch);
+    // 枝番が2つ以上：すぐに「枝番ごとの視点」の画面を開いて、全部の枝番を1つの画面で選ぶ
+    if (st.rooms.length > 1 && m.branchSel) formOpenBranchDialog_(sheet, m);
     return;
   }
   if (m.grid.some(g => hit(g.row))) {
     const d = formRead_(sheet, m);
-    const st = formBranchState_(d.fields.branch, d.fields.branchSel);
-    const rows = st.rooms.length > 1 || (st.rooms.length === 1 && m.branchSel)
-      ? formListMergeBranch_(d.codes, d.rows, views, st.rooms, st.cur)
+    const rooms = formBranchRooms_(d.fields.branch);
+    const rows = rooms.length > 1
+      ? formListMergeAll_(d.codes, d.rows, views, rooms)
       : formListMerge_(d.codes, d.rows, views, d.fields.branch);
     formWriteList_(sheet, m, rows, views);
+    formSetGrid_(sheet, m, formGridCodes_(rows, rooms));
     return;
   }
   if (r2 >= m.list1 && r1 <= m.list2) {
@@ -3151,8 +3256,7 @@ function onFormEdit_(ss, sheet, range) {
     }
     rows = formNormalizeRows_(rows, views);
     formWriteList_(sheet, m, rows, views);
-    const st = formBranchState_(d.fields.branch, d.fields.branchSel);
-    formSetGrid_(sheet, m, formGridCodes_(rows, st.rooms, st.cur));
+    formSetGrid_(sheet, m, formGridCodes_(rows, formBranchRooms_(d.fields.branch)));
   }
 }
 /** メニュー：『案件入力』タブを作り直す（視点マスタを変えたとき。書きかけの内容は消える） */
