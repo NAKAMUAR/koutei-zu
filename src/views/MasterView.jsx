@@ -7,7 +7,7 @@ import { ChevronDown, ChevronUp, GripVertical, Plus, Search, Trash2, X } from 'l
 import { VN_LUNAR_HOLIDAYS, dayName, expandHolidayDates, fmtMD, fmtYMD, getProjectColor, isValidWorkHours, minToTime, timeToMin, vietnamHolidayCandidates } from '../lib/utils.js';
 import { TimeSelect } from '../components/common.jsx';
 import { WorkdayManager } from './WorkdayManager.jsx';
-import { ASSIGN_TYPES, assignTypeOf, isOffshoreCompany } from '../lib/companyAssignee.js';
+import { ASSIGN_TYPES, assignTypeOf, isOffshoreCompany, planCompanyReassign } from '../lib/companyAssignee.js';
 
 function MasterView() {
   const {
@@ -15,7 +15,7 @@ function MasterView() {
     customerMaster, saveCustomerMaster, employeeMaster, saveEmployeeMaster,
     stepTypeMaster, saveStepTypeMaster,
     addOvertime, removeOvertime, addAbsence, removeAbsence, addHolidays, removeHoliday,
-    saveCompanyOrder, tasks, confirmDialog, notify,
+    saveCompanyOrder, tasks, confirmDialog, notify, patchTasksEach,
   } = useApp();
   // ローカル下書き（入力中の値）。props が更新されたら同期する。
   // ただし入力中（未コミット）の下書きは、自分の保存が Firestore から echo で戻ってきた
@@ -97,6 +97,27 @@ function MasterView() {
         undo: () => { setEmployees(before); saveEmployeeMaster(before); },
       });
     }
+  };
+  // 今の担当分けで、未完了の作業の担当者を割り振り直す（ラボ契約の会社だけ。スケジュールは自動で計算し直される）
+  const reassignByCompany = async () => {
+    const plan = planCompanyReassign(tasks, employees, customerMaster);
+    if (!plan.length) { notify('割り振り直す作業はありません（ラボ契約の会社の作業は、すでに担当の人になっています）'); return; }
+    const byTo = new Map();
+    for (const x of plan) {
+      const e = byTo.get(x.to) || { count: 0, hours: 0, projects: new Set() };
+      e.count++; e.hours += x.hours; e.projects.add(`${x.company} ${x.projectName}`.trim());
+      byTo.set(x.to, e);
+    }
+    const lines = [...byTo.entries()].map(([to, e]) => `・${to}：${e.projects.size}案件・${e.count}作業（残り ${Math.round(e.hours * 10) / 10} 時間）`);
+    const ok = await confirmDialog({
+      title: '今の担当分けで割り振り直しますか？',
+      message: `ラボ契約の会社の未完了の作業 ${plan.length} 件の担当者を変えます。\n${lines.join('\n')}\n\n同じ案件の作業は同じ人にまとめます。作業中の作業・サポートで分担した作業・オフショアの会社の作業は変えません。スケジュールは自動で計算し直されます。`,
+      confirmLabel: '割り振り直す',
+    });
+    if (!ok) return;
+    const before = plan.map(x => ({ id: x.id, patch: { assignee: x.from } }));
+    patchTasksEach(plan.map(x => ({ id: x.id, patch: { assignee: x.to } })));
+    notify(`${plan.length} 件の作業の担当者を割り振り直しました`, { type: 'success', undo: () => patchTasksEach(before) });
   };
   const toggleEmployeeCompany = (id, company) => {
     editingEmployees.current = false;
@@ -540,9 +561,16 @@ function MasterView() {
             )}
           </div>))}
         </div>
-        <button type="button" onClick={addEmployee} style={{ ...addBtnStyle, marginTop: 14 }}>
-          <Plus size={14} /> 従業員を追加
-        </button>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginTop: 14 }}>
+          <button type="button" onClick={addEmployee} style={addBtnStyle}>
+            <Plus size={14} /> 従業員を追加
+          </button>
+          <button type="button" onClick={reassignByCompany}
+            title="ラボ契約の会社の未完了の作業を、今の担当分けの人に割り振り直します（確認の画面が出ます）"
+            style={{ ...addBtnStyle, marginLeft: 'auto' }}>
+            今の担当分けで作業を割り振り直す
+          </button>
+        </div>
       </section>
 
       {/* 残業の登録（稼働枠の追加） */}

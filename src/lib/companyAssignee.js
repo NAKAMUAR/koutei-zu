@@ -56,4 +56,60 @@ function fixedAssigneeFor(employeeMaster, company, customerMaster) {
   return assigneesForCompany(employeeMaster, company, customerMaster).fixed[0] || '';
 }
 
-export { ASSIGN_TYPES, companyKey, isOffshoreCompany, assignTypeOf, assigneesForCompany, fixedAssigneeFor };
+// 今の担当分けで、未完了の作業の担当者を割り振り直す計画を作る（従業員マスタの「割り振り直す」ボタン）。
+// ・対象はラボ契約の担当がいる会社の未完了の作業だけ（オフショアの会社・担当未設定の会社は触らない）
+// ・すでにその会社のラボ契約の担当になっている作業はそのまま
+// ・作業中（in_progress / doing）の作業と、サポートで分担した作業（supportOf）は動かさない
+// ・同じ案件の作業は同じ人へ。案件に担当の人がすでにいればその人、いなければ残り時間の少ない人へ
+// 戻り値 [{ id, from, to, company, projectName, hours }]
+function planCompanyReassign(tasks, employeeMaster, customerMaster) {
+  const remain = (t) => Math.max(0, (Number(t.hours) || 0) - (Number(t.completedHours) || 0));
+  const open = (tasks || []).filter(t => t && t.status !== 'done');
+  const load = new Map();
+  for (const t of open) {
+    const a = (t.assignee || '').trim();
+    load.set(a, (load.get(a) || 0) + remain(t));
+  }
+  const fixedCache = new Map();
+  const fixedOf = (company) => {
+    const k = companyKey(company);
+    if (!fixedCache.has(k)) fixedCache.set(k, assigneesForCompany(employeeMaster, company, customerMaster).fixed);
+    return fixedCache.get(k);
+  };
+  const movable = (t) => !t.supportOf && t.status !== 'in_progress' && t.status !== 'doing';
+  // 案件ごとにまとめる（会社＋社外案件名）。古い案件から順に決める
+  const projects = new Map();
+  for (const t of open) {
+    const fixed = fixedOf(t.companyName);
+    if (!fixed.length) continue;
+    const pk = companyKey(t.companyName) + '::' + (t.projectName || '');
+    if (!projects.has(pk)) projects.set(pk, { fixed, tasks: [], first: Infinity });
+    const p = projects.get(pk);
+    p.tasks.push(t);
+    p.first = Math.min(p.first, Number(t.createdAt) || 0);
+  }
+  const out = [];
+  for (const p of [...projects.values()].sort((a, b) => a.first - b.first)) {
+    const moving = p.tasks.filter(t => movable(t) && !p.fixed.includes((t.assignee || '').trim()));
+    if (!moving.length) continue;
+    // 案件の中で担当の人がすでに持っている時間
+    const own = new Map();
+    for (const t of p.tasks) {
+      const a = (t.assignee || '').trim();
+      if (p.fixed.includes(a)) own.set(a, (own.get(a) || 0) + remain(t) + 1e-6);
+    }
+    const to = own.size
+      ? [...own.entries()].sort((x, y) => y[1] - x[1] || p.fixed.indexOf(x[0]) - p.fixed.indexOf(y[0]))[0][0]
+      : [...p.fixed].sort((x, y) => (load.get(x) || 0) - (load.get(y) || 0) || p.fixed.indexOf(x) - p.fixed.indexOf(y))[0];
+    for (const t of moving) {
+      const from = (t.assignee || '').trim();
+      const h = remain(t);
+      load.set(from, (load.get(from) || 0) - h);
+      load.set(to, (load.get(to) || 0) + h);
+      out.push({ id: t.id, from, to, company: t.companyName || '', projectName: t.projectName || '', hours: h });
+    }
+  }
+  return out;
+}
+
+export { planCompanyReassign, ASSIGN_TYPES, companyKey, isOffshoreCompany, assignTypeOf, assigneesForCompany, fixedAssigneeFor };
