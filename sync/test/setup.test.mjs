@@ -2077,7 +2077,7 @@ test('枝番（部屋・建物）：『案件入力』で枝番を書くと②�
   env.dialogs.length = 0;
   edit(m.fields.branch, 2, '3F,A棟');
   const SEL = env.g.FORM_BR.sel1;
-  assert.equal(cell(m.fields.branch, env.g.FORM_BR.label1), '枝番ごとの視点を画面で選ぶ →', '枝番の右に画面を開くチェック');
+  assert.equal(cell(m.fields.branch, env.g.FORM_BR.label1), '枝番と視点を画面で選ぶ →', '枝番の右に画面を開くチェック');
   assert.equal(env.dialogs.length, 1, '枝番を2つ以上書くと画面が開く');
   const dh = String(env.dialogs[0].html || env.dialogs[0]);
   assert.ok(dh.includes('"3F"') && dh.includes('"A棟"') && dh.includes('内観目線'), '画面に全部の枝番と区分');
@@ -2089,9 +2089,11 @@ test('枝番（部屋・建物）：『案件入力』で枝番を書くと②�
     const node = (tag) => { const n = { tag, children: [], className: '', textContent: '', handlers: {}, disabled: false, type: '',
       appendChild(c) { this.children.push(c); return c; }, addEventListener(ev, fn) { this.handlers[ev] = fn; },
       set innerHTML(v) { this.children = []; } }; made.push(n); return n; };
-    const els = { list: node('div'), msg: node('div'), go: node('button'), cancel: node('button') };
+    const els = { list: node('div'), msg: node('div'), go: node('button'), cancel: node('button'), room: node('input'), addRoom: node('button') };
+    els.room.value = '';
     let sent = null;
-    const run = { withSuccessHandler() { return run; }, withFailureHandler() { return run; }, saveBranchViews(o) { sent = o; } };
+    const run = { withSuccessHandler() { return run; }, withFailureHandler() { return run; }, saveBranchViews(o, r) { sent = o; sentRooms = r; } };
+    let sentRooms = null;
     vm.runInContext(dh.split('<script>')[1].split('</script>')[0], vm.createContext({ document: { getElementById: (id) => els[id], createElement: node }, google: { script: { run, host: { close() {} } } }, String, JSON }));
     const buttons = () => { const out = []; const walk = (n) => { if (n.tag === 'button') out.push(n); n.children.forEach(walk); }; walk(els.list); return out; };
     const blocks = () => els.list.children;
@@ -2099,9 +2101,19 @@ test('枝番（部屋・建物）：『案件入力』で枝番を書くと②�
     numIn(1, '内観目線', 1).handlers.click();
     numIn(1, '内観目線', 2).handlers.click();
     numIn(0, '内観目線', 1).handlers.click();
-    els.go.handlers.click();
-    same(JSON.parse(JSON.stringify(sent)), { '3F': ['IN1'], 'A棟': ['IN1', 'IN2'] });
     assert.ok(buttons().some(b => b.textContent === '3F と同じにする'), '2つ目からは「前の枝番と同じにする」');
+    // 同じ画面で枝番を足す（「b棟, 4f」→ B棟・4F）。足した枝番は前の枝番の視点から始まる
+    els.room.value = 'b棟、4f';
+    els.addRoom.handlers.click();
+    assert.equal(els.room.value, '', '追加したら入力欄は空に');
+    assert.equal(blocks().length, 4, '枝番が4つに');
+    numIn(3, '内観目線', 3).handlers.click(); // 4F だけ 内観目線3 も
+    // 枝番を消す
+    blocks()[0].children[0].children[0].children.find(b => b.textContent === '枝番を消す').handlers.click();
+    assert.equal(blocks().length, 3);
+    els.go.handlers.click();
+    same(JSON.parse(JSON.stringify(sent)), { 'A棟': ['IN1', 'IN2'], 'B棟': ['IN1', 'IN2'], '4F': ['IN1', 'IN2', 'IN3'] });
+    same(JSON.parse(JSON.stringify(sentRooms)), ['A棟', 'B棟', '4F'], '画面の枝番の並びも届く');
   }
   ['code', 'number', 'name', 'link'].forEach((k, j) => f.set(m.fields[k], 2, ['OFFICE', 55, 'オフィス', LINK][j]));
   // 画面で「決定」：3F は 視点①、A棟 は 視点①②
@@ -2125,7 +2137,13 @@ test('枝番（部屋・建物）：『案件入力』で枝番を書くと②�
   edit(m.fields.branch, 2, 'A棟,3F,B棟');
   sv = env.g.saveBranchViews({ 'A棟': ['IN1', 'IN2'], '3F': ['IN1'], 'B棟': [] });
   same(brief(), ['IN1_A棟:A棟内観目線視点①', 'IN2_A棟:A棟内観目線視点②', 'IN1_3F:3F内観目線視点①'], '枝番の順に並ぶ');
-  edit(m.fields.branch, 2, '3F,A棟');
+  // 画面で足した・消した枝番は、シートの「枝番」にも入る
+  sv = env.g.saveBranchViews({ '3F': ['IN1'], 'A棟': ['IN1', 'IN2'], 'C棟': ['IN1'] }, ['3F', 'A棟', 'C棟']);
+  assert.equal(cell(m.fields.branch, 2), '3F,A棟,C棟', '画面で足した枝番がシートに');
+  same(brief(), ['IN1_3F:3F内観目線視点①', 'IN1_A棟:A棟内観目線視点①', 'IN2_A棟:A棟内観目線視点②', 'IN1_C棟:C棟内観目線視点①']);
+  sv = env.g.saveBranchViews({ '3F': ['IN1'], 'A棟': ['IN1', 'IN2'] }, ['3F', 'A棟']);
+  assert.equal(cell(m.fields.branch, 2), '3F,A棟', '画面で消した枝番はシートからも');
+  same(brief(), ['IN1_3F:3F内観目線視点①', 'IN1_A棟:A棟内観目線視点①', 'IN2_A棟:A棟内観目線視点②'], '消した枝番の行も消える');
   edit(m.submit, 2, true);
   res = env.g.submitFormSheet('');
   assert.equal(res.ok, true, res.msg);
