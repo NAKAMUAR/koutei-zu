@@ -10,7 +10,7 @@ import { Combobox, DurationSelect, TimeSelect, tabStyle } from '../components/co
 import { AssigneeBoard, ReviewSection, SuspendedSection } from './input/sections.jsx';
 import { ViewpointGroupList } from './input/ViewpointList.jsx';
 import { CalendarView } from './CalendarView.jsx';
-import { assigneesForCompany } from '../lib/companyAssignee.js';
+import { assigneesForCompany, fixedAssigneeFor } from '../lib/companyAssignee.js';
 import { AssigneeView } from './AssigneeView.jsx';
 // 進行状況（段階の一覧）は開いたときに読み込む
 const StageView = lazy(() => import('./StageView.jsx'));
@@ -24,16 +24,22 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
     stepTypeMaster, vpDeliveryCount,
     registerDraftAndEdit, handleEditProject, submitting, confirmDialog, notify,
   } = useApp();
-  // 会社ごとの担当者（従業員マスタの「担当会社」）。会社を選ぶと、担当者が空なら自動で入る。
-  // 前の会社で自動で入った担当者のままなら、新しい会社の担当者に入れ替える（新規登録のときだけ）
-  const companyAssignees = useMemo(() => assigneesForCompany(employeeMaster, form.companyName), [employeeMaster, form.companyName]);
+  // 会社ごとの担当者（従業員マスタの「担当の形」と「担当会社」。src/lib/companyAssignee.js）。
+  // 会社を選ぶと、担当者が空ならラボ契約の担当が入る。前の会社で自動で入った担当者のままなら入れ替える（新規登録のときだけ）
+  // ラボ契約の担当（固定）は自動で入る。オフショアの担当（個別依頼）とサポート（全会社）は候補の先頭に出す
+  const companyStaff = useMemo(() => assigneesForCompany(employeeMaster, form.companyName, customerMaster), [employeeMaster, form.companyName, customerMaster]);
+  const companyAssignees = useMemo(
+    // その会社の担当（ラボ契約・オフショア）がいないときは絞らない（全員が候補）
+    () => (companyStaff.fixed.length || companyStaff.offshore.length) ? [...new Set([...companyStaff.fixed, ...companyStaff.offshore, ...companyStaff.support])] : [],
+    [companyStaff]
+  );
   const withCompany = (prev, company) => {
     const next = { ...prev, companyName: company };
     if (editMode) return next;
     const cur = (prev.assignee || '').trim();
-    const prevAuto = assigneesForCompany(employeeMaster, prev.companyName)[0] || '';
+    const prevAuto = fixedAssigneeFor(employeeMaster, prev.companyName, customerMaster);
     if (cur && cur !== prevAuto) return next;
-    const auto = assigneesForCompany(employeeMaster, company)[0] || '';
+    const auto = fixedAssigneeFor(employeeMaster, company, customerMaster);
     return auto || cur === prevAuto ? { ...next, assignee: auto } : next;
   };
   // 担当者の候補：選んだ会社の担当者を先頭に
@@ -244,7 +250,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
   const [assigneeSuggestions, setAssigneeSuggestions] = useState(null); // null=非表示
   useEffect(() => { setAssigneeSuggestions(null); }, [editingId]); // 対象が変わったら閉じる
   const suggestAssignees = () => {
-    // 会社の担当者が決まっていれば、その人たちの中から提案する
+    // 会社の担当者（ラボ契約・オフショア・サポート）が決まっていれば、その人たちの中から提案する
     const candidates = [...new Set((companyAssignees.length ? companyAssignees : (assigneeList || [])).map(a => (a || '').trim()).filter(Boolean))];
     if (candidates.length === 0) { notify('担当者の候補がありません。従業員マスタに担当者を登録してください。', { type: 'error' }); return; }
     const out = [];

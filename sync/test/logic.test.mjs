@@ -362,20 +362,30 @@ test('作業の分け方の読み取り（種類の書き方・区切り・全�
   eq(g.parseSplit_('メモだけ'), { white: [], color: [], other: [] });
 });
 
-test('会社の担当者：従業員マスタの担当会社で決まる（上の人が優先・株式会社の有無は同じ）', () => {
-  const emp = [{ name: 'Mr.Dung', companies: ['田中建設'] }, { name: 'Mr.Cong', companies: ['田中建設', 'リノベる'] }, { name: '', companies: ['X社'] }];
-  eq(g.companyAssigneeOf_(emp, '田中建設'), 'Mr.Dung');
-  eq(g.companyAssigneeOf_(emp, '株式会社 田中建設'), 'Mr.Dung');
-  eq(g.companyAssigneeOf_(emp, 'リノベる'), 'Mr.Cong');
-  eq(g.companyAssigneeOf_(emp, 'X社'), '');
-  eq(g.companyAssigneeOf_(emp, ''), '');
-  eq(g.companyAssigneeOf_(undefined, '田中建設'), '');
+test('会社の担当者：ラボ契約の担当だけ自動で入る（上の人が優先・株式会社の有無は同じ・オフショアとサポートは入れない）', () => {
+  const cm = [{ company: '田中建設', contractType: 'labo' }, { company: 'リノベる' }, { company: 'オフィスA', contractType: 'offshore' }];
+  const emp = [
+    { name: 'Mr.Dung', assignType: 'lab', companies: ['田中建設'] },
+    { name: 'Mr.Cong', assignType: 'lab', companies: ['田中建設', 'リノベる'] },
+    { name: 'Ms.Phuong', assignType: 'offshore', companies: ['オフィスA'] },
+    { name: 'Mr.Hai', assignType: 'support', companies: [] },
+    { name: 'Old', companies: ['オフィスA'] }, // 担当の形が未設定：会社がすべてオフショアならオフショア
+    { name: '', companies: ['X社'] },
+  ];
+  eq(g.companyAssigneeOf_(emp, '田中建設', cm), 'Mr.Dung');
+  eq(g.companyAssigneeOf_(emp, '株式会社 田中建設', cm), 'Mr.Dung');
+  eq(g.companyAssigneeOf_(emp, 'リノベる', cm), 'Mr.Cong');
+  eq(g.companyAssigneeOf_(emp, 'オフィスA', cm), '');
+  eq(g.companyAssigneeOf_(emp, 'X社', cm), '');
+  eq(g.companyAssigneeOf_(emp, '', cm), '');
+  eq(g.companyAssigneeOf_(undefined, '田中建設', cm), '');
+  eq(g.companyAssigneeOf_([{ name: 'Old2', companies: ['田中建設'] }], '田中建設', cm), 'Old2', '未設定でラボの会社ならラボ契約');
   // レコード生成：シートの担当者が空なら会社の担当者（種類ごとの既定より優先）
   const row = { key: 'TNK1::EX1::1', code: 'TNK.1', name: 'X', cut: 'EX1', pattern: '', extName: '', round: 1, deadline: '', white: 2, color: 0, other: 0,
     company: '田中建設', contact: '', category: '外観', kind: 'パース', stepKind: '新規', assignee: '', memo: '' };
-  const ctx = { ...baseCtx(), employeeMaster: emp, kindAssignees: { white: 'Quynh' } };
+  const ctx = { ...baseCtx(), employeeMaster: emp, customerMaster: cm, kindAssignees: { white: 'Quynh' } };
   eq(g.buildTaskRecords_(row, ctx).records.map(x => x.doc.assignee), ['Mr.Dung']);
-  eq(g.buildTaskRecords_({ ...row, company: '他社' }, ctx).records.map(x => x.doc.assignee), ['Quynh']);
+  eq(g.buildTaskRecords_({ ...row, company: 'オフィスA' }, ctx).records.map(x => x.doc.assignee), ['Quynh']);
 });
 
 test('レコード生成：作業の分け方があれば分けたステップにする（納品は1回・種類ごとの既定担当者）', () => {

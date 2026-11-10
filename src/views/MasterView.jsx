@@ -7,6 +7,7 @@ import { ChevronDown, ChevronUp, GripVertical, Plus, Search, Trash2, X } from 'l
 import { VN_LUNAR_HOLIDAYS, dayName, expandHolidayDates, fmtMD, fmtYMD, getProjectColor, isValidWorkHours, minToTime, timeToMin, vietnamHolidayCandidates } from '../lib/utils.js';
 import { TimeSelect } from '../components/common.jsx';
 import { WorkdayManager } from './WorkdayManager.jsx';
+import { ASSIGN_TYPES, assignTypeOf, isOffshoreCompany } from '../lib/companyAssignee.js';
 
 function MasterView() {
   const {
@@ -72,10 +73,31 @@ function MasterView() {
   const addEmployee = () => { editingEmployees.current = false; const next = [...employees, { id: newId('emp'), name: '', role: '' }]; setEmployees(next); saveEmployeeMaster(next); };
   const setEmployeeField = (id, field, val) => { editingEmployees.current = true; setEmployees(es => es.map(e => e.id === id ? { ...e, [field]: val } : e)); };
   const commitEmployees = () => { editingEmployees.current = false; saveEmployeeMaster(employees); };
-  // 担当会社（companies：お客様マスタの会社名）。選んだ会社の案件の担当者に自動で入る
+  // 担当の形（assignType：ラボ契約／オフショア／サポート）と担当会社（companies：お客様マスタの会社名）。
+  // ラボ契約はラボの会社、オフショアはオフショアの会社から選ぶ。サポートは全会社対応なので会社は選ばない
   const [openCompanies, setOpenCompanies] = useState(null);
   const masterCompanies = [...new Set((customerMaster || []).map(c => (c.company || '').trim()).filter(Boolean))]
     .sort((a, b) => a.localeCompare(b, 'ja'));
+  const companiesForType = (type) => masterCompanies.filter(c => (type === 'offshore') === isOffshoreCompany(customerMaster, c));
+  const setEmployeeType = (id, type) => {
+    const emp = employees.find(e => e.id === id);
+    if (!emp) return;
+    // 形に合わない会社は外す（サポートは会社なし）
+    const allowed = new Set(type === 'support' ? [] : companiesForType(type));
+    const kept = (emp.companies || []).filter(c => allowed.has(c));
+    const dropped = (emp.companies || []).filter(c => !allowed.has(c));
+    editingEmployees.current = false;
+    const before = employees;
+    const next = employees.map(e => e.id === id ? { ...e, assignType: type, companies: kept } : e);
+    setEmployees(next);
+    saveEmployeeMaster(next);
+    setOpenCompanies(type === 'support' ? null : id);
+    if (dropped.length) {
+      notify(`${(emp.name || '').trim() || 'この担当者'} の担当会社から ${dropped.join('、')} を外しました`, {
+        undo: () => { setEmployees(before); saveEmployeeMaster(before); },
+      });
+    }
+  };
   const toggleEmployeeCompany = (id, company) => {
     editingEmployees.current = false;
     const next = employees.map(e => {
@@ -404,7 +426,9 @@ function MasterView() {
         <p style={{ fontSize: 12, color: colors.textMute, margin: '0 0 16px 0' }}>
           制作担当者（従業員）を登録します。案件入力時の「担当者」の候補に表示されます。<br />
           ここでの並び順が、カレンダー・担当者別・サマリーの担当者の表示順になります（つまみをドラッグ＆ドロップ、または▲▼で変更）。<br />
-          「担当会社」でお客様マスタの会社を選ぶと、その会社の案件の担当者に自動で入ります（案件入力・スプレッドシート連携。同じ会社を複数人にしたときは上の人が優先）。<br />
+          「担当の形」は3つです。<b>ラボ契約</b>＝ラボの会社から担当会社を選ぶ（人員固定。その会社の案件の担当者に自動で入る。複数人なら上の人）／
+          <b>オフショア</b>＝オフショアの会社から選ぶ（個別依頼。自動では入らず、担当者の候補と「提案」で先に出る）／
+          <b>サポート</b>＝全会社対応（会社は選ばない。どの会社でも候補に出る）。会社の契約形態は「お客様設定」で決まります。<br />
           「稼働時間」で担当者ごとの午前・午後の時間を設定できます（ベトナム側など時差のある担当者向け。未設定なら上の全体設定の時間）。
         </p>
 
@@ -412,6 +436,7 @@ function MasterView() {
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '0 2px' }}>
             <div style={{ width: 48, flexShrink: 0, ...labelStyle }}>順</div>
             <div style={{ flex: '1 1 0', ...labelStyle }}>氏名</div>
+            <div style={{ width: 120, flexShrink: 0, ...labelStyle }}>担当の形</div>
             <div style={{ flex: '1.3 1 0', ...labelStyle }}>担当会社</div>
             <div style={{ flex: '1 1 0', ...labelStyle }}>役割・備考</div>
             <div style={{ width: 190, flexShrink: 0, ...labelStyle }}>稼働時間</div>
@@ -466,14 +491,28 @@ function MasterView() {
                 onChange={(ev) => setEmployeeField(e.id, 'name', ev.target.value)}
                 onBlur={commitEmployees}
                 placeholder="例: 田中" style={{ ...inputStyle, flex: '1 1 0' }} />
-              <button type="button" onClick={() => { setOpenCompanies(openCompanies === e.id ? null : e.id); setOpenHours(null); }}
-                title="この担当者が受け持つ会社を選ぶ（お客様マスタの会社名）"
-                style={{ flex: '1.3 1 0', minWidth: 0, textAlign: 'left', padding: '7px 9px', background: openCompanies === e.id ? colors.accentSoft : '#fff', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, color: (e.companies || []).length ? colors.text : colors.textMute, display: 'flex', alignItems: 'center', gap: 4 }}>
-                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {(e.companies || []).length ? e.companies.join('、') : '会社を選ぶ'}
-                </span>
-                {openCompanies === e.id ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-              </button>
+              {(() => {
+                const type = assignTypeOf(e, customerMaster);
+                return (<>
+                  <select value={type} onChange={(ev) => setEmployeeType(e.id, ev.target.value)}
+                    title={ASSIGN_TYPES.map(t => `${t.label}：${t.note}`).join('\n')}
+                    style={{ ...inputStyle, width: 120, flex: '0 0 120px' }}>
+                    {ASSIGN_TYPES.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+                  </select>
+                  {type === 'support' ? (
+                    <div style={{ flex: '1.3 1 0', minWidth: 0, padding: '7px 9px', fontSize: 12, color: colors.textMute }}>全会社対応</div>
+                  ) : (
+                    <button type="button" onClick={() => { setOpenCompanies(openCompanies === e.id ? null : e.id); setOpenHours(null); }}
+                      title={type === 'lab' ? 'この担当者が固定で受け持つラボの会社を選ぶ' : 'この担当者が個別依頼で受けるオフショアの会社を選ぶ'}
+                      style={{ flex: '1.3 1 0', minWidth: 0, textAlign: 'left', padding: '7px 9px', background: openCompanies === e.id ? colors.accentSoft : '#fff', border: `1px solid ${colors.border}`, borderRadius: 4, cursor: 'pointer', fontFamily: fontJP, fontSize: 12, color: (e.companies || []).length ? colors.text : colors.textMute, display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {(e.companies || []).length ? e.companies.join('、') : (type === 'lab' ? 'ラボの会社を選ぶ' : 'オフショアの会社を選ぶ')}
+                      </span>
+                      {openCompanies === e.id ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                    </button>
+                  )}
+                </>);
+              })()}
               <input type="text" value={e.role || ''}
                 onChange={(ev) => setEmployeeField(e.id, 'role', ev.target.value)}
                 onBlur={commitEmployees}
@@ -490,8 +529,9 @@ function MasterView() {
                 <Trash2 size={14} />
               </button>
             </div>
-            {openCompanies === e.id && (
-              <CompanyPicker employee={e} employees={employees} companies={masterCompanies}
+            {openCompanies === e.id && assignTypeOf(e, customerMaster) !== 'support' && (
+              <CompanyPicker employee={e} employees={employees} type={assignTypeOf(e, customerMaster)} customerMaster={customerMaster}
+                companies={companiesForType(assignTypeOf(e, customerMaster))}
                 onToggle={(c) => toggleEmployeeCompany(e.id, c)} onClose={() => setOpenCompanies(null)}
                 colors={colors} fontJP={fontJP} />
             )}
@@ -624,19 +664,21 @@ function MasterView() {
 
 // ============ 残業の登録（担当者ごとの稼働枠追加） ============
 // ---- 担当会社の選択（従業員マスタの companies。お客様マスタの会社名から選ぶ）----
-function CompanyPicker({ employee, employees, companies, onToggle, onClose, colors, fontJP }) {
+function CompanyPicker({ employee, employees, type, customerMaster, companies, onToggle, onClose, colors, fontJP }) {
   const [q, setQ] = useState('');
   const mine = employee.companies || [];
   // お客様マスタから消えた会社も、選んだままなら外せるように出す
   const all = [...companies, ...mine.filter(c => !companies.includes(c))];
   const query = q.trim().toLowerCase();
   const shown = query ? all.filter(c => c.toLowerCase().includes(query)) : all;
-  const othersOf = (c) => employees.filter(o => o.id !== employee.id && (o.name || '').trim() && (o.companies || []).includes(c)).map(o => o.name.trim());
+  // 同じ形で同じ会社を選んでいるほかの人
+  const othersOf = (c) => employees.filter(o => o.id !== employee.id && (o.name || '').trim() && assignTypeOf(o, customerMaster) === type && (o.companies || []).includes(c)).map(o => o.name.trim());
+  const typeLabel = type === 'lab' ? 'ラボ' : 'オフショア';
   return (
     <div style={{ margin: '4px 0 8px 58px', padding: 12, border: `1px solid ${colors.border}`, borderRadius: 5, background: '#fbf9f4' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
         <span style={{ fontSize: 12, color: colors.textMute }}>
-          {(employee.name || '').trim() || 'この担当者'} が受け持つ会社にチェック（選んだその場で保存されます）
+          {(employee.name || '').trim() || 'この担当者'} が受け持つ{typeLabel}の会社にチェック（{type === 'lab' ? '固定担当。案件の担当者に自動で入ります' : '個別依頼。担当者の候補で先に出ます'}。選んだその場で保存されます）
         </span>
         <input type="text" value={q} onChange={(ev) => setQ(ev.target.value)} placeholder="会社名で絞り込み"
           style={{ marginLeft: 'auto', padding: '5px 8px', border: `1px solid ${colors.border}`, borderRadius: 4, fontFamily: fontJP, fontSize: 12, width: 160 }} />
@@ -646,7 +688,7 @@ function CompanyPicker({ employee, employees, companies, onToggle, onClose, colo
         </button>
       </div>
       {all.length === 0 ? (
-        <div style={{ fontSize: 12, color: colors.textMute }}>お客様マスタに会社がありません。「お客様設定」で会社を登録してください。</div>
+        <div style={{ fontSize: 12, color: colors.textMute }}>契約形態が「{typeLabel}」の会社がありません。「お客様設定」で会社の契約形態を確かめてください。</div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 4, maxHeight: 260, overflowY: 'auto' }}>
           {shown.map(c => {
@@ -656,7 +698,7 @@ function CompanyPicker({ employee, employees, companies, onToggle, onClose, colo
             return (
               <label key={c} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 6px', borderRadius: 4, cursor: 'pointer', fontSize: 12, background: on ? colors.accentSoft : 'transparent' }}>
                 <input type="checkbox" checked={on} onChange={() => onToggle(c)} />
-                <span style={{ color: missing ? colors.textMute : colors.text }}>{c}{missing ? '（お客様マスタに無し）' : ''}</span>
+                <span style={{ color: missing ? colors.textMute : colors.text }}>{c}{missing ? `（${typeLabel}の会社に無し）` : ''}</span>
                 {others.length > 0 && <span style={{ marginLeft: 'auto', fontSize: 10.5, color: colors.textMute, whiteSpace: 'nowrap' }}>{others.join('・')}</span>}
               </label>
             );
