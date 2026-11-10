@@ -111,6 +111,7 @@ class FakeSpreadsheet {
   getSheets() { return this.sheets.slice(); }
   getSheetByName(n) { return this.sheets.find(s => s.getName() === n) || null; }
   insertSheet(name, idx) { const sh = new FakeSheet(name); if (idx === undefined) this.sheets.push(sh); else this.sheets.splice(idx, 0, sh); return sh; }
+  deleteSheet(sh) { this.sheets = this.sheets.filter(x => x !== sh); }
   toast() {}
 }
 
@@ -333,7 +334,7 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
   };
   vm.createContext(ctx);
   const names = ['onAdminEdit', 'renderRegMessage_', 'onStaffEdit', 'syncRegistrationsNow', 'saveDiscordWebhook_', 'inNotifyHours_', 'isReminderDue_', 'calcDeadlineOf_', 'regState_', 'REG_STATE', 'quickSetup', 'createStaffInputTab', 'transferFromStaffSheet', 'autoRun', 'readSettings_', 'readStaffRows_', 'collectSourceRows_', 'findStaffHeaderRow_',
-    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'FORM_NO_COL', 'updateEntryForm', 'normRegNo_', 'formRegGroup_', 'formEnsureEditRow_', 'FORM_L', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_', 'deleteRegistrations', 'cancelDeleteRegistrations', 'writeScheduleToLink_', 'writeAssigneeTabs_', 'withBranchRoom_', 'FORM_BR', 'saveBranchViews', 'taskPackOf_', 'fsReadDay_', 'fsReadsToday_', 'AUTO_READ_BUDGET', 'deliveryYmd_', 'fillStaffDeliveryNames_', 'planRegDeletion_', 'deleteDialogHtml_', 'DELETE_DIALOG_SCRIPT'];
+    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'FORM_NO_COL', 'updateEntryForm', 'normRegNo_', 'formRegGroup_', 'formEnsureEditRow_', 'FORM_L', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_', 'deleteRegistrations', 'cancelDeleteRegistrations', 'writeScheduleToLink_', 'writeAssigneeTabs_', 'withBranchRoom_', 'FORM_BR', 'saveBranchViews', 'taskPackOf_', 'fsReadDay_', 'fsReadsToday_', 'AUTO_READ_BUDGET', 'deliveryYmd_', 'fillStaffDeliveryNames_', 'planRegDeletion_', 'deleteDialogHtml_', 'DELETE_DIALOG_SCRIPT', 'regHeaderMap_', 'fixClientContactAssignees'];
   env.g = vm.runInContext(src + '\n;({' + names.join(',') + '})', ctx);
   // テストは時刻に関係なく Discord を送る（知らせる時間帯を 0-24 に）。時間帯のテストは env.setHours で変える
   env.setHours = (h) => { const st = env.admin.getSheetByName('設定'); const r = st && st.rows.findIndex(x => x[0] === '催促する時間帯（ベトナム時間）'); if (r >= 0) st.set(r + 1, 2, h); };
@@ -782,14 +783,14 @@ test('案件登録 → 入力シートへ写す → 翻訳済み → 2時間で 
   const rh = reg.header();
   const R = (r, name) => reg.rows[r - 1][rh.indexOf(name)];
   const setR = (r, name, v) => reg.set(r, rh.indexOf(name) + 1, v);
-  ['会社コード', '案件番号', '社外案件名', '担当者', '新規or修正', '視点', 'パターン', 'サーバーリンク', '納期', '注文書', '管理者メモ'].forEach(h => assert.ok(rh.includes(h), h));
+  ['会社コード', '案件番号', '社外案件名', 'お客様担当者', '新規or修正', '視点', 'パターン', 'サーバーリンク', '納期', '注文書', '管理者メモ'].forEach(h => assert.ok(rh.includes(h), h));
   assert.equal(admin.getSheets()[0].getName(), '案件入力', '案件入力（縦型フォーム）タブが先頭');
   assert.equal(admin.getSheets()[1].getName(), '案件登録', '案件登録タブはその次');
   assert.equal(rh[rh.indexOf('パターン') + 1], '社外視点名', '社外視点名はパターンの右');
 
   // 管理者が2行登録（2行目は視点が空＝記入中）
   [['RIC', 34, 'マンション', 'Quynh', NEWR, 'EX1', 'A', LINK, '2030-01-20', 'https://drive/order.pdf', '急ぎ']].forEach((vals, i) =>
-    ['会社コード', '案件番号', '社外案件名', '担当者', '新規or修正', '視点', 'パターン', 'サーバーリンク', '納期', '注文書', '管理者メモ'].forEach((h, j) => setR(2 + i, h, vals[j])));
+    ['会社コード', '案件番号', '社外案件名', 'お客様担当者', '新規or修正', '視点', 'パターン', 'サーバーリンク', '納期', '注文書', '管理者メモ'].forEach((h, j) => setR(2 + i, h, vals[j])));
   setR(3, '会社コード', 'REN'); setR(3, '案件番号', 72);
   let msg = env.g.syncRegistrationsNow();
   assert.ok(msg.indexOf('入力シートへ写した 1件') >= 0, msg);
@@ -849,7 +850,7 @@ test('案件登録 → 入力シートへ写す → 翻訳済み → 2時間で 
   msg = env.g.syncRegistrationsNow();
   assert.ok(msg.indexOf('Discord で催促 1件') >= 0, msg);
   assert.equal(env.discord.length, 1);
-  assert.ok(env.discord[0].indexOf('RIC.34 マンション EX2-A（新規） 担当 Quynh') >= 0, env.discord[0]);
+  assert.ok(env.discord[0].indexOf('RIC.34 マンション EX2-A（新規） お客様担当 Quynh') >= 0, env.discord[0]);
   assert.ok(env.discord[0].indexOf('期限 ') >= 0 && env.discord[0].indexOf('翻訳待ち') < 0, env.discord[0]);
   assert.equal(R(2, '催促回数'), 1);
   // すぐにはくり返さない。1時間たったらもう一度
@@ -860,7 +861,7 @@ test('案件登録 → 入力シートへ写す → 翻訳済み → 2時間で 
   assert.equal(env.discord.length, 2);
   assert.equal(R(2, '催促回数'), 2);
 
-  // エンジニアが時間と作業の分け方を書く → 時間入力済み（合計は入力シートにも入る）→ 転記で担当者・納期が『連携』に入る
+  // エンジニアが時間と作業の分け方を書く → 時間入力済み（合計は入力シートにも入る）→ 転記でお客様担当者・納期が『連携』に入る
   tab.set(3, sh.indexOf('White') + 1, 3);
   tab.set(3, sh.indexOf('Color') + 1, 2.5);
   tab.set(3, sh.indexOf('作業の分け方') + 1, 'White＝躯体2h／家具1h');
@@ -873,7 +874,8 @@ test('案件登録 → 入力シートへ写す → 翻訳済み → 2時間で 
   assert.equal(env.discord.length, 2, '時間が入ったら催促しない');
   const { at } = linkAt(admin);
   assert.equal(at(2, '社内案件名'), 'RIC.34');
-  assert.equal(at(2, '担当者'), 'Quynh');
+  assert.equal(at(2, '担当者'), '', '『登録一覧』のお客様担当者は作業の担当者（エンジニア）に入れない');
+  assert.equal(at(2, 'お客様担当者'), 'Quynh', 'お客様担当者に入る');
   assert.equal(at(2, '納期'), '2030-01-20');
 
   // 納品名は 社外案件名_社外視点名_今日の日付（工程図の書き出しは使わない）
@@ -1127,7 +1129,7 @@ test('『案件登録』は入力専用：「登録」にチェックした行�
   const E = (row, name, v) => ent.set(row, eh.indexOf(name) + 1, v);
   const EV = (row, name) => (ent.rows[row - 1] || [])[eh.indexOf(name)];
   const edit = (row, name) => env.g.onAdminEdit({ range: ent.getRange(row, eh.indexOf(name) + 1) });
-  const fill = (row, cut, pattern) => { E(row, '会社コード', 'REN'); E(row, '案件番号', 50); E(row, '社外案件名', 'マンション'); E(row, '担当者', '武田'); E(row, '新規or修正', '新規 / Mới'); E(row, '視点', cut); E(row, 'パターン', pattern); E(row, 'サーバーリンク', LINK); };
+  const fill = (row, cut, pattern) => { E(row, '会社コード', 'REN'); E(row, '案件番号', 50); E(row, '社外案件名', 'マンション'); E(row, 'お客様担当者', '武田'); E(row, '新規or修正', '新規 / Mới'); E(row, '視点', cut); E(row, 'パターン', pattern); E(row, 'サーバーリンク', LINK); };
   const staffRows = () => inTab(eng).rows.slice(2).filter(r => r.some(v => v !== '' && v !== false && v !== undefined)).length;
   const before = staffRows();
   // 書き終えただけでは送らない（状態だけ「登録できます」）
@@ -1145,7 +1147,7 @@ test('『案件登録』は入力専用：「登録」にチェックした行�
   const reg = admin.getSheetByName('登録一覧');
   const rh = reg.header();
   const R = (row, name) => reg.rows[row - 1][rh.indexOf(name)];
-  same([R(2, '登録No'), R(2, '視点'), R(2, 'パターン'), R(2, '担当者')], ['R0001', 'EX1', 'A', '武田']);
+  same([R(2, '登録No'), R(2, '視点'), R(2, 'パターン'), R(2, 'お客様担当者')], ['R0001', 'EX1', 'A', '武田']);
   same([R(3, '登録No'), R(3, '視点')], ['R0002', 'EX2']);
   assert.equal(R(2, '状態'), '翻訳待ち');
   assert.equal(staffRows(), before + 2, '入力シートに2行');
@@ -1207,7 +1209,7 @@ test('入力画面（縦型・1案件ずつ）：足りない項目を知らせ�
   const reg = admin.getSheetByName('登録一覧');
   const rh = reg.header();
   const R = (row, name) => reg.rows[row - 1][rh.indexOf(name)];
-  same([R(2, '視点'), R(2, 'パターン'), R(2, '担当者'), R(2, '通訳へのメッセージ'), R(2, '状態')], ['EX1', 'A', '武田', '昼景で', '翻訳待ち']);
+  same([R(2, '視点'), R(2, 'パターン'), R(2, 'お客様担当者'), R(2, '通訳へのメッセージ'), R(2, '状態')], ['EX1', 'A', '武田', '昼景で', '翻訳待ち']);
   same([R(3, '視点'), R(3, 'パターン')], ['EX2', 'B']);
   assert.equal(staffRows(), before + 2, '入力シートに2行');
   assert.ok(String(R(2, '通訳向け連絡文')).startsWith('REN.50案件の資料を共有しますので、翻訳をお願いします。') && String(R(2, '通訳向け連絡文')).endsWith('昼景で'), R(2, '通訳向け連絡文'));
@@ -1411,9 +1413,9 @@ test('『案件入力』：登録Noで呼び出して直す → 『登録一覧�
   assert.equal(r2.ok, true, r2.msg);
   assert.ok(r2.msg.startsWith('直しました：R0001・R0002／足しました：R0003・R0004（REN.70）'), r2.msg);
   assert.ok(r2.msg.includes('R0002 は会社コード・案件番号・視点・パターンを変えました'), r2.msg);
-  assert.ok(r2.msg.includes('担当者・納期は、工程図に登録済みなら'), r2.msg);
+  assert.ok(r2.msg.includes('お客様担当者・納期は、工程図に登録済みなら'), r2.msg);
   assert.equal(R('R0001', '社外案件名'), '戸建（2期）');
-  assert.equal(R('R0001', '担当者'), 'Tú Mĩ');
+  assert.equal(R('R0001', 'お客様担当者'), 'Tú Mĩ');
   assert.equal(R('R0001', '通訳へのメッセージ'), '昼景で', '通訳へのメッセージは空なら前のまま');
   assert.equal(R('R0002', 'パターン'), 'A');
   same([R('R0003', '視点'), R('R0003', 'パターン')], ['EX2', 'B']);
@@ -1755,7 +1757,7 @@ test('エンジニアが入力シート『入力前』で足した行（登録No
   const rh = reg.header();
   const R = (r, name) => reg.rows[r - 1][rh.indexOf(name)];
   const setR = (r, name, v) => reg.set(r, rh.indexOf(name) + 1, v);
-  const put = (r, vals) => ['会社コード', '案件番号', '社外案件名', '担当者', '新規or修正', '視点', 'パターン', 'サーバーリンク'].forEach((h, j) => setR(r, h, vals[j]));
+  const put = (r, vals) => ['会社コード', '案件番号', '社外案件名', 'お客様担当者', '新規or修正', '視点', 'パターン', 'サーバーリンク'].forEach((h, j) => setR(r, h, vals[j]));
   put(2, ['REN', 94, 'ロイヤルパークス有明', '井戸澤様', FIXR, 'IN4', 'A', LINK]);
   setR(2, '納期', new Date(2030, 0, 20));
   put(3, ['REN', 94, 'ロイヤルパークス有明', '井戸澤様', FIXR, 'IN4', 'B', LINK]);
@@ -1777,7 +1779,7 @@ test('エンジニアが入力シート『入力前』で足した行（登録No
   assert.equal(tab.rows[newRow - 1][C('登録No') - 1], 'R0004', '入力シートの行に登録No');
   assert.ok(rowB > 0);
   // 『登録一覧』では INE4-B のすぐ下（RIC.34 の前）に入る。担当者は同じ案件の前の登録から
-  same([R(4, '登録No'), R(4, '視点'), R(4, 'パターン'), R(4, '担当者'), R(4, '管理者メモ'), R(5, '登録No')], ['R0004', 'IN4', 'C', '井戸澤様', 'エンジニア入力シートで追加', 'R0003']);
+  same([R(4, '登録No'), R(4, '視点'), R(4, 'パターン'), R(4, 'お客様担当者'), R(4, '管理者メモ'), R(5, '登録No')], ['R0004', 'IN4', 'C', '井戸澤様', 'エンジニア入力シートで追加', 'R0003']);
   assert.equal(R(4, 'Color'), 0.5);
   assert.equal(R(4, '社外視点名'), '内観目線視点④_パターンC', '社外視点名も入る');
   assert.equal(String(R(4, '納期')), String(new Date(2030, 0, 20)), '納期は同じ案件の前の登録から');
@@ -2172,6 +2174,58 @@ test('枝番：『案件登録』タブの枝番は、部屋名の無い視点�
   same(JSON.parse(JSON.stringify(g.withBranchRoom_({ cut: 'INE1', branch: 'B棟' }))).cut, 'INE1_B棟');
   same(JSON.parse(JSON.stringify(g.withBranchRoom_({ cut: 'INE1_2F', branch: 'B棟' }))).cut, 'INE1_2F');
   same(JSON.parse(JSON.stringify(g.withBranchRoom_({ cut: 'INE1', branch: '' }))).cut, 'INE1');
+});
+
+test('お客様担当者：『登録一覧』の「担当者」はお客様の担当者。前の見出しは「お客様担当者」に書き換え、工程図の作業の担当者には入れない／入ってしまった名前を直す', () => {
+  const admin = adminSheet();
+  const eng = engineerFile();
+  const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
+  env.g.quickSetup();
+  const reg = admin.getSheetByName('登録一覧');
+  // 前の版の見出し（担当者）に戻しておく → 初期設定・読み込みで「お客様担当者」に直る
+  const hi = reg.header().indexOf('お客様担当者');
+  assert.ok(hi >= 0, '見出しは「お客様担当者」');
+  reg.set(1, hi + 1, '担当者');
+  assert.equal(env.g.regHeaderMap_(reg).assignee, hi + 1, '前の見出しでも読める');
+  env.g.quickSetup();
+  assert.equal(reg.header()[hi], 'お客様担当者', '初期設定で見出しを書き換える');
+  assert.equal(reg.header().filter(h => h === 'お客様担当者').length, 1, '列は増えない');
+  const rh = reg.header();
+  const setR = (r, name, v) => reg.set(r, rh.indexOf(name) + 1, v);
+  ['会社コード', '案件番号', '社外案件名', 'お客様担当者', '新規or修正', '視点', 'サーバーリンク'].forEach((h, j) => setR(2, h, ['RIC', 34, 'マンション', '竹内様', NEWR, 'EX1', LINK][j]));
+  env.g.syncRegistrationsNow();
+  const tab = inTab(eng);
+  const sh = tab.header(2).map(h => h.split('\n')[0]);
+  tab.set(3, sh.indexOf('White躯体') + 1, 2);
+  env.g.transferFromStaffSheet();
+  const { at } = linkAt(admin);
+  same([at(2, '担当者'), at(2, 'お客様担当者')], ['', '竹内様'], '『連携』では お客様担当者 に入る');
+  // 『登録一覧』のお客様担当者を直すと、次の転記で『連携』も直る
+  setR(2, 'お客様担当者', '竹内 様');
+  env.g.transferFromStaffSheet();
+  assert.equal(linkAt(admin).at(2, 'お客様担当者'), '竹内 様');
+
+  // 前の版で入ってしまった分を直す：『連携』の担当者・工程図の作業・予定のまとめ・『予定_竹内 様』タブ
+  const link = admin.getSheetByName('連携');
+  const lh = link.header();
+  link.set(2, lh.indexOf('担当者') + 1, '竹内 様');
+  link.set(2, lh.indexOf('お客様担当者') + 1, '');
+  [['t1', '竹内 様', 'pending'], ['t2', '竹内 様', 'done'], ['t3', 'Mr.Dung', 'pending'], ['t4', '上田', 'pending']].forEach(([id, who, st]) =>
+    env.fs.putTask(id, { id: { stringValue: id }, assignee: { stringValue: who }, status: { stringValue: st }, customerContact: { stringValue: '' } }));
+  env.fs.docs['workspaces/liebe-asia-team/data/employeeMaster'] = { value: { stringValue: JSON.stringify([{ name: 'Mr.Dung' }, { name: '上田' }]) } };
+  setR(3, 'お客様担当者', '上田'); // 社員マスタにある名前は直さない
+  env.fs.docs['workspaces/liebe-asia-team/data/scheduleSnapshot'] = { value: { stringValue: JSON.stringify({ updatedAt: 1, items: { 'RIC34::EX1::1': { a: '竹内 様・Mr.Dung' } }, plan: { from: '2026-11-10', days: 14, rows: [{ a: '竹内 様', p: 'RIC.34' }] } }) } };
+  admin.insertSheet('予定_竹内 様');
+  admin.insertSheet('予定_Mr.Dung');
+  const msg = env.g.fixClientContactAssignees();
+  assert.ok(msg.includes('工程図の作業：2件'), msg);
+  const tk = (id) => env.fs.tasks().find(t => t.id === id);
+  same([tk('t1').assignee, tk('t1').customerContact, tk('t2').assignee, tk('t3').assignee, tk('t4').assignee], ['未割当', '竹内 様', '未割当', 'Mr.Dung', '上田']);
+  same([linkAt(admin).at(2, '担当者'), linkAt(admin).at(2, 'お客様担当者')], ['', '竹内 様']);
+  const snap = JSON.parse(env.fs.docs['workspaces/liebe-asia-team/data/scheduleSnapshot'].value.stringValue);
+  same([snap.items['RIC34::EX1::1'].a, snap.plan.rows[0].a], ['未割当・Mr.Dung', '未割当']);
+  same([!!admin.getSheetByName('予定_竹内 様'), !!admin.getSheetByName('予定_Mr.Dung')], [false, true], 'お客様の名前の予定表タブだけ消す');
+  assert.equal(env.discord.length, 0, 'Discord には送らない');
 });
 
 console.log(`\n${passed} tests passed`);

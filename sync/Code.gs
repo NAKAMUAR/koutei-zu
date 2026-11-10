@@ -152,7 +152,7 @@ const SETTING_NOTES = {
   notify: '「する」：『案件登録』で翻訳済みになってから制作時間が出ない視点を Discord で知らせる（Webhook はメニュー「Discord 通知の設定」）。「しない」：知らせない',
   notifyFirst: '催促は、連絡文の {計算期限}（登録日時＋下の「制作時間の計算の期限」）を過ぎても制作時間が空なら送る。この欄は登録日時が無い行だけに使う（翻訳済みからの時間）',
   notifyRepeat: '1回目のあとは、この時間ごとに知らせる（15分ごとの自動実行で確かめるので、最大15分ほど遅れる）',
-  regMessage: '『案件登録』の「連絡文」列とメニュー「連絡文をコピー」のひな形（エンジニア向け）。使える文字：{社内案件名} {社外案件名} {サーバーリンク} {視点一覧} {視点} {パターン} {担当者} {納期} {新規or修正} {通訳へのメッセージ} {登録日時} {計算期限}（＝登録日時＋「制作時間の計算の期限」）（セルの中の改行もそのまま使えます）',
+  regMessage: '『案件登録』の「連絡文」列とメニュー「連絡文をコピー」のひな形（エンジニア向け）。使える文字：{社内案件名} {社外案件名} {サーバーリンク} {視点一覧} {視点} {パターン} {お客様担当者} {納期} {新規or修正} {通訳へのメッセージ} {登録日時} {計算期限}（＝登録日時＋「制作時間の計算の期限」）（セルの中の改行もそのまま使えます）',
   calcMinutes: '連絡文の {計算期限} ＝『登録一覧』の登録日時＋この分数（90 ＝ 1時間30分後）。下の「数える時間帯」の外（昼休み・終業後）は数えない',
   calcHours: '{計算期限} を数える時間帯（ベトナム時間）。「8-12,13-17」＝ 8〜12時と13〜17時だけ数える（12〜13時の昼休みと17時以降は数えず、次の日の8時から続きを数える）。時間帯を気にせず足すなら「0-24」',
   interpMessage: '『登録一覧』の「通訳向け連絡文」列と、『案件入力』で登録するときの確認画面のひな形。使える文字は「登録時の連絡文」と同じ。{通訳へのメッセージ} には登録のときに書いた「通訳へのメッセージ」が入る（空なら行ごと消える）',
@@ -358,7 +358,7 @@ function transfer_() {
 
   const staffRows = readStaffRows_(cfg);
   const sourceRows = collectSourceRows_(staffRows);
-  const regInfo = readRegInfo_(ss); // 登録No → 担当者・納期（『案件登録』から）
+  const regInfo = readRegInfo_(ss); // 登録No → お客様担当者・納期（『登録一覧』から）
 
   const data = link.getDataRange().getValues();
   const byKey = new Map();
@@ -385,6 +385,9 @@ function transfer_() {
       const cur = data[r];
       const fields = { code: s.code, cut: s.cut, pattern: s.pattern, request: s.request, deadline: s.deadline, white: s.white, color: s.color, other: s.other, item: s.item, note: s.note, srcRow: s.srcRow, link: s.link, split: s.split };
       if (s.name) fields.name = s.name; // スタッフシートに社外案件名があるときだけ追従（無ければ人が入れた値を保つ）
+      // 『登録一覧』のお客様担当者が変わったら『連携』のお客様担当者も合わせる（内容の変更とはみなさない）
+      const riNow = s.regNo ? regInfo.get(s.regNo) : null;
+      if (riNow && riNow.contact && col.contact && !sameCell_(cur[col.contact - 1], riNow.contact)) cellUpdates.push({ row: r + 1, col: col.contact, value: riNow.contact });
       let changed = false;
       const diffs = [];
       Object.keys(fields).forEach(f => {
@@ -421,8 +424,8 @@ function transfer_() {
       code: s.code, name: j.name, cut: s.cut, pattern: s.pattern, extName: (ri && ri.extName) || j.extName, round: s.round, request: s.request,
       deadline: s.deadline !== undefined ? s.deadline : (ri && trimStr_(ri.deadline) !== '' ? parseDeadline_(ri.deadline, now) : undefined),
       white: s.white, color: s.color, other: s.other, item: s.item, note: s.note,
-      company: j.company, contact: j.contact, category: j.category, kind: j.kind, stepKind: j.stepKind,
-      assignee: (ri && ri.assignee) || '', memo: '', exclude: false,
+      company: j.company, contact: (ri && ri.contact) || j.contact, category: j.category, kind: j.kind, stepKind: j.stepKind,
+      assignee: '', memo: '', exclude: false, // 担当者（エンジニア）は『設定』の既定 → 工程図で決める
       transferredAt: stamp, sentAt: '', result: j.note, srcRow: s.srcRow, link: s.link, split: s.split,
     };
     appends.push(rowObjToArray_(rowObj, col));
@@ -1521,6 +1524,118 @@ function writeAssigneeTabs_(ss, snap) {
   props.setProperty('PLAN_TABS_SIG', sig);
   return { tabs, rows: count, skipped: false };
 }
+// ============ お客様担当者の直し（2026-11-10） ============
+// 2026-11-10 まで、『登録一覧』（『案件登録』『案件入力』）の「担当者」＝お客様の担当者（竹内様 など）を、
+// 工程図の作業の担当者（エンジニア）として送っていた。工程図の担当者に入ったお客様の名前を
+// 「お客様担当者」へ移し、作業の担当者は『設定』の既定（未割当）に戻す。
+
+/** 直す作業を選ぶ（純ロジック）。names：お客様担当者の名前、engineers：工程図の社員マスタの名前（同じ名前は直さない）、def：戻す担当者
+ *  戻り値 [{ id, from, assignee, customerContact }] */
+function clientAssigneeFixes_(tasks, names, engineers, def) {
+  const eng = new Set((engineers || []).map(n => trimStr_(n)).filter(Boolean));
+  const set = new Set((names || []).map(n => trimStr_(n)).filter(n => n && !eng.has(n)));
+  const out = [];
+  (tasks || []).forEach(t => {
+    const who = trimStr_(t && t.assignee);
+    if (!who || !set.has(who)) return;
+    out.push({ id: t.id || t._id, from: who, assignee: def || '未割当', customerContact: who });
+  });
+  return out;
+}
+/** 予定のまとめ（data/scheduleSnapshot）の担当者名を置き換える（純ロジック。工程図を開くと計算し直されるまでのつなぎ） */
+function renameSnapshotAssignees_(snap, names, def) {
+  if (!snap) return snap;
+  const set = new Set((names || []).map(n => trimStr_(n)).filter(Boolean));
+  const fix = (who) => (set.has(trimStr_(who)) ? def : who);
+  const items = {};
+  Object.keys(snap.items || {}).forEach(k => {
+    const it = Object.assign({}, snap.items[k]);
+    if (it.a) it.a = String(it.a).split('・').map(fix).filter((v, i, a) => v && a.indexOf(v) === i).join('・');
+    items[k] = it;
+  });
+  const out = Object.assign({}, snap, { items });
+  if (snap.plan && Array.isArray(snap.plan.rows)) out.plan = Object.assign({}, snap.plan, { rows: snap.plan.rows.map(r => Object.assign({}, r, { a: fix(r.a) })) });
+  return out;
+}
+/** 『登録一覧』『案件登録』『削除済み』の「お客様担当者」（前の版は「担当者」）に書かれた名前 */
+function readClientContactNames_(ss) {
+  const names = new Set();
+  [SHEET.REG, SHEET.ENTRY, SHEET.TRASH].forEach(tab => {
+    const sh = ss.getSheetByName(tab);
+    if (!sh || sh.getLastRow() < 2 || sh.getLastColumn() < 1) return;
+    const data = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getValues();
+    const i = regHeadIdx_(data[0].map(v => trimStr_(v)), 'assignee');
+    if (i < 0) return;
+    data.slice(1).forEach(v => { const n = trimStr_(v[i]); if (n) names.add(n); });
+  });
+  return Array.from(names);
+}
+/**
+ * メニュー／エディタから1回実行：工程図の担当者に入ったお客様の名前を直す。
+ * ①『連携』の「担当者」→「お客様担当者」へ移す ② 工程図の作業の担当者を既定（未割当）に・お客様担当者にその名前
+ * ③ 予定のまとめの担当者名を置き換え、お客様の名前の『予定_○○』タブを消す。Discord には送らない
+ */
+function fixClientContactAssignees() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const cfg = readSettings_();
+  const def = trimStr_(cfg.defaultAssignee) || '未割当';
+  const auth = getAuth_();
+  const names = readClientContactNames_(ss);
+  let engineers = [];
+  try { engineers = JSON.parse(fsGetValueString_(auth, cfg, 'employeeMaster') || '[]').map(e => trimStr_(e && e.name)).filter(Boolean); } catch (e) { engineers = []; }
+  const skipped = names.filter(n => engineers.indexOf(n) >= 0);
+  const clients = names.filter(n => engineers.indexOf(n) < 0);
+  const lines = ['お客様担当者の名前：' + (clients.join('・') || 'なし') + (skipped.length ? '（社員マスタにある名前は直さない：' + skipped.join('・') + '）' : '')];
+
+  // ①『連携』
+  const link = ss.getSheetByName(SHEET.LINK);
+  let linkFixed = 0;
+  if (link && link.getLastRow() >= 2) {
+    const col = headerMap_(link);
+    const n = link.getLastRow() - 1;
+    const asg = link.getRange(2, col.assignee, n, 1).getValues();
+    const con = link.getRange(2, col.contact, n, 1).getValues();
+    asg.forEach((v, i) => {
+      const who = trimStr_(v[0]);
+      if (!who || clients.indexOf(who) < 0) return;
+      con[i][0] = who; asg[i][0] = ''; linkFixed++;
+    });
+    if (linkFixed) { link.getRange(2, col.assignee, n, 1).setValues(asg); link.getRange(2, col.contact, n, 1).setValues(con); }
+  }
+  lines.push('『連携』：' + linkFixed + '行（担当者 → お客様担当者）');
+
+  // ② 工程図の作業
+  const tasks = fsTaskPacks_(auth, cfg) ? fsAllPackedTasks_(auth, cfg) : fsListAll_(auth, cfg, 'workspaces/' + cfg.workspaceId + '/tasks');
+  const fixes = clientAssigneeFixes_(tasks, clients, engineers, def);
+  let done = 0;
+  fixes.forEach(f => {
+    fsTaskPatch_(auth, cfg, f.id, { assignee: { stringValue: f.assignee }, customerContact: { stringValue: f.customerContact } }, ['assignee', 'customerContact']);
+    done++;
+  });
+  const byWho = {};
+  fixes.forEach(f => { byWho[f.from] = (byWho[f.from] || 0) + 1; });
+  lines.push('工程図の作業：' + done + '件（担当者 → ' + def + '・お客様担当者に名前）' + (done ? '　' + Object.keys(byWho).map(k => k + ' ' + byWho[k]).join('・') : ''));
+
+  // ③ 予定のまとめ・『予定_○○』タブ
+  const raw = fsGetValueString_(auth, cfg, 'scheduleSnapshot');
+  if (raw) {
+    try {
+      const snap = renameSnapshotAssignees_(JSON.parse(raw), clients, def);
+      fsPatch_(auth, cfg, 'workspaces/' + cfg.workspaceId + '/data/scheduleSnapshot', { value: JSON.stringify(snap), updatedAt: Date.now() });
+    } catch (e) { lines.push('予定のまとめは直せませんでした：' + (e && e.message || e)); }
+  }
+  let removed = 0;
+  ss.getSheets().forEach(sh => {
+    const nm = sh.getName();
+    if (nm.indexOf(PLAN_TAB_PREFIX) !== 0) return;
+    if (clients.some(c => planTabName_(c) === nm)) { ss.deleteSheet(sh); removed++; }
+  });
+  PropertiesService.getScriptProperties().deleteProperty('PLAN_TABS_SIG');
+  lines.push('『予定_』タブ：' + removed + '個消しました（担当者の予定表は次の自動実行で作り直します）');
+  const msg = lines.join('\n');
+  console.log(msg);
+  return msg;
+}
 /** 社内案件名（RIC.34 など）のタスクだけを読む（projectNameInternal で絞る。30件ずつ） */
 function fsTasksByProjects_(auth, cfg, codes) {
   if (fsTaskPacks_(auth, cfg)) return fsAllPackedTasks_(auth, cfg).filter(t => codes.indexOf(t.projectNameInternal) >= 0);
@@ -1841,14 +1956,14 @@ function stopAutoRun() {
 // ============ 案件登録（管理者）→ エンジニア入力シート → 翻訳 → 時間計算の催促（Discord） ============
 // 流れ：
 //   ① 管理者が『案件登録』タブに1視点1行で登録（社外案件名・担当者・視点・パターン・サーバーリンク・納期・注文書…）
-//   ② 15分ごとの自動実行（またはメニュー）で、エンジニア入力シートへ必要な列だけ写す（注文書・管理者メモ・担当者・納期は写さない）
+//   ② 15分ごとの自動実行（またはメニュー）で、エンジニア入力シートへ必要な列だけ写す（注文書・管理者メモ・お客様担当者・納期は写さない）
 //   ③ 通訳が入力シートの「翻訳済み」にチェック → エンジニアが White・Color・pts と作業の分け方を書く
 //   ④ 翻訳済み・時間・作業の分け方を『案件登録』に読み戻し、状態（翻訳待ち／時間計算待ち／時間入力済み）を付ける
 //   ⑤ 連絡文の期限（登録日時＋計算の期限）を過ぎても時間が空なら Discord で催促（以降1時間ごと）
-//   ⑥ 時間が入った行は、いつもの転記 → 自動登録で工程図へ（担当者・納期は『案件登録』から入る）
+//   ⑥ 時間が入った行は、いつもの転記 → 自動登録で工程図へ（お客様担当者・納期は『案件登録』から入る）
 const REG_H = {
   no: '登録No', state: '状態',
-  code: '会社コード', number: '案件番号', branch: '枝番', name: '社外案件名', internal: '社内案件名', assignee: '担当者', request: '新規or修正',
+  code: '会社コード', number: '案件番号', branch: '枝番', name: '社外案件名', internal: '社内案件名', assignee: 'お客様担当者', request: '新規or修正',
   cut: '視点', pattern: 'パターン', extName: '社外視点名', link: 'サーバーリンク', deadline: '納期', order: '注文書', memo: '管理者メモ',
   translated: '翻訳済み', translatedAt: '翻訳日時', transNote: '翻訳メモ', white: 'White', color: 'Color', other: 'pts', total: '合計', split: '作業の分け方',
   estimator: '時間入力者', estimatedAt: '時間入力日時',
@@ -1860,6 +1975,26 @@ const REG_ORDER = ['no', 'state', 'manual', 'regDate', 'copy', 'del', 'delReq', 
 // 2026-11-03：管理者が書くのは『案件登録』（入力専用）。「登録」にチェックした行に登録No を付け、
 // エンジニア入力シートへ写して『登録一覧』へ移す（『案件登録』からは消える）。それまでの『案件登録』は『登録一覧』に名前を変える。
 const ENTRY_H = { submit: '登録', state: '状態' };
+// 前の版の見出し（2026-11-10 まで「担当者」。中身はお客様の担当者なので「お客様担当者」に名前を変えた）。見つかれば新しい名前に書き換える
+const REG_H_OLD = { assignee: '担当者' };
+/** 見出しの並び → その項目の位置（0から。無ければ -1）。前の版の見出しも探す */
+function regHeadIdx_(headers, k, label) {
+  const i = headers.indexOf(label || REG_H[k]);
+  if (i >= 0 || !REG_H_OLD[k]) return i;
+  return headers.indexOf(REG_H_OLD[k]);
+}
+/** 1行目の前の版の見出し（担当者）を新しい名前（お客様担当者）に書き換える。書き換えた見出しの並びを返す */
+function renameOldRegHeads_(sheet, headers) {
+  const out = headers.slice();
+  Object.keys(REG_H_OLD).forEach(k => {
+    if (out.indexOf(REG_H[k]) >= 0) return;
+    const i = out.indexOf(REG_H_OLD[k]);
+    if (i < 0) return;
+    sheet.getRange(1, i + 1).setValue(REG_H[k]);
+    out[i] = REG_H[k];
+  });
+  return out;
+}
 const ENTRY_ORDER = ['submit', 'state', 'code', 'number', 'branch', 'name', 'internal', 'assignee', 'request', 'cut', 'pattern', 'link', 'deadline', 'order', 'memo', 'toInterp'];
 const ENTRY_STATE = { DRAFT: '記入中', READY: '登録できます' };
 const ENTRY_NOTES = {
@@ -1870,14 +2005,14 @@ const ENTRY_NOTES = {
 const REG_OPTIONAL = ['branch', 'extName', 'del', 'delReq', 'notifyOff'];
 // 管理者が書く列（ほかの列は自動で入る）
 const REG_INPUT = ['code', 'number', 'name', 'assignee', 'request', 'cut', 'pattern', 'link', 'deadline', 'order', 'memo', 'toInterp'];
-// エンジニア入力シートへ写す列（案件登録 → 入力シート。担当者・納期・注文書・管理者メモは写さない）
+// エンジニア入力シートへ写す列（案件登録 → 入力シート。お客様担当者・納期・注文書・管理者メモは写さない）
 const REG_COPY = ['code', 'number', 'name', 'link', 'request', 'cut', 'pattern', 'toInterp'];
 const REG_STATE = { DRAFT: '記入中', TRANSLATE: '翻訳待ち', ESTIMATE: '時間計算待ち', DONE: '時間入力済み', MISSING: '入力シートに無い', DELETED: '削除済み', WAITING: '資料待ち' };
 const REG_NOTES = {
   no: '自動で入る番号。入力シートの「登録No」と同じ。消すと次の自動実行でもう一度写す（入力シートに同じ行が2つできるので注意）',
   state: '自動：記入中（会社コード・案件番号・視点・新規or修正のどれかが空）／翻訳待ち／時間計算待ち（翻訳済み・時間が空）／時間入力済み／資料待ち（エンジニア入力シートの「資料待ち」にチェック。催促しない）／入力シートに無い（入力シートで行が消された）',
   code: 'REN・RIC など（『会社マスタ』の英字）', number: '案件の番号（数字）', name: 'お客様の案件名（工程図の案件名）',
-  internal: '自動：会社コード＋案件番号（RIC.34）', assignee: '工程図の担当者（入力シートには写さない）',
+  internal: '自動：会社コード＋案件番号（RIC.34）', assignee: 'お客様の担当者（竹内様 など）。工程図の「お客様担当者」に入る（作業をするエンジニアの担当者ではない。入力シートには写さない）',
   request: 'その視点の初回は「新規」、2回目以降は「修正」', cut: 'EX1・IN2 など（『視点マスタ』のキーワード＋番号）', pattern: 'パターン違いがあれば A・B…',
   del: 'この登録を消すときにチェック → 確認の画面で「削除する」。エンジニア入力シートの行と工程図の作業を消す（この行はチェックが付いたまま残り、状態が「削除済み」になる）。チェックを外すと元に戻る。同じ視点のあとの回（2回目など）がある行は、あとの回から消す',
   branch: '枝番（2F・3F・A棟 など。空欄なら無し）。視点の部屋名として付く（視点は INE1_2F、社外視点名は 2F内観目線視点①）。同じ案件の中で枝番ごとに視点①から数える',
@@ -1922,7 +2057,7 @@ function ensureRegSheet_(ss, masters) {
   }
   if (!sheet) sheet = ss.insertSheet(SHEET.REG, 0);
   const lastCol = sheet.getLastColumn();
-  const first = lastCol ? sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(v => trimStr_(v)) : [];
+  const first = lastCol ? renameOldRegHeads_(sheet, sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(v => trimStr_(v))) : [];
   if (first.filter(Boolean).length === 0) {
     ensureSize_(sheet, 1, REG_ORDER.length);
     sheet.getRange(1, 1, 1, REG_ORDER.length).setValues([REG_ORDER.map(k => REG_H[k])]);
@@ -1991,7 +2126,7 @@ function ensureEntrySheet_(ss, masters) {
   let sheet = ss.getSheetByName(SHEET.ENTRY);
   if (!sheet) sheet = ss.insertSheet(SHEET.ENTRY, 0);
   const lastCol = sheet.getLastColumn();
-  const first = lastCol ? sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(v => trimStr_(v)) : [];
+  const first = lastCol ? renameOldRegHeads_(sheet, sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(v => trimStr_(v))) : [];
   const label = (k) => ENTRY_H[k] || REG_H[k];
   if (first.filter(Boolean).length === 0) {
     ensureSize_(sheet, 1, ENTRY_ORDER.length);
@@ -2031,7 +2166,7 @@ function entryHeaderMap_(sheet) {
   const lastCol = sheet.getLastColumn();
   const headers = lastCol ? sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(v => trimStr_(v)) : [];
   const col = {};
-  ENTRY_ORDER.forEach(k => { const i = headers.indexOf(ENTRY_H[k] || REG_H[k]); if (i >= 0) col[k] = i + 1; });
+  ENTRY_ORDER.forEach(k => { const i = regHeadIdx_(headers, k, ENTRY_H[k] || REG_H[k]); if (i >= 0) col[k] = i + 1; });
   const missing = ENTRY_ORDER.filter(k => k !== 'branch' && !col[k]);
   if (missing.length) throw new Error('『' + SHEET.ENTRY + '』タブの見出しが見つかりません: ' + missing.map(k => ENTRY_H[k] || REG_H[k]).join('、') + '（メニュー「0. かんたん初期設定」を実行してください）');
   return col;
@@ -2240,7 +2375,7 @@ function updateEntryForm(p) {
       '（' + joinCode_(res.rows[0].code, res.rows[0].number) + '）。エンジニア入力シートも直しました'];
     if (r && r.msg) lines.push(r.msg);
     if (moved.length) lines.push('※ ' + moved.join('・') + ' は会社コード・案件番号・視点・パターンを変えました。工程図に登録済みなら、工程図では別の視点として登録されるので、前の視点は工程図で消してください');
-    if (toApp.length) lines.push('※ ' + toApp.join('・') + ' の担当者・納期は、工程図に登録済みなら工程図のほうも直してください（登録前ならこのまま使われます）');
+    if (toApp.length) lines.push('※ ' + toApp.join('・') + ' のお客様担当者・納期は、工程図に登録済みなら工程図のほうも直してください（登録前ならこのまま使われます）');
     const nos = res.rows.filter(x => x.no).map(x => x.no).concat(newNos);
     return { ok: true, nos, msg: lines.join('\n') };
   } finally {
@@ -2374,7 +2509,7 @@ function entryFormHtml_(o) {
     field('code', '会社コード' + req, '<select id="code">' + options(o.codes, '選んでください') + '</select>') +
     field('number', '案件番号' + req, '<input id="number" type="text" inputmode="numeric" placeholder="例 50">') +
     field('name', '社外案件名', text('name', '例 マンション')) +
-    field('assignee', '担当者', text('assignee', '工程図の担当者（入力シートには写さない）')) +
+    field('assignee', 'お客様担当者', text('assignee', 'お客様の担当者（竹内様 など）。エンジニアの担当者ではない')) +
     field('link', 'サーバーリンク', text('link', '保存先フォルダのリンク')) +
     field('deadline', '納期', '<input id="deadline" type="date">', '入力シートには写さない（工程図の納期に入る）') +
     field('order', '注文書', text('order', '注文書のファイルのリンクなど')) +
@@ -2413,7 +2548,7 @@ const FORM_BR_LABEL = '枝番と視点を画面で選ぶ →';
 const FORM_LC = { label: 1, room: 2, pattern: 5, plus: 7, del: 8, ext: 9, white: 23, color: 24 }; // W・X：White・Color の時間（管理者が決めたときだけ）
 const FORM_FIELD_NOTES = {
   code: '必須。REN・RIC など', number: '必須。数字だけ（例 50）',
-  branch: '任意。部屋・建物ごとに分けるとき（2F・3F・A棟 など）。右の「枝番と視点を画面で選ぶ」にチェックすると、枝番の追加と枝番ごとの視点を1つの画面で選べる（2F内観目線視点①・3F内観目線視点① のように枝番ごとに①から数える）', assignee: '工程図の担当者（入力シートには写さない）',
+  branch: '任意。部屋・建物ごとに分けるとき（2F・3F・A棟 など）。右の「枝番と視点を画面で選ぶ」にチェックすると、枝番の追加と枝番ごとの視点を1つの画面で選べる（2F内観目線視点①・3F内観目線視点① のように枝番ごとに①から数える）', assignee: 'お客様の担当者（竹内様 など）。工程図の「お客様担当者」に入る（作業をするエンジニアの担当者ではない。入力シートには写さない）',
   request: '必須。この案件の視点すべてに同じものが入る', deadline: '入力シートには写さない（工程図の納期に入る）',
   memo: '管理者だけのメモ（入力シートには写さない）',
 };
@@ -2591,7 +2726,11 @@ function formMap_(sheet) {
   const key = vals.map(r => trimStr_(r[FORM_KEY_COL - 1]));
   const at = (label) => a.indexOf(label) + 1;
   const m = { fields: {}, grid: [] };
-  FORM_FIELDS.forEach(k => { m.fields[k] = at(REG_H[k]); });
+  FORM_FIELDS.forEach(k => {
+    m.fields[k] = at(REG_H[k]);
+    // 前の版の項目名（担当者）なら新しい名前（お客様担当者）に書き換える
+    if (!m.fields[k] && REG_H_OLD[k] && at(REG_H_OLD[k])) { m.fields[k] = at(REG_H_OLD[k]); sheet.getRange(m.fields[k], 1).setValue(REG_H[k]); }
+  });
   Object.keys(FORM_L).forEach(k => { m[k] = at(FORM_L[k]); });
   m.width = width;
   if (!m.pick || !m.sum || !m.list || !m.submit || width < FORM_KEY_COL) throw new Error('『' + SHEET.FORM + '』タブの形が崩れています。メニュー「『案件入力』タブを作り直す」を実行してください');
@@ -3310,7 +3449,7 @@ function regHeaderMap_(sheet) {
   const lastCol = sheet.getLastColumn();
   const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(v => trimStr_(v));
   const col = {};
-  Object.keys(REG_H).forEach(k => { const i = headers.indexOf(REG_H[k]); if (i >= 0) col[k] = i + 1; });
+  Object.keys(REG_H).forEach(k => { const i = regHeadIdx_(headers, k); if (i >= 0) col[k] = i + 1; });
   const missing = Object.keys(REG_H).filter(k => !col[k] && REG_OPTIONAL.indexOf(k) < 0);
   if (missing.length) throw new Error('『' + SHEET.REG + '』タブの見出しが見つかりません: ' + missing.map(k => REG_H[k]).join('、') + '（メニュー「初期設定」を実行してください）');
   return col;
@@ -3427,7 +3566,7 @@ function reminderMessage_(items, cfg) {
 function regLabel_(r) {
   const req = String(r.request || '').indexOf('修正') === 0 ? '修正' : '新規';
   return [joinCode_(r.code, r.number), trimStr_(r.name), viewpointNameOf_(r.cut, r.pattern)].filter(Boolean).join(' ') +
-    '（' + req + '）' + (trimStr_(r.assignee) ? ' 担当 ' + trimStr_(r.assignee) : '');
+    '（' + req + '）' + (trimStr_(r.assignee) ? ' お客様担当 ' + trimStr_(r.assignee) : '');
 }
 function nextRegNo_(rows, col, extraNos) {
   let max = 0;
@@ -3816,7 +3955,7 @@ function regGroupKey_(row) {
 }
 /**
  * 連絡文のひな形 → 文（純ロジック）。rows は同じ案件の行（1行目の値を使い、{視点一覧} は全行の視点）。
- * 使える文字：{社内案件名} {社外案件名} {サーバーリンク} {視点一覧} {視点} {パターン} {担当者} {納期} {新規or修正}
+ * 使える文字：{社内案件名} {社外案件名} {サーバーリンク} {視点一覧} {視点} {パターン} {お客様担当者} {納期} {新規or修正}
  *   {通訳へのメッセージ} {登録日時} {計算期限}（＝登録日時＋opts.calcMinutes 分）。opts.fmt で日時の書き方を変えられる
  */
 function renderRegMessage_(template, rows, opts) {
@@ -3840,7 +3979,8 @@ function renderRegMessage_(template, rows, opts) {
     '視点一覧': views.join('・'),
     '視点': viewpointNameOf_(first.cut, ''),
     'パターン': normPattern_(first.pattern),
-    '担当者': trimStr_(first.assignee),
+    'お客様担当者': trimStr_(first.assignee),
+    '担当者': trimStr_(first.assignee), // 前の版のひな形（{担当者}）もそのまま使える
     '納期': dl ? (dl.getMonth() + 1) + '/' + dl.getDate() : trimStr_(first.deadline),
     '新規or修正': String(first.request || '').indexOf('修正') === 0 ? '修正' : '新規',
     '通訳へのメッセージ': list.map(r => trimStr_(r.toInterp)).filter((v, i, a) => v && a.indexOf(v) === i).join('\n'),
@@ -4102,7 +4242,8 @@ function readDeliveryNames_(cfg) {
   }
 }
 
-/** 『案件登録』の 登録No → { assignee, deadline }（転記のとき『連携』の担当者・納期に入れる） */
+/** 『登録一覧』の 登録No → { contact, deadline, extName }（転記のとき『連携』のお客様担当者・納期・社外視点名に入れる）。
+ *  「お客様担当者」列（2026-11-10 まで「担当者」）はお客様の担当者なので、『連携』の「担当者」（エンジニア）には入れない */
 function readRegInfo_(ss) {
   const reg = ss.getSheetByName(SHEET.REG);
   const map = new Map();
@@ -4111,7 +4252,7 @@ function readRegInfo_(ss) {
   try { rc = regHeaderMap_(reg); } catch (e) { return map; }
   reg.getDataRange().getValues().slice(1).forEach(v => {
     const no = trimStr_(v[rc.no - 1]);
-    if (no) map.set(no, { assignee: trimStr_(v[rc.assignee - 1]), deadline: v[rc.deadline - 1], extName: rc.extName ? trimStr_(v[rc.extName - 1]) : '' });
+    if (no) map.set(no, { contact: trimStr_(v[rc.assignee - 1]), deadline: v[rc.deadline - 1], extName: rc.extName ? trimStr_(v[rc.extName - 1]) : '' });
   });
   return map;
 }
@@ -5463,11 +5604,11 @@ const HOWTO_LINES = [
   '0. いちばん手軽なのは『案件入力』タブ（縦型のフォーム）。上から案件の項目を書き、①で視点（外観目線・内観目線…）の番号にチェックすると②に1行ずつ並びます。②では視点ごとに部屋名（2F など。「2F,3F」で部屋ごとの行に）・パターン（＋で足す）・社外視点名を直せます。「前回の視点を呼び出す」にチェックすると、同じ案件で前回登録した視点が入ります。登録した内容を直すときは「登録Noで直す」に登録No（R0002 など）を入れると、その登録が呼び出されます。直して「登録」にチェックすると上書きし、エンジニア入力シートも直ります（①で足した視点は新しく登録）。最後に「登録」にチェックすると通訳へのメッセージを書く画面が出て、「登録する」で『登録一覧』とエンジニア入力シートに載ります（入力シートの視点は EXE1_2F のようなコード）。',
   '   メニュー「工程図連携 → 案件を登録（入力画面）」の小さな画面からも、同じように登録できます。',
   '1. 管理者がこのファイルの『案件登録』タブ（入力専用）に1視点1行で書く：会社コード・案件番号・社外案件名・担当者・新規or修正・視点・パターン・サーバーリンク・納期・注文書・管理者メモ（黄色い見出しの列）。「状態」に足りない項目が出ます。',
-  '2. 書き終えたら「登録」にチェックします。登録No（R0001…）が付き、エンジニア入力シートへ 会社コード・案件番号・社外案件名・サーバーリンク・新規or修正・視点・パターン と「登録No」だけを写し、行は『登録一覧』へ移ります（『案件登録』からは消え、次の案件を書ける）。担当者・納期・注文書・管理者メモは入力シートへ写しません。足りない項目があるとチェックが外れます。',
+  '2. 書き終えたら「登録」にチェックします。登録No（R0001…）が付き、エンジニア入力シートへ 会社コード・案件番号・社外案件名・サーバーリンク・新規or修正・視点・パターン と「登録No」だけを写し、行は『登録一覧』へ移ります（『案件登録』からは消え、次の案件を書ける）。お客様担当者・納期・注文書・管理者メモは入力シートへ写しません。足りない項目があるとチェックが外れます。',
   '3. 通訳が入力シートの「翻訳済み」にチェック（訳は「翻訳メモ」へ。「翻訳日時」は自動）→ エンジニアが White・Color・pts と「作業の分け方」「時間入力者」を書く（「時間入力日時」「合計」は自動）。',
   '4. 翻訳済み・時間・作業の分け方は『登録一覧』の灰色の列に読み戻され、「状態」が 翻訳待ち → 時間計算待ち → 時間入力済み と進みます。',
   '5. 連絡文の期限（登録日時＋「制作時間の計算の期限」）を過ぎても時間が空なら Discord で催促し、以降1時間ごとにくり返します（『設定』で時間・時間帯を変えられます。Webhook はメニュー「Discord 通知の設定」）。',
-  '6. 時間が入った行は『連携』へ転記され、最後に変わってから15分たつと工程図に登録されます（新しい行だけ追加）。『登録一覧』の担当者・納期が工程図に入ります。登録した後でエンジニアが時間などを直したら、状態を「更新あり」にして Discord で確認を頼みます（自動では書き換えない。よければ『連携』の「工程図へ」にチェック）。',
+  '6. 時間が入った行は『連携』へ転記され、最後に変わってから15分たつと工程図に登録されます（新しい行だけ追加）。『登録一覧』のお客様担当者は工程図の「お客様担当者」、納期は納期に入ります（作業の担当者（エンジニア）は工程図で決めます）。登録した後でエンジニアが時間などを直したら、状態を「更新あり」にして Discord で確認を頼みます（自動では書き換えない。よければ『連携』の「工程図へ」にチェック）。',
   '7. 工程図で決まった納品名（ファイル名）は、『登録一覧』と入力シートの「納品名」列に自動で表示されます（工程図で納品名を直すと、次の自動実行で追従）。',
   '・「連絡文」列に、エンジニア・通訳へ送る文が自動で入ります（同じ案件・同じ入力日の視点は1通）。行を選んでメニュー「連絡文をコピー」を押すと、コピーや Discord への送信ができます。文面は『設定』の「登録時の連絡文」で変えられます。',
   '・手動連携：『登録一覧』の「今すぐ連携」にチェックすると、その行をすぐ入力シートへ写します。『設定』の「今すぐ全部連携」にチェックすると、案件登録→入力シート・転記・工程図への登録をまとめてその場で動かします（どちらも終わるとチェックは外れます）。',
