@@ -785,14 +785,15 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
               options={contactOptions} placeholder="一覧から選択／入力"
               inputStyle={inputStyle} colors={colors} fontJP={fontJP} />
           </div>
-          <div>
+          {/* 担当者は横にボタンが並ぶので2列分の幅を取る（入力欄が潰れないように） */}
+          <div style={{ gridColumn: 'span 2' }}>
             <label style={labelStyle}>
               {editMode ? '担当者（既定）' : 'デフォルト担当者'}
             </label>
             <div style={{ display: 'flex', gap: 6, alignItems: 'stretch' }}>
               <Combobox value={form.assignee} onChange={(v) => setForm({ ...form, assignee: v })}
                 options={assigneeOptions} placeholder="一覧から選択／入力"
-                inputStyle={inputStyle} colors={colors} fontJP={fontJP} wrapperStyle={{ flex: 1 }} />
+                inputStyle={inputStyle} colors={colors} fontJP={fontJP} wrapperStyle={{ flex: 1, minWidth: 160 }} />
               {editMode?.type === 'project' && (
                 <button type="button"
                   onClick={async () => {
