@@ -10,6 +10,7 @@ import { Combobox, DurationSelect, TimeSelect, tabStyle } from '../components/co
 import { AssigneeBoard, ReviewSection, SuspendedSection } from './input/sections.jsx';
 import { ViewpointGroupList } from './input/ViewpointList.jsx';
 import { CalendarView } from './CalendarView.jsx';
+import { assigneesForCompany } from '../lib/companyAssignee.js';
 import { AssigneeView } from './AssigneeView.jsx';
 // 進行状況（段階の一覧）は開いたときに読み込む
 const StageView = lazy(() => import('./StageView.jsx'));
@@ -19,10 +20,27 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
     colors, fontJP, fontDisplay,
     tasks, scheduled, settings, now,
     projectOrder, projectList, projectInternalList, viewpointList,
-    assigneeList, assigneeOrder, companyList, customerMaster,
+    assigneeList, assigneeOrder, companyList, customerMaster, employeeMaster,
     stepTypeMaster, vpDeliveryCount,
     registerDraftAndEdit, handleEditProject, submitting, confirmDialog, notify,
   } = useApp();
+  // 会社ごとの担当者（従業員マスタの「担当会社」）。会社を選ぶと、担当者が空なら自動で入る。
+  // 前の会社で自動で入った担当者のままなら、新しい会社の担当者に入れ替える（新規登録のときだけ）
+  const companyAssignees = useMemo(() => assigneesForCompany(employeeMaster, form.companyName), [employeeMaster, form.companyName]);
+  const withCompany = (prev, company) => {
+    const next = { ...prev, companyName: company };
+    if (editMode) return next;
+    const cur = (prev.assignee || '').trim();
+    const prevAuto = assigneesForCompany(employeeMaster, prev.companyName)[0] || '';
+    if (cur && cur !== prevAuto) return next;
+    const auto = assigneesForCompany(employeeMaster, company)[0] || '';
+    return auto || cur === prevAuto ? { ...next, assignee: auto } : next;
+  };
+  // 担当者の候補：選んだ会社の担当者を先頭に
+  const assigneeOptions = useMemo(
+    () => (companyAssignees.length ? [...companyAssignees, ...(assigneeList || []).filter(a => !companyAssignees.includes(a))] : assigneeList),
+    [companyAssignees, assigneeList]
+  );
   // 視点の区分の候補（外観・内観 ＋ 使われている区分）
   const categoryOptions = useMemo(() => viewpointCategoryOptions(tasks), [tasks]);
   // お客様担当者の候補：会社名を選んでいればその会社に所属する担当者を表示
@@ -226,7 +244,8 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
   const [assigneeSuggestions, setAssigneeSuggestions] = useState(null); // null=非表示
   useEffect(() => { setAssigneeSuggestions(null); }, [editingId]); // 対象が変わったら閉じる
   const suggestAssignees = () => {
-    const candidates = [...new Set((assigneeList || []).map(a => (a || '').trim()).filter(Boolean))];
+    // 会社の担当者が決まっていれば、その人たちの中から提案する
+    const candidates = [...new Set((companyAssignees.length ? companyAssignees : (assigneeList || [])).map(a => (a || '').trim()).filter(Boolean))];
     if (candidates.length === 0) { notify('担当者の候補がありません。従業員マスタに担当者を登録してください。', { type: 'error' }); return; }
     const out = [];
     for (const a of candidates) {
@@ -731,14 +750,12 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                 // 既存案件名を選んだら、その案件の会社名・社内案件名を補完する
                 // （空欄のときだけ。会社が入ると「お客様担当者」候補がその会社の人に絞られる）
                 const match = !editMode ? (tasks || []).find(t => (t.projectName || '') === val.trim() && val.trim()) : null;
-                setForm(prev => ({
-                  ...prev,
-                  projectName: val,
-                  ...(match ? {
-                    companyName: prev.companyName || match.companyName || '',
-                    projectNameInternal: prev.projectNameInternal || match.projectNameInternal || '',
-                  } : {}),
-                }));
+                setForm(prev => {
+                  const base = { ...prev, projectName: val };
+                  if (!match) return base;
+                  const next = { ...base, projectNameInternal: prev.projectNameInternal || match.projectNameInternal || '' };
+                  return prev.companyName ? next : withCompany(next, match.companyName || '');
+                });
               }}
               placeholder="例: 〇〇マンション" style={inputStyle} />
             <datalist id="project-list">{projectList.map(p => <option key={p} value={p} />)}</datalist>
@@ -752,7 +769,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
           </div>
           <div>
             <label style={labelStyle}>会社名</label>
-            <Combobox value={form.companyName} onChange={(v) => setForm({ ...form, companyName: v })}
+            <Combobox value={form.companyName} onChange={(v) => setForm(prev => withCompany(prev, v))}
               options={companyList || []} placeholder="一覧から選択／入力"
               inputStyle={inputStyle} colors={colors} fontJP={fontJP} />
           </div>
@@ -768,7 +785,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
             </label>
             <div style={{ display: 'flex', gap: 6, alignItems: 'stretch' }}>
               <Combobox value={form.assignee} onChange={(v) => setForm({ ...form, assignee: v })}
-                options={assigneeList} placeholder="一覧から選択／入力"
+                options={assigneeOptions} placeholder="一覧から選択／入力"
                 inputStyle={inputStyle} colors={colors} fontJP={fontJP} wrapperStyle={{ flex: 1 }} />
               {editMode?.type === 'project' && (
                 <button type="button"
@@ -805,7 +822,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
             {assigneeSuggestions && (
               <div style={{ marginTop: 6, border: `1px solid ${colors.border}`, borderRadius: 5, background: '#fbf9f4', padding: 8 }}>
                 <div style={{ fontSize: 10.5, color: colors.textMute, marginBottom: 5 }}>
-                  終了予定の早い順（全視点をその担当者にした場合の試算）。クリックで適用
+                  終了予定の早い順（全視点をその担当者にした場合の試算{companyAssignees.length ? `。${form.companyName} の担当者の中から` : ''}）。クリックで適用
                 </div>
                 {assigneeSuggestions.length === 0 ? (
                   <div style={{ fontSize: 12, color: colors.textMute }}>試算できる候補がありません（視点に制作時間が入っているか確認してください）</div>
@@ -1027,7 +1044,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
                     <div style={{ flex: '1 1 140px' }}>
                       <label style={{ ...labelStyle, fontSize: 10, marginBottom: 3 }}>担当者</label>
                       <Combobox value={vp.assignee || ''} onChange={(v) => updateViewpointAssignee(vi, v)}
-                        options={assigneeList}
+                        options={assigneeOptions}
                         placeholder={form.assignee ? `既定: ${form.assignee}` : '担当者'}
                         title="この視点の担当者。空欄なら上の「デフォルト担当者」が使われます"
                         inputStyle={{ ...inputStyle, padding: '8px 10px', fontSize: 13 }}
