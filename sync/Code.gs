@@ -34,7 +34,7 @@
  */
 
 // ============ 定数 ============
-const SHEET = { LINK: '連携', REG: '登録一覧', ENTRY: '案件登録', FORM: '案件入力', COMPANY: '会社マスタ', VIEW: '視点マスタ', PROJECT: '案件マスタ', SETTINGS: '設定', HOWTO: '使い方', TRASH: '削除済み' };
+const SHEET = { LINK: '連携', REG: '登録一覧', ENTRY: '案件登録', FORM: '案件入力', COMPANY: '会社マスタ', VIEW: '視点マスタ', PROJECT: '案件マスタ', SETTINGS: '設定', HOWTO: '使い方', TRASH: '削除済み', TENTATIVE: '仮予定' };
 // 2026-11-04：エンジニア入力シートを3つのタブに分けた。入力前（翻訳・時間がそろうまで）→ 制作中（工程図に登録してから完了まで）→ 制作済み（工程図で完了）
 const STAFF_TAB_DEFAULT = '入力前';
 const STAFF_TAB_DOING = '制作中';
@@ -4576,6 +4576,37 @@ function ensureTrashSheet_(ss) {
   sh.hideColumns(TRASH_C.key, TRASH_H.length - TRASH_C.key + 1); // バックアップの中身（JSON）は隠す
   return sh;
 }
+// ============ 仮予定（2026-11-10） ============
+// 管理者だけが書くメモの表。エンジニア入力シート・工程図には何も送らない（スクリプトはこのタブを読まない）
+const TENTATIVE_H = ['社外案件名', 'お客様担当者', '作成枚数', '着手予定', '納期', 'メモ'];
+const TENTATIVE_NOTES = [
+  'お客様向けの案件名（決まっていなければ仮の名前で）',
+  'お客様の担当者（竹内様 など）',
+  '作る枚数（数字）',
+  '作業を始める予定の日（セルをダブルクリックでカレンダー）',
+  '納品する日（セルをダブルクリックでカレンダー）',
+  '自由に（会社名・案件番号・資料の状況など）',
+];
+/** 『仮予定』タブを用意する（無ければ作る。あれば見出し・書式だけ整え、中身は触らない） */
+function ensureTentativeSheet_(ss) {
+  let sh = ss.getSheetByName(SHEET.TENTATIVE);
+  if (!sh) {
+    const reg = ss.getSheetByName(SHEET.REG);
+    sh = reg ? ss.insertSheet(SHEET.TENTATIVE, reg.getIndex()) : ss.insertSheet(SHEET.TENTATIVE);
+  }
+  ensureSize_(sh, 200, TENTATIVE_H.length);
+  const head = sh.getRange(1, 1, 1, TENTATIVE_H.length);
+  head.setValues([TENTATIVE_H]).setFontWeight('bold').setBackground('#e6e6e6');
+  head.setNotes([TENTATIVE_NOTES.map((t, i) => (i === 0 ? '管理者だけの仮予定（エンジニア入力シート・工程図には反映しません）。\n' : '') + t)]);
+  const n = Math.max(sh.getMaxRows() - 1, 1);
+  sh.getRange(2, 3, n, 1).setNumberFormat('0').setDataValidation(SpreadsheetApp.newDataValidation().requireNumberBetween(0, 9999).setAllowInvalid(false).build());
+  const date = SpreadsheetApp.newDataValidation().requireDate().setAllowInvalid(false).build();
+  sh.getRange(2, 4, n, 2).setNumberFormat('yyyy-mm-dd').setDataValidation(date);
+  sh.setFrozenRows(1);
+  [30, 16, 10, 14, 14, 40].forEach((w, i) => sh.setColumnWidth(i + 1, w * 8));
+  return sh;
+}
+
 /** 『削除済み』の登録No（登録No を使い回さないため） */
 function trashNos_(ss) {
   const sh = ss.getSheetByName(SHEET.TRASH);
@@ -5447,6 +5478,7 @@ function setupSheet_(ss) {
   ensureRegSheet_(ss, masters);
   ensureEntrySheet_(ss, masters);
   ensureFormSheet_(ss, masters, false);
+  ensureTentativeSheet_(ss); // 管理者だけの仮予定（どこにも反映しない）
 
   writeHowto_(ss);
 }
@@ -5700,6 +5732,7 @@ const HOWTO_LINES = [
   '・状態が「エラー」の行：理由を直して「工程図へ」にチェックし、メニュー「2. 工程図へ送信」。',
   '・必要に応じて 納期・お客様担当者・担当者（社内担当者）・メモ を入れる（登録前に入れたものが工程図に入ります）。工程図に入れない行は「対象外」にチェック。',
   '・金額（売上・見積・請求）は工程図の請求パネルで入力します。',
+  '・まだ正式に登録しない案件は『仮予定』タブにメモできます（社外案件名・お客様担当者・作成枚数・着手予定・納期・メモ）。管理者だけのタブで、エンジニア入力シート・工程図には反映しません。正式に決まったら『案件入力』で登録してください。',
   '・自動登録を止めたいとき：『設定』の「自動登録」を「しない」にする（転記だけ自動）。自動実行そのものを止めるときはメニュー「自動実行を止める」。',
   '',
   '■ 自動判定のしくみ',

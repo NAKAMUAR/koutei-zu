@@ -63,6 +63,7 @@ class FakeSheet {
   getMaxColumns() { return this.maxCols; }
   // 行を差し込む（下の行を n 行ずつ下へずらす。シートの最後に足すときは大きさが増えるだけ）
   insertRowsAfter(after, n) { this.maxRows += n; if (this.rows.length > after) this.rows.splice(after, 0, ...Array.from({ length: n }, () => [])); if (this.hidden) this.hidden = new Set([...this.hidden].map(r => (r > after ? r + n : r))); return this; }
+  getIndex() { return this.ss ? this.ss.sheets.indexOf(this) + 1 : 1; }
   hideRows(r) { (this.hidden = this.hidden || new Set()).add(r); return this; }
   showRows(r) { if (this.hidden) this.hidden.delete(r); return this; }
   isRowHiddenByUser(r) { return !!(this.hidden && this.hidden.has(r)); }
@@ -112,7 +113,7 @@ class FakeSpreadsheet {
   getSpreadsheetTimeZone() { return this.tz || 'America/Los_Angeles'; }
   setSpreadsheetTimeZone(z) { this.tz = z; return this; }
   getSheets() { return this.sheets.slice(); }
-  getSheetByName(n) { return this.sheets.find(s => s.getName() === n) || null; }
+  getSheetByName(n) { const sh = this.sheets.find(s => s.getName() === n) || null; if (sh) sh.ss = this; return sh; }
   insertSheet(name, idx) { const sh = new FakeSheet(name); if (idx === undefined) this.sheets.push(sh); else this.sheets.splice(idx, 0, sh); return sh; }
   deleteSheet(sh) { this.sheets = this.sheets.filter(x => x !== sh); }
   toast() {}
@@ -300,7 +301,7 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
     newDataValidation: () => {
       const rule = {};
       const b = { requireCheckbox() { rule.type = 'checkbox'; return b; }, requireValueInList(v) { rule.type = 'list'; rule.values = v.slice(); return b; },
-        requireNumberBetween(lo, hi) { rule.type = 'number'; rule.range = [lo, hi]; return b; },
+        requireNumberBetween(lo, hi) { rule.type = 'number'; rule.range = [lo, hi]; return b; }, requireDate() { rule.type = 'date'; return b; },
         setAllowInvalid(x) { rule.allowInvalid = x; return b; }, setHelpText(t) { rule.help = t; return b; }, build() { return rule; } };
       return b;
     },
@@ -2277,6 +2278,23 @@ test('制作時間を 0 と書いた行：『登録一覧』は「制作なし�
   env.g.syncRegistrationsNow();
   assert.equal(R(2, '状態'), '時間入力済み');
   assert.equal(tab.isRowHiddenByUser(row), false, '時間が入ったら表示に戻す');
+});
+
+test('『仮予定』タブ：管理者だけのメモ。初期設定で作り、書いた内容はエンジニア入力シートにも『登録一覧』にも出ない', () => {
+  const admin = adminSheet();
+  const eng = engineerFile();
+  const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
+  env.g.quickSetup();
+  const tt = admin.getSheetByName('仮予定');
+  assert.ok(tt, '『仮予定』ができる');
+  same(tt.header(), ['社外案件名', 'お客様担当者', '作成枚数', '着手予定', '納期', 'メモ']);
+  ['新築マンション（仮）', '竹内様', 5, new Date(2026, 10, 20), new Date(2026, 10, 30), 'RIC 予定'].forEach((v, i) => tt.set(2, i + 1, v));
+  env.g.quickSetup(); // もう一度初期設定しても中身はそのまま
+  assert.equal(tt.rows[1][0], '新築マンション（仮）');
+  env.g.syncRegistrationsNow();
+  const reg = admin.getSheetByName('登録一覧');
+  assert.equal(reg.rows.filter(v => v.indexOf('新築マンション（仮）') >= 0).length, 0, '『登録一覧』には出ない');
+  assert.equal(inTab(eng).rows.filter(v => v.indexOf('新築マンション（仮）') >= 0).length, 0, 'エンジニア入力シートには出ない');
 });
 
 console.log(`\n${passed} tests passed`);
