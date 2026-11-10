@@ -1848,26 +1848,26 @@ function stopAutoRun() {
 //   ⑥ 時間が入った行は、いつもの転記 → 自動登録で工程図へ（担当者・納期は『案件登録』から入る）
 const REG_H = {
   no: '登録No', state: '状態',
-  code: '会社コード', number: '案件番号', name: '社外案件名', internal: '社内案件名', assignee: '担当者', request: '新規or修正',
+  code: '会社コード', number: '案件番号', branch: '枝番', name: '社外案件名', internal: '社内案件名', assignee: '担当者', request: '新規or修正',
   cut: '視点', pattern: 'パターン', extName: '社外視点名', link: 'サーバーリンク', deadline: '納期', order: '注文書', memo: '管理者メモ',
   translated: '翻訳済み', translatedAt: '翻訳日時', transNote: '翻訳メモ', white: 'White', color: 'Color', other: 'pts', total: '合計', split: '作業の分け方',
   estimator: '時間入力者', estimatedAt: '時間入力日時',
   regDate: '登録日時', delivery: '納品名', message: '連絡文',
   manual: '今すぐ連携', copy: 'コピー', del: '削除', delReq: '削除依頼', notifyOff: '通知オフ', toInterp: '通訳へのメッセージ', interpMessage: '通訳向け連絡文', copiedAt: '入力シートへ写した日時', notifiedAt: '最後の催促', notifyCount: '催促回数',
 };
-const REG_ORDER = ['no', 'state', 'manual', 'regDate', 'copy', 'del', 'delReq', 'notifyOff', 'code', 'number', 'name', 'internal', 'assignee', 'request', 'cut', 'pattern', 'extName', 'link', 'deadline', 'order', 'memo', 'toInterp',
+const REG_ORDER = ['no', 'state', 'manual', 'regDate', 'copy', 'del', 'delReq', 'notifyOff', 'code', 'number', 'branch', 'name', 'internal', 'assignee', 'request', 'cut', 'pattern', 'extName', 'link', 'deadline', 'order', 'memo', 'toInterp',
   'translated', 'translatedAt', 'transNote', 'white', 'color', 'other', 'total', 'split', 'estimator', 'estimatedAt', 'copiedAt', 'notifiedAt', 'notifyCount', 'delivery', 'message', 'interpMessage'];
 // 2026-11-03：管理者が書くのは『案件登録』（入力専用）。「登録」にチェックした行に登録No を付け、
 // エンジニア入力シートへ写して『登録一覧』へ移す（『案件登録』からは消える）。それまでの『案件登録』は『登録一覧』に名前を変える。
 const ENTRY_H = { submit: '登録', state: '状態' };
-const ENTRY_ORDER = ['submit', 'state', 'code', 'number', 'name', 'internal', 'assignee', 'request', 'cut', 'pattern', 'link', 'deadline', 'order', 'memo', 'toInterp'];
+const ENTRY_ORDER = ['submit', 'state', 'code', 'number', 'branch', 'name', 'internal', 'assignee', 'request', 'cut', 'pattern', 'link', 'deadline', 'order', 'memo', 'toInterp'];
 const ENTRY_STATE = { DRAFT: '記入中', READY: '登録できます' };
 const ENTRY_NOTES = {
   submit: '書き終えたらチェック。登録No が付いて『登録一覧』とエンジニア入力シートに載り、この行は消える（足りない項目があるとチェックが外れ、「状態」に足りない項目が出る）',
   state: '自動：記入中（足りない項目）／登録できます（「登録」にチェックで送る）',
 };
 // 無くても動く列（あとから足した列。初期設定・登録のときに差し込む）
-const REG_OPTIONAL = ['extName', 'del', 'delReq', 'notifyOff'];
+const REG_OPTIONAL = ['branch', 'extName', 'del', 'delReq', 'notifyOff'];
 // 管理者が書く列（ほかの列は自動で入る）
 const REG_INPUT = ['code', 'number', 'name', 'assignee', 'request', 'cut', 'pattern', 'link', 'deadline', 'order', 'memo', 'toInterp'];
 // エンジニア入力シートへ写す列（案件登録 → 入力シート。担当者・納期・注文書・管理者メモは写さない）
@@ -1880,6 +1880,7 @@ const REG_NOTES = {
   internal: '自動：会社コード＋案件番号（RIC.34）', assignee: '工程図の担当者（入力シートには写さない）',
   request: 'その視点の初回は「新規」、2回目以降は「修正」', cut: 'EX1・IN2 など（『視点マスタ』のキーワード＋番号）', pattern: 'パターン違いがあれば A・B…',
   del: 'この登録を消すときにチェック → 確認の画面で「削除する」。エンジニア入力シートの行と工程図の作業を消す（この行はチェックが付いたまま残り、状態が「削除済み」になる）。チェックを外すと元に戻る。同じ視点のあとの回（2回目など）がある行は、あとの回から消す',
+  branch: '枝番（2F・3F・A棟 など。空欄なら無し）。視点の部屋名として付く（視点は INE1_2F、社外視点名は 2F内観目線視点①）。同じ案件の中で枝番ごとに視点①から数える',
   notifyOff: 'チェックすると、この案件（同じ社内案件名の行すべて）の Discord 通知（時間計算の催促・登録後の変更・削除依頼）を送らない。外すとまた送る',
   delReq: '自動：エンジニアが入力シートで「削除依頼」にチェックした日時。確かめて消すなら「削除」にチェック。消さないならエンジニアにチェックを外してもらう',
   extName: 'お客様向けの視点名（工程図の社外視点名に入る）。空なら『視点マスタ』から自動（外観目線視点①_パターンA など）。『案件入力』タブで書き換えた名前が入る',
@@ -2031,7 +2032,7 @@ function entryHeaderMap_(sheet) {
   const headers = lastCol ? sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(v => trimStr_(v)) : [];
   const col = {};
   ENTRY_ORDER.forEach(k => { const i = headers.indexOf(ENTRY_H[k] || REG_H[k]); if (i >= 0) col[k] = i + 1; });
-  const missing = ENTRY_ORDER.filter(k => !col[k]);
+  const missing = ENTRY_ORDER.filter(k => k !== 'branch' && !col[k]);
   if (missing.length) throw new Error('『' + SHEET.ENTRY + '』タブの見出しが見つかりません: ' + missing.map(k => ENTRY_H[k] || REG_H[k]).join('、') + '（メニュー「0. かんたん初期設定」を実行してください）');
   return col;
 }
@@ -2061,10 +2062,13 @@ function intakeEntries_(ss, list, rc) {
   vals.slice(0, last).forEach(v => {
     const row = {};
     REG_INPUT.forEach(k => { row[k] = v[ec[k] - 1]; });
-    if (REG_INPUT.every(k => trimStr_(row[k]) === '')) return; // 空の行（チェックだけ）は捨てる
+    const branch = ec.branch ? trimStr_(v[ec.branch - 1]) : '';
+    if (REG_INPUT.every(k => trimStr_(row[k]) === '') && !branch) return; // 空の行（チェックだけ）は捨てる
+    row.branch = branch;
     const state = entryState_(row);
     if (isChecked_(v[ec.submit - 1])) {
-      if (state === ENTRY_STATE.READY) { move.push(row); return; }
+      // 枝番（2F・A棟 など）は視点の部屋名になる（視点に部屋名が無いときだけ付ける）
+      if (state === ENTRY_STATE.READY) { move.push(withBranchRoom_(row)); return; }
       rejected++;
     }
     keep.push({ row, state });
@@ -2073,6 +2077,7 @@ function intakeEntries_(ss, list, rc) {
   const n = last;
   const colValues = (fn) => { const out = []; for (let i = 0; i < n; i++) out.push([i < keep.length ? fn(keep[i]) : '']); return out; };
   REG_INPUT.forEach(k => ent.getRange(2, ec[k], n, 1).setValues(colValues(x => x.row[k])));
+  if (ec.branch) ent.getRange(2, ec.branch, n, 1).setValues(colValues(x => x.row.branch || ''));
   ent.getRange(2, ec.state, n, 1).setValues(colValues(x => x.state));
   const off = []; for (let i = 0; i < n; i++) off.push([false]);
   ent.getRange(2, ec.submit, n, 1).setValues(off);
@@ -2121,7 +2126,7 @@ function insertRegRows_(list, rc, rows) {
 }
 /** 登録のときに『登録一覧』へ書く列：管理者が書く列＋社外視点名＋White・Color（『案件入力』の W・X） */
 function regWriteKeys_(rc) {
-  return REG_INPUT.concat(['extName', 'white', 'color'].filter(k => rc[k]));
+  return REG_INPUT.concat(['branch', 'extName', 'white', 'color'].filter(k => rc[k]));
 }
 /** 『登録一覧』の中身がある最後の行の下へ、管理者が書く列だけを書き足す。書いた最初の行番号を返す（チェックボックス・式だけの行は数えない） */
 function appendToRegList_(list, rc, rows) {
@@ -2166,7 +2171,7 @@ function entryFormRows_(p) {
   const m = String(p.deadline || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
   const deadline = m ? new Date(+m[1], +m[2] - 1, +m[3]) : '';
   const base = {
-    code: trimStr_(p.code).toUpperCase(), number: parseInt(num, 10), name: trimStr_(p.name), assignee: trimStr_(p.assignee),
+    code: trimStr_(p.code).toUpperCase(), number: parseInt(num, 10), branch: trimStr_(p.branch || ''), name: trimStr_(p.name), assignee: trimStr_(p.assignee),
     link: trimStr_(p.link), deadline, order: trimStr_(p.order), memo: trimStr_(p.memo), toInterp: trimStr_(p.toInterp),
   };
   return { rows: views.map(v => Object.assign({}, base, { cut: trimStr_(v.cut).toUpperCase(), pattern: normPattern_(v.pattern), request: trimStr_(v.request), extName: trimStr_(v.extName), no: trimStr_(v.no) }, v.white !== undefined ? { white: toHours_(v.white) || '' } : {}, v.color !== undefined ? { color: toHours_(v.color) || '' } : {})) };
@@ -2391,7 +2396,7 @@ function entryFormHtml_(o) {
 //   「前回の視点を呼び出す」にチェックすると、同じ会社コード・案件番号で前回登録した視点（部屋名・パターン・社外視点名も）が入る。
 //   「登録」にチェック → 通訳へのメッセージを書く小さな画面が出る →「登録する」で『登録一覧』とエンジニア入力シートへ。フォームは空に戻る。
 const FORM_TITLE = '案件入力（1案件ずつ登録）';
-const FORM_FIELDS = ['code', 'number', 'name', 'assignee', 'request', 'link', 'deadline', 'order', 'memo'];
+const FORM_FIELDS = ['code', 'number', 'branch', 'name', 'assignee', 'request', 'link', 'deadline', 'order', 'memo'];
 const FORM_L = {
   prev: '前回の視点を呼び出す', edit: '登録Noで直す', pick: '① 視点を選ぶ', sum: '登録する視点', submit: '登録', result: '結果', list: '② 視点',
 };
@@ -2404,7 +2409,8 @@ const FORM_LIST_ROWS = 40;
 // ② の列：A 視点（日本語）、B:D 部屋名、E:F パターン、G ＋、H 外す、I:U 社外視点名、V 視点コード
 const FORM_LC = { label: 1, room: 2, pattern: 5, plus: 7, del: 8, ext: 9, white: 23, color: 24 }; // W・X：White・Color の時間（管理者が決めたときだけ）
 const FORM_FIELD_NOTES = {
-  code: '必須。REN・RIC など', number: '必須。数字だけ（例 50）', assignee: '工程図の担当者（入力シートには写さない）',
+  code: '必須。REN・RIC など', number: '必須。数字だけ（例 50）',
+  branch: '任意。部屋・建物ごとに分けるとき（2F・3F・A棟 など）。書くと②の視点すべての部屋名になり、2F内観目線視点①・3F内観目線視点① のように枝番ごとに視点①から数える。「2F,3F」で両方の行を作る', assignee: '工程図の担当者（入力シートには写さない）',
   request: '必須。この案件の視点すべてに同じものが入る', deadline: '入力シートには写さない（工程図の納期に入る）',
   memo: '管理者だけのメモ（入力シートには写さない）',
 };
@@ -2414,6 +2420,21 @@ function formCut_(code, room) {
   return r ? c + '_' + r : c;
 }
 function formRoom_(room) { return trimStr_(room).replace(/\s+/g, '').replace(/_/g, '-').toUpperCase(); }
+/**
+ * 枝番（2026-11-10）：案件の中の部屋・建物（2F・3F・A棟 など）。別の案件にはせず、視点の部屋名として付ける
+ * （視点 INE1 → INE1_2F、社外視点名 2F内観目線視点①）。部屋名が付いた視点はそのまま
+ */
+function withBranchRoom_(row) {
+  const b = formRoom_(row.branch);
+  if (!b || !trimStr_(row.cut)) return row;
+  const sp = formSplitCut_(row.cut);
+  if (sp.room) return row;
+  return Object.assign({}, row, { cut: formCut_(sp.code, b) });
+}
+/** 枝番の欄（「2F,3F」も可）→ 部屋名の並び */
+function formBranchRooms_(branch) {
+  return String(branch || '').split(/[,、，\/／]+/).map(formRoom_).filter(Boolean);
+}
 /** 視点 → { code, room }（'EXE1_2F' → EXE1 と 2F） */
 function formSplitCut_(cut) {
   const s = trimStr_(cut).toUpperCase();
@@ -2464,13 +2485,23 @@ function formNormalizeRows_(rows, views) {
  * ① のチェックから ② の行を作り直す（純ロジック）。チェックが残っている視点の行はそのまま（部屋名・パターン・社外視点名を保つ）、
  * 新しくチェックした視点は1行足し、チェックを外した視点の行は消す。並びは①の順
  */
-function formListMerge_(codes, current, views) {
+function formListMerge_(codes, current, views, branch) {
   const out = [];
   codes.forEach(c => {
     const mine = (current || []).filter(r => trimStr_(r.code).toUpperCase() === c);
     if (mine.length) mine.forEach(r => out.push(r));
-    else out.push({ code: c, room: '', pattern: '', ext: '' });
+    else out.push({ code: c, room: trimStr_(branch || ''), pattern: '', ext: '' }); // 新しい視点には枝番を部屋名として付ける
   });
+  return formNormalizeRows_(out, views);
+}
+/**
+ * 枝番を書き換えたとき（純ロジック）：部屋名が空か、前の枝番と同じ行の部屋名を新しい枝番にする（人が別の部屋名を書いた行はそのまま）。
+ * 「2F,3F」のように複数なら部屋ごとの行に分かれる
+ */
+function formApplyBranch_(rows, oldBranch, newBranch, views) {
+  const olds = formBranchRooms_(oldBranch);
+  const nb = trimStr_(newBranch || '');
+  const out = (rows || []).map(r => (r.room === '' || olds.indexOf(formRoom_(r.room)) >= 0) ? Object.assign({}, r, { room: nb, no: r.no }) : r);
   return formNormalizeRows_(out, views);
 }
 /** 「＋」：その視点（同じ部屋）にパターンを1つ足す（純ロジック）。パターンなしなら A・B にする */
@@ -2510,6 +2541,7 @@ function ensureFormSheet_(ss, masters, rebuild) {
   let sheet = ss.getSheetByName(SHEET.FORM);
   if (sheet && !rebuild && trimStr_(sheet.getRange(1, 1).getValue()) === FORM_TITLE) {
     formEnsureEditRow_(sheet);
+    formEnsureBranchRow_(sheet);
     // ① のチェックボックスを今の数（VIEW_OPTION_COUNT）にそろえる（前の版は10までの区分がある）
     try {
       const m0 = formMap_(sheet);
@@ -2556,6 +2588,7 @@ function ensureFormSheet_(ss, masters, rebuild) {
   sheet.getRange(F('number'), 2).setDataValidation(dv().requireNumberBetween(1, 99999).setAllowInvalid(false).build());
   sheet.getRange(F('request'), 2).setDataValidation(list(REQUEST_OPTIONS, false)).setValue(REQUEST_OPTIONS[0]);
   sheet.getRange(F('deadline'), 2).setNumberFormat('yyyy-mm-dd');
+  sheet.getRange(F('branch'), 2).setNumberFormat('@');
   label(r, FORM_L.prev);
   sheet.getRange(r, 2).setDataValidation(box()).setValue(false);
   sheet.getRange(r, 3).setValue('← チェックすると、同じ会社コード・案件番号で前回登録した視点（部屋名・パターン・社外視点名も）が入り、新規or修正は「修正」になる').setFontColor('#666666');
@@ -2644,6 +2677,21 @@ function formEnsureEditRow_(sheet) {
   sheet.getRange(prev + 1, 1).setValue(FORM_L.edit).setFontWeight('bold').setBackground('#fce5cd');
   sheet.getRange(prev + 1, 3).setValue(FORM_EDIT_NOTE).setFontColor('#666666');
 }
+/** 前の版（「枝番」の行が無い）なら、案件番号のすぐ下に足す */
+function formEnsureBranchRow_(sheet) {
+  const labels = sheet.getRange(1, 1, Math.min(sheet.getMaxRows(), 300), 1).getValues().map(r => trimStr_(r[0]));
+  const at = labels.indexOf(REG_H.branch) + 1;
+  const row = at || (labels.indexOf(REG_H.number) + 1);
+  if (!row) return;
+  if (!at) {
+    sheet.insertRowsAfter(row, 1);
+    sheet.getRange(row + 1, 1).setValue(REG_H.branch);
+    sheet.getRange(row + 1, 2, 1, FORM_COLS - 1).merge();
+  }
+  const r = at || row + 1;
+  sheet.getRange(r, 1).setNote(FORM_FIELD_NOTES.branch).setFontWeight('bold').setBackground('#fff2cc');
+  sheet.getRange(r, 2).clearDataValidations().setNumberFormat('@');
+}
 /** 前の版（登録No が W の隠し列・列が足りない）なら true */
 function formNeedsColumns_(sheet) {
   if (sheet.getMaxColumns() < FORM_NO_COL) return true;
@@ -2723,14 +2771,18 @@ function formResult_(sheet, m, msg) { if (m.result) sheet.getRange(m.result, 2).
 /** フォームを空に戻す（会社コードも消す。新規or修正は「新規」に） */
 function formClear_(sheet, m, views) {
   FORM_FIELDS.forEach(k => { if (m.fields[k]) sheet.getRange(m.fields[k], 2).setValue(k === 'request' ? REQUEST_OPTIONS[0] : ''); });
+  if (m.fields.branch) sheet.getRange(m.fields.branch, FORM_KEY_COL).setValue('');
   if (m.edit) sheet.getRange(m.edit, 2).setValue('');
   formSetGrid_(sheet, m, []);
   formWriteList_(sheet, m, [], views);
 }
 /** 前回の視点（純ロジック）：『登録一覧』の行 [{code, number, cut, pattern, extName, regDate, name, link, assignee}] から、同じ案件のいちばん新しい登録日の行 */
-function formPrevious_(regRows, code, number) {
+function formPrevious_(regRows, code, number, branch) {
   const key = normCode_(joinCode_(code, number));
-  const mine = (regRows || []).filter(r => trimStr_(r.cut) && trimStr_(r.state) !== REG_STATE.DELETED && normCode_(joinCode_(r.code, r.number)) === key);
+  let mine = (regRows || []).filter(r => trimStr_(r.cut) && trimStr_(r.state) !== REG_STATE.DELETED && normCode_(joinCode_(r.code, r.number)) === key);
+  // 枝番を書いてあれば、その枝番（部屋名）の視点だけ
+  const rooms = formBranchRooms_(branch);
+  if (rooms.length) mine = mine.filter(r => rooms.indexOf(formSplitCut_(r.cut).room) >= 0);
   if (!mine.length) return null;
   let best = '';
   mine.forEach(r => { const g = regGroupKey_(r); if (g > best) best = g; });
@@ -2749,8 +2801,8 @@ function formLoadPrevious_(ss, sheet, m, views) {
       const o = {}; Object.keys(rc).forEach(k => { o[k] = v[rc[k] - 1]; }); regRows.push(o);
     });
   }
-  const prev = formPrevious_(regRows, f.code, f.number);
-  if (!prev) { formResult_(sheet, m, '前回の登録が見つかりません（' + joinCode_(trimStr_(f.code).toUpperCase(), f.number) + '）。会社コード・案件番号を確かめてください'); return; }
+  const prev = formPrevious_(regRows, f.code, f.number, f.branch);
+  if (!prev) { formResult_(sheet, m, '前回の登録が見つかりません（' + joinCode_(trimStr_(f.code).toUpperCase(), f.number) + (trimStr_(f.branch) ? ' 枝番 ' + trimStr_(f.branch) : '') + '）。会社コード・案件番号' + (trimStr_(f.branch) ? '・枝番' : '') + 'を確かめてください'); return; }
   const rows = formNormalizeRows_(prev.rows.map(r => { const s = formSplitCut_(r.cut); return { code: s.code, room: s.room, pattern: r.pattern, ext: r.extName }; }), views);
   formSetGrid_(sheet, m, rows.map(r => r.code));
   formWriteList_(sheet, m, rows, views);
@@ -2843,6 +2895,7 @@ function formLoadByNo_(ss, sheet, m, views) {
     if (k === 'deadline' && v instanceof Date) v = fmtYMD_(v);
     sheet.getRange(m.fields[k], 2).setValue(v === undefined || v === null ? '' : v);
   });
+  if (m.fields.branch) sheet.getRange(m.fields.branch, FORM_KEY_COL).setValue(trimStr_(h.branch || ''));
   const rows = formNormalizeRows_(g.rows.map(r => { const sp = formSplitCut_(r.cut); return { code: sp.code, room: sp.room, pattern: r.pattern, ext: r.extName, no: trimStr_(r.no), white: toHours_(r.white) || '', color: toHours_(r.color) || '' }; }), views);
   formSetGrid_(sheet, m, rows.map(r => r.code));
   formWriteList_(sheet, m, rows, views);
@@ -2854,7 +2907,7 @@ function formPayload_(d, toInterp) {
   const f = d.fields;
   const deadline = f.deadline instanceof Date ? fmtYMD_(f.deadline) : trimStr_(f.deadline).replace(/\//g, '-');
   return {
-    code: f.code, number: f.number, name: f.name, assignee: f.assignee, link: f.link, deadline, order: f.order, memo: f.memo, toInterp: trimStr_(toInterp),
+    code: f.code, number: f.number, branch: f.branch, name: f.name, assignee: f.assignee, link: f.link, deadline, order: f.order, memo: f.memo, toInterp: trimStr_(toInterp),
     views: d.rows.map(r => ({ cut: formCut_(r.code, r.room), pattern: r.pattern, request: f.request, extName: r.ext, no: r.no || '', white: r.white || '', color: r.color || '' })),
   };
 }
@@ -2980,9 +3033,19 @@ function onFormEdit_(ss, sheet, range) {
   if (hit(m.prev) && isChecked_(sheet.getRange(m.prev, 2).getValue())) { formLoadPrevious_(ss, sheet, m, views); return; }
   if (m.edit && hit(m.edit) && range.getColumn() <= 2 && range.getLastColumn() >= 2) { formLoadByNo_(ss, sheet, m, views); return; }
   if ((hit(m.fields.code) || hit(m.fields.number)) && range.getColumn() <= 2 && range.getLastColumn() >= 2) { formFillKnown_(ss, sheet, m); return; }
+  if (m.fields.branch && hit(m.fields.branch) && range.getColumn() <= 2 && range.getLastColumn() >= 2) {
+    // 枝番を書いた・直した：②の部屋名をそろえる（前の枝番は隠し列 V に覚えておく）
+    const d = formRead_(sheet, m);
+    const memo = sheet.getRange(m.fields.branch, FORM_KEY_COL);
+    const rows = formApplyBranch_(d.rows, memo.getValue(), d.fields.branch, views);
+    memo.setValue(trimStr_(d.fields.branch));
+    formWriteList_(sheet, m, rows, views);
+    formSetGrid_(sheet, m, rows.map(r => r.code));
+    return;
+  }
   if (m.grid.some(g => hit(g.row))) {
     const d = formRead_(sheet, m);
-    formWriteList_(sheet, m, formListMerge_(d.codes, d.rows, views), views);
+    formWriteList_(sheet, m, formListMerge_(d.codes, d.rows, views, d.fields.branch), views);
     return;
   }
   if (r2 >= m.list1 && r1 <= m.list2) {

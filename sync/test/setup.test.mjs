@@ -333,7 +333,7 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
   };
   vm.createContext(ctx);
   const names = ['onAdminEdit', 'renderRegMessage_', 'onStaffEdit', 'syncRegistrationsNow', 'saveDiscordWebhook_', 'inNotifyHours_', 'isReminderDue_', 'calcDeadlineOf_', 'regState_', 'REG_STATE', 'quickSetup', 'createStaffInputTab', 'transferFromStaffSheet', 'autoRun', 'readSettings_', 'readStaffRows_', 'collectSourceRows_', 'findStaffHeaderRow_',
-    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'FORM_NO_COL', 'updateEntryForm', 'normRegNo_', 'formRegGroup_', 'formEnsureEditRow_', 'FORM_L', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_', 'deleteRegistrations', 'cancelDeleteRegistrations', 'writeScheduleToLink_', 'writeAssigneeTabs_', 'taskPackOf_', 'fsReadDay_', 'fsReadsToday_', 'AUTO_READ_BUDGET', 'deliveryYmd_', 'fillStaffDeliveryNames_', 'planRegDeletion_', 'deleteDialogHtml_', 'DELETE_DIALOG_SCRIPT'];
+    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'FORM_NO_COL', 'updateEntryForm', 'normRegNo_', 'formRegGroup_', 'formEnsureEditRow_', 'FORM_L', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_', 'deleteRegistrations', 'cancelDeleteRegistrations', 'writeScheduleToLink_', 'writeAssigneeTabs_', 'withBranchRoom_', 'taskPackOf_', 'fsReadDay_', 'fsReadsToday_', 'AUTO_READ_BUDGET', 'deliveryYmd_', 'fillStaffDeliveryNames_', 'planRegDeletion_', 'deleteDialogHtml_', 'DELETE_DIALOG_SCRIPT'];
   env.g = vm.runInContext(src + '\n;({' + names.join(',') + '})', ctx);
   // テストは時刻に関係なく Discord を送る（知らせる時間帯を 0-24 に）。時間帯のテストは env.setHours で変える
   env.setHours = (h) => { const st = env.admin.getSheetByName('設定'); const r = st && st.rows.findIndex(x => x[0] === '催促する時間帯（ベトナム時間）'); if (r >= 0) st.set(r + 1, 2, h); };
@@ -1121,7 +1121,7 @@ test('『案件登録』は入力専用：「登録」にチェックした行�
   assert.equal(admin.getSheets()[2].getName(), '登録一覧');
   const ent = admin.getSheetByName('案件登録');
   const eh = ent.header();
-  same(eh.slice(0, 5), ['登録', '状態', '会社コード', '案件番号', '社外案件名']);
+  same(eh.slice(0, 6), ['登録', '状態', '会社コード', '案件番号', '枝番', '社外案件名']);
   assert.ok(eh.indexOf('登録No') < 0, '入力タブに登録No は無い');
   assert.equal(ruleAt(ent, 2, 1).type, 'checkbox');
   const E = (row, name, v) => ent.set(row, eh.indexOf(name) + 1, v);
@@ -2034,6 +2034,74 @@ test('「通知オフ」にした案件は Discord で催促・削除依頼を�
   tab.set(rowOf('EX1'), sh.indexOf('資料待ち') + 1, false);
   env.g.syncRegistrationsNow();
   assert.notEqual(R(2, '状態'), '資料待ち', '外すと元の状態');
+});
+
+test('枝番（部屋・建物）：『案件入力』で枝番を書くと②の視点すべての部屋名になり、同じ案件の中で 2F視点①・3F視点① と分かれる（日本語の A棟 も可）', () => {
+  const admin = adminSheet();
+  const eng = engineerFile();
+  const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
+  env.g.quickSetup();
+  const f = admin.getSheetByName('案件入力');
+  const m = JSON.parse(JSON.stringify(env.g.formMap_(f)));
+  const LC = JSON.parse(JSON.stringify(env.g.FORM_LC)); const KEY = env.g.FORM_KEY_COL;
+  const cell = (r, c) => (f.rows[r - 1] || [])[c - 1];
+  assert.ok(m.fields.branch === m.fields.number + 1, '枝番は案件番号のすぐ下');
+  const edit = (r, c, v) => { f.set(r, c, v); env.g.onAdminEdit({ range: f.getRange(r, c), source: admin }); };
+  const list = () => { const out = []; for (let r = m.list1; r <= m.list2; r++) if (cell(r, KEY)) out.push({ r, code: cell(r, KEY), room: cell(r, LC.room) || '', ext: cell(r, LC.ext) }); return out; };
+  const brief = () => list().map(x => x.code + (x.room ? '_' + x.room : '') + ':' + x.ext);
+  const inn = m.grid.find(g => g.keyword === 'IN').row;
+  // 先に枝番 → 選んだ視点に付く
+  edit(m.fields.branch, 2, '2F');
+  edit(inn, 2, true); edit(inn, 3, true);
+  same(brief(), ['IN1_2F:2F内観目線視点①', 'IN2_2F:2F内観目線視点②']);
+  // あとから枝番を直すと、②の部屋名もそろう
+  edit(m.fields.branch, 2, '3F');
+  same(brief(), ['IN1_3F:3F内観目線視点①', 'IN2_3F:3F内観目線視点②']);
+  // 人が別の部屋名にした行はそのまま
+  const rowOf = (code) => list().find(x => x.code === code).r;
+  edit(rowOf('IN2'), LC.room, 'ロビー');
+  edit(m.fields.branch, 2, '2F');
+  same(brief(), ['IN1_2F:2F内観目線視点①', 'IN2_ロビー:ロビー内観目線視点②']);
+  edit(rowOf('IN2'), LC.room, '2F');
+  ['code', 'number', 'name', 'link'].forEach((k, j) => f.set(m.fields[k], 2, ['OFFICE', 55, 'オフィス', LINK][j]));
+  edit(m.submit, 2, true);
+  let res = env.g.submitFormSheet('');
+  assert.equal(res.ok, true, res.msg);
+  const reg = admin.getSheetByName('登録一覧');
+  const rh = reg.header();
+  const R = (row, name) => reg.rows[row - 1][rh.indexOf(name)];
+  same([R(2, '会社コード'), R(2, '案件番号'), R(2, '枝番'), R(2, '視点'), R(2, '社外視点名')], ['OFFICE', 55, '2F', 'IN1_2F', '2F内観目線視点①'], '案件はそのまま（別の案件にしない）');
+  assert.equal(cell(m.fields.branch, 2), '', '登録したら枝番も空に');
+  // 別の枝番（3F）でも 視点① から。A棟（日本語）も使える
+  edit(m.fields.branch, 2, '3F,A棟');
+  ['code', 'number', 'name', 'link'].forEach((k, j) => f.set(m.fields[k], 2, ['OFFICE', 55, 'オフィス', LINK][j]));
+  edit(inn, 2, true);
+  same(brief(), ['IN1_3F:3F内観目線視点①', 'IN1_A棟:A棟内観目線視点①']);
+  edit(m.submit, 2, true);
+  res = env.g.submitFormSheet('');
+  assert.equal(res.ok, true, res.msg);
+  const cuts = reg.rows.slice(1).map(r => r[rh.indexOf('視点')]).filter(Boolean);
+  same(cuts.sort(), ['IN1_2F', 'IN1_3F', 'IN1_A棟', 'IN2_2F']);
+  // 前回の視点を呼び出す：枝番を書くとその枝番の視点だけ
+  f.set(m.fields.code, 2, 'OFFICE'); f.set(m.fields.number, 2, 55); f.set(m.fields.branch, 2, '2F');
+  edit(m.prev, 2, true);
+  same(brief(), ['IN1_2F:2F内観目線視点①', 'IN2_2F:2F内観目線視点②']);
+  // 転記：取込キーは同じ案件（OFFICE55）の中で枝番ごとに別の視点（どれも1回目）
+  const staff = inTab(eng);
+  const sh = staff.rows[1].map(h => String(h).split('\n')[0]);
+  assert.ok(sh.indexOf('枝番') < 0, 'エンジニア入力シートに枝番の列は足さない（視点が IN1_2F になる）');
+  staff.rows.forEach((row, i) => { if (i >= 2 && row[sh.indexOf('視点')]) { staff.set(i + 1, sh.indexOf('Color') + 1, 1); } });
+  env.g.transferFromStaffSheet();
+  const link = admin.getSheetByName('連携');
+  const keys = link.rows.slice(1).map(r => r[0]).filter(Boolean).sort();
+  same(keys, ['OFFICE55::IN1_2F::1', 'OFFICE55::IN1_3F::1', 'OFFICE55::IN1_A棟::1', 'OFFICE55::IN2_2F::1']);
+});
+
+test('枝番：『案件登録』タブの枝番は、部屋名の無い視点にだけ付く', () => {
+  const g = makeEnv({ admin: adminSheet(), files: {} }).g;
+  same(JSON.parse(JSON.stringify(g.withBranchRoom_({ cut: 'INE1', branch: 'B棟' }))).cut, 'INE1_B棟');
+  same(JSON.parse(JSON.stringify(g.withBranchRoom_({ cut: 'INE1_2F', branch: 'B棟' }))).cut, 'INE1_2F');
+  same(JSON.parse(JSON.stringify(g.withBranchRoom_({ cut: 'INE1', branch: '' }))).cut, 'INE1');
 });
 
 console.log(`\n${passed} tests passed`);
