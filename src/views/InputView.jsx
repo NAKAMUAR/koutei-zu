@@ -14,6 +14,7 @@ import { assigneesForCompany, fixedAssigneeFor } from '../lib/companyAssignee.js
 import { AssigneeView } from './AssigneeView.jsx';
 // 進行状況（段階の一覧）は開いたときに読み込む
 const StageView = lazy(() => import('./StageView.jsx'));
+const BulkTentativeModal = lazy(() => import('./input/BulkTentativeModal.jsx'));
 
 function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdit, selectedAssignee, setSelectedAssignee }) {
   const {
@@ -406,6 +407,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
 
   // ===== 過去案件から引用 =====
   const [quoteOpen, setQuoteOpen] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false); // 連絡文からまとめて仮登録
   // 全案件（進行中・完了とも）を案件単位（社外案件名）でまとめる。
   // 「過去案件から引用」モーダルは完了済みのみ、同名案件の呼び出しパネルは進行中も対象。
   const allProjects = useMemo(() => {
@@ -582,6 +584,9 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr)', gap: 32 }}>
+      {bulkOpen && (
+        <Suspense fallback={null}><BulkTentativeModal onClose={() => setBulkOpen(false)} /></Suspense>
+      )}
       {quoteOpen && (
         <QuoteModal projects={pastProjects} onSelect={selectQuote} onClose={() => setQuoteOpen(false)}
           colors={colors} fontJP={fontJP} fontDisplay={fontDisplay} />
@@ -732,7 +737,16 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
             <button onClick={cancelEdit} style={{ background: 'transparent', border: 'none', color: colors.textMute, cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
               <X size={14} /> 編集をやめる
             </button>
-          ) : (
+          ) : (<div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button type="button" onClick={() => setBulkOpen(true)}
+              title="【案件名】ごとの連絡文を貼ると仮案件としてまとめて登録、部屋ごとの作業表を貼ると1つの案件の部屋ごとの作業として登録します"
+              style={{
+                background: '#fff', border: `1px solid #c46a16`, color: '#c46a16', fontWeight: 600,
+                cursor: 'pointer', fontSize: 12, padding: '7px 14px', borderRadius: 4,
+                display: 'flex', alignItems: 'center', gap: 6, fontFamily: fontJP,
+              }}>
+              <Plus size={14} /> 連絡文・作業表からまとめて登録
+            </button>
             <button type="button" onClick={() => setQuoteOpen(true)}
               title="完了済みの過去案件の案件情報をフォームに引用します"
               style={{
@@ -742,7 +756,7 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
               }}>
               <Folder size={14} /> 過去案件から引用
             </button>
-          )}
+          </div>)}
         </div>
 
         {!formCollapsed && (<>
