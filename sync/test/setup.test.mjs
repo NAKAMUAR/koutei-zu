@@ -2308,4 +2308,45 @@ test('『仮予定』タブ：管理者だけのメモ。初期設定で作り�
   assert.equal(inTab(eng).rows.filter(v => v.indexOf('新築マンション（仮）') >= 0).length, 0, 'エンジニア入力シートには出ない');
 });
 
+test('『案件入力』：視点が空の登録（エンジニア入力シートで足した行）を登録Noで呼び出す → ①で選んだ視点がその行に入り、上書きで入力シートの行にも入る', () => {
+  const admin = adminSheet();
+  const eng = engineerFile();
+  const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
+  env.g.quickSetup();
+  const f = admin.getSheetByName('案件入力');
+  const m = JSON.parse(JSON.stringify(env.g.formMap_(f)));
+  const LC = JSON.parse(JSON.stringify(env.g.FORM_LC)); const KEY = env.g.FORM_KEY_COL; const NO = env.g.FORM_NO_COL;
+  const cell = (r, c) => (f.rows[r - 1] || [])[c - 1];
+  const edit = (r, c, v) => { f.set(r, c, v); env.g.onAdminEdit({ range: f.getRange(r, c), source: admin }); };
+  const list = () => { const out = []; for (let r = m.list1; r <= m.list2; r++) if (cell(r, KEY) || cell(r, NO)) out.push({ r, code: cell(r, KEY) || '', label: cell(r, LC.label) || '', no: cell(r, NO) || '' }); return out; };
+  const inn = m.grid.find(g => g.keyword === 'IN').row;
+  // 『制作中』に視点の無い行を2つ → 取り込み（R0001・R0002）
+  const doing = eng.getSheetByName('制作中');
+  const dh = doing.header(2).map(h => h.split('\n')[0]);
+  const D = (name) => dh.indexOf(name) + 1;
+  const base = Math.max(doing.getLastRow(), 2);
+  [1, 2].forEach(k => [['会社コード', 'SOCIAL'], ['案件番号', 5], ['新規or修正', FIXR], ['Color', 0.5]].forEach(([h, v]) => doing.set(base + k, D(h), v)));
+  env.g.syncRegistrationsNow();
+  same([doing.rows[base][D('登録No') - 1], doing.rows[base + 1][D('登録No') - 1]], ['R0001', 'R0002']);
+  // 呼び出す：視点の無い2行が②に出る
+  edit(m.edit, 2, 'R0001');
+  same(list().map(x => x.code + ':' + x.no), [':R0001', ':R0002'], '視点の無い行も②に出る');
+  assert.ok(list()[0].label.includes('視点を選ぶ'), list()[0].label);
+  assert.ok(String(cell(m.result, 2)).includes('2件'), cell(m.result, 2));
+  // ①で IN2・IN4 を選ぶ → 空の行に順に入る（新しい行は増えない）
+  edit(inn, 3, true);
+  edit(inn, 5, true);
+  same(list().map(x => x.code + ':' + x.no), ['IN2:R0001', 'IN4:R0002'], '空の行に入る');
+  edit(m.submit, 2, true);
+  const r2 = env.g.submitFormSheet('');
+  assert.equal(r2.ok, true, r2.msg);
+  assert.ok(r2.msg.startsWith('直しました：R0001・R0002'), r2.msg);
+  const reg = admin.getSheetByName('登録一覧');
+  const rh = reg.header();
+  const R = (no, name) => { const row = reg.rows.find(x => x[rh.indexOf('登録No')] === no); return row ? row[rh.indexOf(name)] : undefined; };
+  same([R('R0001', '視点'), R('R0002', '視点')], ['IN2', 'IN4']);
+  assert.equal(reg.rows.slice(1).filter(x => x[rh.indexOf('登録No')]).length, 2, '行は増えない');
+  same([doing.rows[base][D('視点') - 1], doing.rows[base + 1][D('視点') - 1]], ['IN2', 'IN4'], '入力シートの行にも視点が入る');
+});
+
 console.log(`\n${passed} tests passed`);

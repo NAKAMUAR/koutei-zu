@@ -2619,8 +2619,13 @@ function formNormalizeRows_(rows, views) {
     list.forEach((room, ri) => {
       const code = trimStr_(r.code).toUpperCase();
       const pattern = normPattern_(r.pattern);
+      if (!code) {
+        // 視点が空の登録（登録No だけある行）：①で視点を選ぶまで「視点を選ぶ」の行として残す
+        if (ri === 0 && trimStr_(r.no) && !seen.has('no|' + trimStr_(r.no))) { seen.add('no|' + trimStr_(r.no)); out.push({ code: '', room: '', pattern: '', ext: '', no: trimStr_(r.no), white: r.white || '', color: r.color || '' }); }
+        return;
+      }
       const key = code + '|' + room + '|' + pattern;
-      if (!code || seen.has(key)) return;
+      if (seen.has(key)) return;
       seen.add(key);
       const ext = formIsAutoExt_(r.ext, code, views) ? formAutoExt_(code, room, pattern, views) : trimStr_(r.ext);
       // 登録No（呼び出した行）は、部屋名で分けたときは最初の部屋だけが持つ（ほかは新しく足す行）
@@ -2635,11 +2640,15 @@ function formNormalizeRows_(rows, views) {
  */
 function formListMerge_(codes, current, views, branch) {
   const out = [];
+  // 視点が空の登録（「登録Noで直す」で呼び出した行）：新しくチェックした視点を上から順に入れる（新しい登録にしない）
+  const blanks = (current || []).filter(r => !trimStr_(r.code) && trimStr_(r.no));
   codes.forEach(c => {
     const mine = (current || []).filter(r => trimStr_(r.code).toUpperCase() === c);
     if (mine.length) mine.forEach(r => out.push(r));
+    else if (blanks.length) out.push(Object.assign({}, blanks.shift(), { code: c, room: trimStr_(branch || ''), pattern: '', ext: '' }));
     else out.push({ code: c, room: trimStr_(branch || ''), pattern: '', ext: '' }); // 新しい視点には枝番を部屋名として付ける
   });
+  blanks.forEach(r => out.push(r)); // まだ視点を選んでいない行は下に残す
   return formNormalizeRows_(out, views);
 }
 /**
@@ -2691,6 +2700,7 @@ function formListMergeAll_(codes, current, views, rooms) {
 function formGridCodes_(rows, rooms) {
   const out = [];
   (rows || []).forEach(r => {
+    if (!r.code) return;
     if (rooms && rooms.length && rooms.indexOf(formRoom_(r.room)) < 0) return;
     if (out.indexOf(r.code) < 0) out.push(r.code);
   });
@@ -2945,7 +2955,7 @@ function formRead_(sheet, m) {
   const rows = [];
   for (let r = m.list1; r <= m.list2; r++) {
     const code = trimStr_(cell(r, FORM_KEY_COL)).toUpperCase();
-    if (!code) continue;
+    if (!code && !trimStr_(cell(r, FORM_NO_COL))) continue; // 視点が空の登録（登録No だけ）は残す
     rows.push({ code, room: trimStr_(cell(r, FORM_LC.room)), pattern: normPattern_(cell(r, FORM_LC.pattern)), ext: trimStr_(cell(r, FORM_LC.ext)),
       plus: isChecked_(cell(r, FORM_LC.plus)), del: isChecked_(cell(r, FORM_LC.del)), no: trimStr_(cell(r, FORM_NO_COL)),
       white: toHours_(cell(r, FORM_LC.white)) || '', color: toHours_(cell(r, FORM_LC.color)) || '' });
@@ -2954,6 +2964,7 @@ function formRead_(sheet, m) {
 }
 /** ② の表示用の名前（2F 外観目線①-A） */
 function formRowLabel_(r, views) {
+  if (!r.code) return '（視点を選ぶ）';
   return (r.room ? r.room + ' ' : '') + formViewLabel_(r.code, views) + (r.pattern ? '-' + r.pattern : '');
 }
 function formWriteList_(sheet, m, rows, views) {
@@ -2963,7 +2974,7 @@ function formWriteList_(sheet, m, rows, views) {
     const v = rows[i];
     const line = new Array(FORM_COLS).fill('');
     if (v) {
-      line[FORM_LC.label - 1] = formViewLabel_(v.code, views);
+      line[FORM_LC.label - 1] = v.code ? formViewLabel_(v.code, views) : '（①で視点を選ぶ）';
       line[FORM_LC.room - 1] = v.room;
       line[FORM_LC.pattern - 1] = v.pattern;
       line[FORM_LC.plus - 1] = false;
@@ -3163,7 +3174,8 @@ function formRegGroup_(regRows, no) {
   const hit = (regRows || []).find(r => trimStr_(r.no) === no);
   if (!hit) return null;
   const g = regGroupKey_(hit);
-  const rows = regRows.filter(r => trimStr_(r.no) && trimStr_(r.cut) && trimStr_(r.state) !== REG_STATE.DELETED && regGroupKey_(r) === g);
+  // 視点が空の行（エンジニア入力シートで足した行など）も入れる（①で選んだ視点がその行に入る）
+  const rows = regRows.filter(r => trimStr_(r.no) && trimStr_(r.state) !== REG_STATE.DELETED && regGroupKey_(r) === g);
   return { hit, rows, date: g.split('::')[1] || '' };
 }
 /** 「登録Noで直す」：その登録をフォームに呼び出す（空にしたら新規に戻す） */
@@ -3202,7 +3214,7 @@ function formPayload_(d, toInterp) {
   const deadline = f.deadline instanceof Date ? fmtYMD_(f.deadline) : trimStr_(f.deadline).replace(/\//g, '-');
   return {
     code: f.code, number: f.number, branch: f.branch, name: f.name, assignee: f.assignee, link: f.link, deadline, order: f.order, memo: f.memo, toInterp: trimStr_(toInterp),
-    views: d.rows.map(r => ({ cut: formCut_(r.code, r.room), pattern: r.pattern, request: f.request, extName: r.ext, no: r.no || '', white: r.white || '', color: r.color || '',
+    views: d.rows.filter(r => r.code).map(r => ({ cut: formCut_(r.code, r.room), pattern: r.pattern, request: f.request, extName: r.ext, no: r.no || '', white: r.white || '', color: r.color || '',
       branch: formBranchRooms_(f.branch).indexOf(formRoom_(r.room)) >= 0 ? formRoom_(r.room) : '' })),
   };
 }
