@@ -15,6 +15,7 @@ import { AssigneeView } from './AssigneeView.jsx';
 // 進行状況（段階の一覧）は開いたときに読み込む
 const StageView = lazy(() => import('./StageView.jsx'));
 const BulkTentativeModal = lazy(() => import('./input/BulkTentativeModal.jsx'));
+const AssigneeLanes = lazy(() => import('./input/AssigneeLanes.jsx').then(m => ({ default: m.AssigneeLanes })));
 
 function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdit, selectedAssignee, setSelectedAssignee }) {
   const {
@@ -1449,6 +1450,9 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
             <button type="button" onClick={() => setListGroupMode('board')} style={tabStyle(listGroupMode === 'board', colors, fontJP)} title="担当者ごとの進行中案件を一目で把握できるボード表示（納期の近い順）">
               担当者ボード
             </button>
+            <button type="button" onClick={() => setListGroupMode('lanes')} style={tabStyle(listGroupMode === 'lanes', colors, fontJP)} title="担当者ごとのレーンに予定を並べ、視点をドラッグして担当者を移す（まとめて保存）">
+              担当レーン
+            </button>
           </div>
           <div style={{ position: 'relative', flex: '1 1 280px', maxWidth: 480 }}>
             <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: colors.textMute, display: 'flex', alignItems: 'center', pointerEvents: 'none' }}>
@@ -1515,6 +1519,10 @@ function InputView({ form, setForm, handleSubmit, editingId, editMode, cancelEdi
           <div style={{ background: colors.surface, border: `1px dashed ${colors.border}`, borderRadius: 6, padding: 48, textAlign: 'center', color: colors.textMute, fontSize: 13 }}>
             「{searchQuery}」に一致する案件はありません。
           </div>
+        ) : listGroupMode === 'lanes' ? (
+          <Suspense fallback={<div style={{ padding: 40, textAlign: 'center', color: colors.textMute, fontSize: 13 }}>読み込み中...</div>}>
+            <AssigneeLanes tasks={filteredActive} />
+          </Suspense>
         ) : listGroupMode === 'board' ? (
           // 担当者ボード：担当者ごとの進行中案件を一目で把握できる一覧（④）
           <AssigneeBoard tasks={filteredActive} />
