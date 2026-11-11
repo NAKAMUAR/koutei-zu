@@ -1810,6 +1810,17 @@ test('エンジニアが入力シート『入力前』で足した行（登録No
   env.g.syncRegistrationsNow();
   same([doing.rows[dRow - 1][D('新規or修正') - 1], doing.rows[dRow - 1][D('社外案件名') - 1]], [NEWR, '田中邸'], '管理者が直した内容が『制作中』の行にも入る');
   assert.equal(reg.rows.filter(v => v[rh.indexOf('視点')] === 'EXE1').length, 1, '二重にしない');
+  // 視点が空の行も取り込む（記入中）→ 管理者が視点を入れると入力シートにも入る
+  const eRow = doing.getLastRow() + 1;
+  [['会社コード', 'SOCIAL'], ['案件番号', 5], ['新規or修正', FIXR], ['Color', 0.5]].forEach(([h, v]) => doing.set(eRow, D(h), v));
+  env.g.syncRegistrationsNow();
+  const eNo = doing.rows[eRow - 1][D('登録No') - 1];
+  assert.equal(eNo, 'R0006', '視点が空でも登録No');
+  const er = reg.rows.findIndex(v => v[rh.indexOf('登録No')] === 'R0006') + 1;
+  assert.equal(R(er, '状態'), '記入中');
+  setR(er, '視点', 'INE2');
+  env.g.syncRegistrationsNow();
+  assert.equal(doing.rows[eRow - 1][D('視点') - 1], 'INE2', '入れた視点が入力シートにも');
 });
 
 test('Discord は知らせる時間帯（既定 8-18）の中だけ。外の通知は貯めて、時間帯に入ったら自動実行でまとめて送る', () => {

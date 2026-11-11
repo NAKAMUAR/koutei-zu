@@ -3886,7 +3886,8 @@ function adoptStaffRows_(ss, reg, rc, cfg, now) {
     const at = (v, k) => (sc[k] ? v[sc[k] - 1] : '');
     vals.forEach((v, i) => {
       if (trimStr_(at(v, 'regNo'))) return;
-      if (!trimStr_(at(v, 'code')) || !trimStr_(at(v, 'number')) || !trimStr_(at(v, 'cut'))) return;
+      // 視点が空でも取り込む（『登録一覧』で「記入中」になり、管理者が視点を入れると入力シートにも入る）
+      if (!trimStr_(at(v, 'code')) || !trimStr_(at(v, 'number'))) return;
       // 『入力前』の書きかけ（翻訳済みも時間も無い）は待つ（取り込むと『登録一覧』の内容が入力シートへ写るため）。
       // 新規or修正が空の行も取り込み、『登録一覧』で「記入中」として管理者が直す（直すまで入力シートは書き換えない）
       if (name === STAFF_TAB_DEFAULT) {
