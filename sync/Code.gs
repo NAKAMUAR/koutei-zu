@@ -3924,7 +3924,7 @@ function syncRegistrations_(now) {
       row.zeroHours = staffZeroHours_(srow, ssc);
       if (hit && hit.sheet.getName() !== STAFF_TAB_DONE && hit.sheet.hideRows) {
         if (row.zeroHours) rowVis.push({ sheet: hit.sheet, row: hit.row, hide: true });
-        else if (toHours_(row.white) + toHours_(row.color) + toHours_(row.other) > 0) rowVis.push({ sheet: hit.sheet, row: hit.row, hide: false });
+        else rowVis.push({ sheet: hit.sheet, row: hit.row, hide: false }); // 0 を消した・時間が入ったら表示に戻す
       }
       // 入力シートの自動列（編集の瞬間に入らなかったときの保険：ここで入れる）
       putStaff('transAt', st.transAt || '');

@@ -2305,6 +2305,10 @@ test('制作時間を 0 と書いた行：『登録一覧』は「制作なし�
   assert.equal(R(2, '状態'), '制作なし（0時間）');
   assert.equal(tab.isRowHiddenByUser(row), true, '入力シートでは行を隠す');
   assert.equal(env.discord.length, sent, '催促しない');
+  tab.set(row, C('Color'), ''); env.g.syncRegistrationsNow();
+  assert.equal(tab.isRowHiddenByUser(row), false, '0 を消して空にしても表示に戻す');
+  tab.set(row, C('Color'), 0); env.g.syncRegistrationsNow();
+  assert.equal(tab.isRowHiddenByUser(row), true);
   tab.set(row, C('Color'), 1);
   env.g.syncRegistrationsNow();
   assert.equal(R(2, '状態'), '時間入力済み');
