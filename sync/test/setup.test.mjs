@@ -338,7 +338,7 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
   };
   vm.createContext(ctx);
   const names = ['onAdminEdit', 'renderRegMessage_', 'onStaffEdit', 'syncRegistrationsNow', 'saveDiscordWebhook_', 'inNotifyHours_', 'isReminderDue_', 'calcDeadlineOf_', 'regState_', 'REG_STATE', 'quickSetup', 'createStaffInputTab', 'transferFromStaffSheet', 'autoRun', 'readSettings_', 'readStaffRows_', 'collectSourceRows_', 'findStaffHeaderRow_',
-    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'FORM_NO_COL', 'updateEntryForm', 'normRegNo_', 'formRegGroup_', 'formEnsureEditRow_', 'FORM_L', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_', 'deleteRegistrations', 'cancelDeleteRegistrations', 'writeScheduleToLink_', 'writeAssigneeTabs_', 'withBranchRoom_', 'FORM_BR', 'saveBranchViews', 'taskPackOf_', 'fsReadDay_', 'fsReadsToday_', 'AUTO_READ_BUDGET', 'deliveryYmd_', 'fillStaffDeliveryNames_', 'planRegDeletion_', 'deleteDialogHtml_', 'DELETE_DIALOG_SCRIPT', 'regHeaderMap_', 'fixClientContactAssignees', 'staffZeroHours_'];
+    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'FORM_NO_COL', 'updateEntryForm', 'normRegNo_', 'formRegGroup_', 'formEnsureEditRow_', 'FORM_L', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_', 'deleteRegistrations', 'cancelDeleteRegistrations', 'writeScheduleToLink_', 'writeAssigneeTabs_', 'withBranchRoom_', 'FORM_BR', 'saveBranchViews', 'taskPackOf_', 'fsReadDay_', 'fsReadsToday_', 'AUTO_READ_BUDGET', 'deliveryYmd_', 'fillStaffDeliveryNames_', 'planRegDeletion_', 'deleteDialogHtml_', 'DELETE_DIALOG_SCRIPT', 'regHeaderMap_', 'fixClientContactAssignees', 'staffZeroHours_', 'staffDuplicatePlan_'];
   env.g = vm.runInContext(src + '\n;({' + names.join(',') + '})', ctx);
   // テストは時刻に関係なく Discord を送る（知らせる時間帯を 0-24 に）。時間帯のテストは env.setHours で変える
   env.setHours = (h) => { const st = env.admin.getSheetByName('設定'); const r = st && st.rows.findIndex(x => x[0] === '催促する時間帯（ベトナム時間）'); if (r >= 0) st.set(r + 1, 2, h); };
@@ -2347,6 +2347,35 @@ test('『案件入力』：視点が空の登録（エンジニア入力シー�
   same([R('R0001', '視点'), R('R0002', '視点')], ['IN2', 'IN4']);
   assert.equal(reg.rows.slice(1).filter(x => x[rh.indexOf('登録No')]).length, 2, '行は増えない');
   same([doing.rows[base][D('視点') - 1], doing.rows[base + 1][D('視点') - 1]], ['IN2', 'IN4'], '入力シートの行にも視点が入る');
+});
+
+test('入力シートに同じ登録No の行が何重にもできたとき：何も書いていない写しを消す（書いてある行は残す）', () => {
+  const admin = adminSheet();
+  const eng = engineerFile();
+  const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
+  const plan = env.g.staffDuplicatePlan_([
+    { key: '入力前!5', no: 'R1', filled: 0 }, { key: '入力前!6', no: 'R1', filled: 0 }, { key: '入力前!9', no: 'R1', filled: 2 },
+    { key: '入力前!7', no: 'R2', filled: 0 }, { key: '入力前!8', no: 'R2', filled: 1 }, { key: '制作中!3', no: 'R2', filled: 1 },
+    { key: '入力前!10', no: 'R3', filled: 0 },
+  ]);
+  same(plan.sort(), ['入力前!5', '入力前!6', '入力前!7'], '書いてある写し（R2 の2つ目）は消さない');
+  env.g.quickSetup();
+  const reg = admin.getSheetByName('登録一覧');
+  const rh = reg.header();
+  const setR = (r, name, v) => reg.set(r, rh.indexOf(name) + 1, v);
+  ['会社コード', '案件番号', '新規or修正', '視点', 'サーバーリンク'].forEach((h, j) => setR(2, h, ['SOCIAL', 4, NEWR, 'INE1', LINK][j]));
+  env.g.syncRegistrationsNow();
+  const tab = inTab(eng);
+  const sh = tab.header(2).map(h => h.split('\n')[0]);
+  const C = (name) => sh.indexOf(name) + 1;
+  const row = tab.rows.findIndex(v => v[C('登録No') - 1] === 'R0001') + 1;
+  // 同じ行の写しを2つ足す
+  const last = tab.getLastRow();
+  tab.rows[last] = tab.rows[row - 1].slice(); tab.rows[last + 1] = tab.rows[row - 1].slice();
+  assert.equal(tab.rows.filter(v => v[C('登録No') - 1] === 'R0001').length, 3);
+  const msg = env.g.syncRegistrationsNow();
+  assert.ok(msg.includes('重なった行を消した 2件'), msg);
+  assert.equal(tab.rows.filter(v => v && v[C('登録No') - 1] === 'R0001').length, 1, '1行だけ残る');
 });
 
 console.log(`\n${passed} tests passed`);

@@ -464,6 +464,49 @@ function staffWhite_(v, sc) {
   const at = (c) => (c ? v[c - 1] : '');
   return sc.whiteBody ? Math.round((toHours_(at(sc.whiteBody)) + toHours_(at(sc.whiteFurn))) * 100) / 100 : toHours_(at(sc.white));
 }
+/**
+ * 同じ登録No の行を探す（純ロジック）。entries＝[{ key（タブと行）, no, filled（エンジニアが書いた欄の数）}]（読む順）。
+ * 登録No ごとに、いちばん書いてある行（同じなら先の行）を残し、ほかの「何も書いていない」写しを消す対象にする。
+ * 書いてある写しは消さない（人が見て決める）
+ */
+function staffDuplicatePlan_(entries) {
+  const byNo = new Map();
+  (entries || []).forEach(e => { if (!e.no) return; if (!byNo.has(e.no)) byNo.set(e.no, []); byNo.get(e.no).push(e); });
+  const del = [];
+  byNo.forEach(list => {
+    if (list.length < 2) return;
+    let keep = list[0];
+    list.forEach(e => { if (e.filled > keep.filled) keep = e; });
+    list.forEach(e => { if (e !== keep && !e.filled) del.push(e.key); });
+  });
+  return del;
+}
+/** エンジニア入力シート（3タブ）の、同じ登録No の何も書いていない写しを消す。消した行数を返す */
+function dedupeStaffRows_(staffFile, cfg) {
+  const entries = [], sheets = new Map();
+  staffTabNames_(cfg).map(name => staffFile.getSheetByName(name)).filter(Boolean).forEach(sheet => {
+    const hr = findStaffHeaderRow_(sheet);
+    if (hr < 0 || sheet.getLastRow() <= hr) return;
+    const sc = mapStaffColumns_(sheet.getRange(hr, 1, 1, sheet.getLastColumn()).getValues()[0]);
+    if (!sc.regNo) return;
+    const w = Math.max.apply(null, Object.keys(sc).map(k => sc[k]));
+    sheets.set(sheet.getName(), sheet);
+    sheet.getRange(hr + 1, 1, sheet.getLastRow() - hr, w).getValues().forEach((v, i) => {
+      const no = trimStr_(v[sc.regNo - 1]);
+      if (!no) return;
+      // エンジニア・通訳が書く欄（翻訳済み・時間・時間入力者・メモ・翻訳メモ・作業の分け方・資料待ち）
+      const filled = ['whiteBody', 'whiteFurn', 'white', 'color', 'other', 'estimator', 'note', 'transNote', 'split'].filter(k => sc[k] && trimStr_(v[sc[k] - 1]) !== '').length
+        + ['translated', 'waiting'].filter(k => sc[k] && isChecked_(v[sc[k] - 1])).length;
+      entries.push({ key: sheet.getName() + '!' + (hr + 1 + i), no, filled });
+    });
+  });
+  const del = staffDuplicatePlan_(entries);
+  // シートごとに下の行から消す
+  const bySheet = new Map();
+  del.forEach(k => { const i = k.lastIndexOf('!'); const name = k.slice(0, i); if (!bySheet.has(name)) bySheet.set(name, []); bySheet.get(name).push(parseInt(k.slice(i + 1), 10)); });
+  bySheet.forEach((rows, name) => rows.sort((a, b) => b - a).forEach(r => sheets.get(name).deleteRow(r)));
+  return del.length;
+}
 /** 制作時間を「0」と書いた行か（純ロジック。2026-11-10）：時間の欄のどれかに 0 が書いてあり、合計が 0。空欄だけの行は違う */
 function staffZeroHours_(v, sc) {
   const cols = ['whiteBody', 'whiteFurn', 'white', 'color', 'other'].map(k => sc[k]).filter(Boolean);
@@ -3654,6 +3697,9 @@ function syncRegistrations_(now) {
   const staffFile = SpreadsheetApp.openById(cfg.fileId);
   const staff = staffFile.getSheetByName(cfg.tabName);
   if (!staff) throw new Error('エンジニア入力シートにタブ「' + cfg.tabName + '」が見つかりません');
+  // 同じ登録No の行が2つ以上あれば、エンジニアが何も書いていない写しを消す（2026-11-12：同じ行が何重にもできたため）
+  let deduped = 0;
+  try { deduped = dedupeStaffRows_(staffFile, cfg); } catch (e) { console.log('dedupeStaffRows_: ' + (e && e.message || e)); }
   // 入力前・制作中・制作済みの3つのタブ（古い順に数えて n回目 を決める）。登録No はどのタブにあっても探す。新しい行は入力前へ
   const tabs = staffTabNames_(cfg).map(name => staffFile.getSheetByName(name)).filter(Boolean).map(sheet => {
     const hr = findStaffHeaderRow_(sheet);
@@ -3884,7 +3930,7 @@ function syncRegistrations_(now) {
     reg.getRange(r1, col, vals.length, 1).setValues(vals);
   });
 
-  const msg = (adopted ? '入力シートで足した行を取り込み ' + adopted + '件・' : '') + (intake.moved ? '登録 ' + intake.moved + '件・' : '') + (intake.rejected ? '登録できない行 ' + intake.rejected + '件（足りない項目あり）・' : '') +
+  const msg = (deduped ? '入力シートの重なった行を消した ' + deduped + '件・' : '') + (adopted ? '入力シートで足した行を取り込み ' + adopted + '件・' : '') + (intake.moved ? '登録 ' + intake.moved + '件・' : '') + (intake.rejected ? '登録できない行 ' + intake.rejected + '件（足りない項目あり）・' : '') +
     '入力シートへ写した ' + copied + '件・直した ' + updated + '件・時間計算待ち ' + estimate + '件' +
     (missing ? '・入力シートに無い ' + missing + '件' : '') + (remindNote ? '・' + remindNote : '');
   console.log(msg);
