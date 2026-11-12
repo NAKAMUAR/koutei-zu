@@ -307,6 +307,7 @@ function onOpen() {
     .addSeparator()
     .addItem('案件登録を入力シートへ写す（翻訳・時間の読み戻しと催促も）', 'syncRegistrationsNow')
     .addItem('連絡文をコピー（『登録一覧』で選んだ行）', 'showRegMessage')
+    .addItem('登録の順に並び替える（『登録一覧』・エンジニア入力シート）', 'sortSheetsFromMenu')
     .addItem('1. エンジニア入力シートから転記', 'transferFromStaffSheet')
     .addItem('2. 工程図へ送信（「工程図へ」にチェックした行）', 'sendToKoutei')
     .addItem('送信内容のプレビュー（書き込まない）', 'previewSend')
@@ -2278,39 +2279,152 @@ function intakeEntries_(ss, list, rc) {
  * （修正で枚数が増えたとき EX1-A・EX1-B・EX1-C が並ぶように）。無ければ最後に書き足す。書いた行番号の配列を返す
  */
 function insertRegRows_(list, rc, rows) {
-  const lv = list.getLastRow() >= 2 ? list.getRange(2, 1, list.getLastRow() - 1, list.getLastColumn()).getValues() : [];
-  const keyOf = (code, number, cut) => normCode_(joinCode_(code, number)) + '::' + normCut_(trimStr_(cut));
-  const lastBy = new Map();
-  lv.forEach((v, i) => { if (trimStr_(v[rc.cut - 1])) lastBy.set(keyOf(v[rc.code - 1], v[rc.number - 1], v[rc.cut - 1]), i + 2); });
-  const tail = [], groups = new Map();
-  rows.forEach((row, i) => {
-    const a = lastBy.get(keyOf(row.code, row.number, row.cut));
-    if (a) { if (!groups.has(a)) groups.set(a, []); groups.get(a).push(i); } else tail.push(i);
-  });
+  // 2026-11-12 から、登録は下へ足す（上が古い・下が新しい）。1回の登録の中は視点の順（外観目線1〜・内観目線1〜…）
+  const views = viewsForSort_();
+  const order = rows.map((r, i) => i).sort((a, b) => cmpKey_(viewSortKey_(rows[a].cut, rows[a].pattern, views), viewSortKey_(rows[b].cut, rows[b].pattern, views)) || a - b);
   const at = new Array(rows.length);
-  if (tail.length) {
-    const start = appendToRegList_(list, rc, tail.map(i => rows[i]));
-    tail.forEach((i, j) => { at[i] = start + j; });
-  }
-  const keys = regWriteKeys_(rc);
-  const fm = regFormulas_(rc);
-  const box = SpreadsheetApp.newDataValidation().requireCheckbox().build();
-  // 下の差し込み位置から順に（上の行番号がずれないように）
-  Array.from(groups.keys()).sort((a, b) => b - a).forEach(a => {
-    const idx = groups.get(a);
-    list.insertRowsAfter(a, idx.length);
-    const r1 = a + 1, n = idx.length;
-    const width = list.getLastColumn();
-    const block = idx.map(i => { const line = new Array(width).fill(''); keys.forEach(k => { if (rc[k] && rows[i][k] !== undefined) line[rc[k] - 1] = rows[i][k]; }); return line; });
-    keys.filter(k => rc[k]).forEach(k => list.getRange(r1, rc[k], n, 1).setValues(block.map(line => [line[rc[k] - 1]])));
-    list.getRange(r1, rc.internal, n, 1).setFormulaR1C1(fm.internal);
-    list.getRange(r1, rc.total, n, 1).setFormulaR1C1(fm.total);
-    ['manual', 'copy', 'del'].forEach(k => { if (rc[k]) list.getRange(r1, rc[k], n, 1).setDataValidation(box).setValues(idx.map(() => [false])); });
-    idx.forEach((i, j) => { at[i] = r1 + j; });
-    // 先に書いた（下にある）行の番号は、差し込んだぶんだけずれる
-    for (let i = 0; i < at.length; i++) if (at[i] && at[i] > a && idx.indexOf(i) < 0) at[i] += n;
-  });
+  if (!rows.length) return at;
+  const start = appendToRegList_(list, rc, order.map(i => rows[i]));
+  order.forEach((i, j) => { at[i] = start + j; });
   return at;
+}
+/** 並び替えに使う視点マスタ（読めなければ初期値） */
+function viewsForSort_() {
+  try { return viewsOrDefault_(readMasters_(SpreadsheetApp.getActiveSpreadsheet()).views); } catch (e) { return viewsOrDefault_([]); }
+}
+/** 視点の並び順のキー（純ロジック）：視点マスタの区分の順 → 番号 → 部屋名 → パターン。視点が空・区分が分からないものは後ろ */
+function viewSortKey_(cut, pattern, views) {
+  const c = trimStr_(cut).toUpperCase();
+  if (!c) return '999|9999||' + trimStr_(pattern);
+  const sp = formSplitCut_(c);
+  const toks = cutTokens_(sp.code);
+  let cat = 998;
+  const vs = viewsOrDefault_(views);
+  for (let t = 0; t < toks.length && cat === 998; t++) { const k = vs.findIndex(v => v.keyword === toks[t]); if (k >= 0) cat = k; }
+  const n = cutNumber_(sp.code);
+  return ('00' + cat).slice(-3) + '|' + ('000' + (n === '' || n === undefined ? 9999 : n)).slice(-4) + '|' + sp.room + '|' + normPattern_(pattern);
+}
+function cmpKey_(a, b) { return a < b ? -1 : a > b ? 1 : 0; }
+/** 登録日時 → 並び替え用の文字（分まで。空は ''） */
+function regDateKey_(v) {
+  if (Object.prototype.toString.call(v) === '[object Date]') return isNaN(v.getTime()) ? '' : fmtDateTime_(v).replace(/[^0-9]/g, '');
+  const s = trimStr_(v).replace(/[^0-9]/g, '');
+  return s.slice(0, 12);
+}
+/** 登録No → 数（R0123 → 123） */
+function regNoNum_(no) { const m = trimStr_(no).match(/(\d+)/); return m ? parseInt(m[1], 10) : 0; }
+
+/**
+ * 『登録一覧』とエンジニア入力シート（入力前・制作中・制作済み）を、登録の順（上が古い・下が新しい）、
+ * 1回の登録の中は視点の順（外観目線1〜・内観目線1〜・外観鳥瞰1〜…）に並び替える。
+ * 値を並べ替えて書き直し、式（合計・社内案件名）は書き直す。制作時間 0 の行はもう一度隠す。メニュー／エディタから実行
+ */
+function sortSheetsByRegistration() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) return 'ほかの処理が動いています。少し待ってから、もう一度実行してください';
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const cfg = readSettings_();
+    const views = viewsForSort_();
+    const out = [];
+    // 『登録一覧』
+    const reg = ss.getSheetByName(SHEET.REG);
+    const dateByNo = new Map();
+    if (reg && reg.getLastRow() >= 2) {
+      const rc = regHeaderMap_(reg);
+      const w = reg.getLastColumn();
+      const vals = reg.getRange(2, 1, reg.getLastRow() - 1, w).getValues();
+      let last = 0;
+      vals.forEach((v, i) => { if (trimStr_(v[rc.no - 1]) !== '' || REG_INPUT.some(k => rc[k] && trimStr_(v[rc[k] - 1]) !== '')) last = i + 1; });
+      const rows = vals.slice(0, last);
+      // 1回の登録＝同じ登録日時（分）・同じ案件。登録どうしは登録日時 → いちばん小さい登録No の順
+      const batchOf = (v) => (regDateKey_(v[rc.regDate - 1]) || '999999999999') + '#' + normCode_(joinCode_(v[rc.code - 1], v[rc.number - 1]));
+      const minNo = new Map();
+      rows.forEach(v => { const n = regNoNum_(v[rc.no - 1]) || 99999; const b = batchOf(v); if (!minNo.has(b) || n < minNo.get(b)) minNo.set(b, n); });
+      const batchKey = (v) => { const b = batchOf(v); return b.split('#')[0] + '#' + ('00000' + minNo.get(b)).slice(-5) + '#' + b.split('#')[1]; };
+      rows.forEach(v => { const no = trimStr_(v[rc.no - 1]); if (no) dateByNo.set(no, batchKey(v)); });
+      const key = (v, i) => [batchKey(v), viewSortKey_(v[rc.cut - 1], v[rc.pattern - 1], views), ('00000' + regNoNum_(v[rc.no - 1])).slice(-5), ('00000' + i).slice(-5)].join('#');
+      const moved = sortRowsBlock_(reg, 2, rows, key);
+      if (moved) {
+        const fm = regFormulas_(rc);
+        if (rc.internal) reg.getRange(2, rc.internal, rows.length, 1).setFormulaR1C1(fm.internal);
+        if (rc.total) reg.getRange(2, rc.total, rows.length, 1).setFormulaR1C1(fm.total);
+      }
+      out.push('『登録一覧』' + (moved ? rows.length + '行を並び替え' : 'そのまま'));
+    }
+    // エンジニア入力シート（タブごと）。取込キーの「n回目」が変わる並び替えはしない（工程図の作業とずれるため）
+    if (cfg.fileId) {
+      const file = SpreadsheetApp.openById(cfg.fileId);
+      const tabs = staffTabNames_(cfg).map(n => file.getSheetByName(n)).filter(Boolean).map(sheet => {
+        const hr = findStaffHeaderRow_(sheet);
+        if (hr < 0 || sheet.getLastRow() <= hr) return null;
+        const sc = mapStaffColumns_(sheet.getRange(hr, 1, 1, sheet.getLastColumn()).getValues()[0]);
+        const w = sheet.getLastColumn();
+        const vals = sheet.getRange(hr + 1, 1, sheet.getLastRow() - hr, w).getValues();
+        let last = 0;
+        vals.forEach((v, i) => { if (['code', 'number', 'cut', 'regNo'].some(k => sc[k] && trimStr_(v[sc[k] - 1]) !== '')) last = i + 1; });
+        const rows = vals.slice(0, last);
+        // 登録No の無い行（古い行）は上に今の順で。登録の順は『登録一覧』から（無ければ登録No の順）
+        const key = (v, i) => {
+          const no = sc.regNo ? trimStr_(v[sc.regNo - 1]) : '';
+          if (!no) return '0#' + ('00000' + i).slice(-5);
+          return ['1', dateByNo.get(no) || '000000000000#' + ('00000' + regNoNum_(no)).slice(-5), viewSortKey_(v[sc.cut - 1], sc.pattern ? v[sc.pattern - 1] : '', views), ('00000' + regNoNum_(no)).slice(-5), ('00000' + i).slice(-5)].join('#');
+        };
+        const order = rows.map((v, i) => ({ i, k: key(v, i) })).sort((a, b) => cmpKey_(a.k, b.k) || a.i - b.i).map(x => x.i);
+        return { sheet, hr, sc, w, rows, order };
+      }).filter(Boolean);
+      // 登録No → 取込キー（読む順＝制作済み→制作中→入力前）
+      const keysOf = (useNew) => {
+        const counts = new Map(), out2 = new Map();
+        tabs.forEach(t => {
+          const seq = useNew(t) ? t.order.map(i => t.rows[i]) : t.rows;
+          seq.forEach(v => {
+            const code = joinCode_(v[t.sc.code - 1], t.sc.number ? v[t.sc.number - 1] : '');
+            const cut = trimStr_(v[t.sc.cut - 1]);
+            if (!code || !cut) return;
+            const base = normCode_(code) + '::' + normCut_(viewpointNameOf_(cut, t.sc.pattern ? v[t.sc.pattern - 1] : ''));
+            const n = (counts.get(base) || 0) + 1;
+            counts.set(base, n);
+            const no = t.sc.regNo ? trimStr_(v[t.sc.regNo - 1]) : '';
+            out2.set(no || ('#' + base + '::' + n), base + '::' + n);
+          });
+        });
+        return out2;
+      };
+      const before = keysOf(() => false);
+      const same = (m) => Array.from(before.keys()).every(k => m.get(k) === before.get(k));
+      const doSort = new Set();
+      tabs.forEach(t => { if (same(keysOf(x => x === t || doSort.has(x)))) doSort.add(t); });
+      tabs.forEach(t => {
+        const moved = doSort.has(t) && !t.order.every((x, j) => x === j);
+        if (moved) {
+          t.sheet.getRange(t.hr + 1, 1, t.rows.length, t.rows[0].length).setValues(t.order.map(i => t.rows[i]));
+          const tf = staffTotalFormula_(t.sc);
+          if (tf && t.sc.total) t.sheet.getRange(t.hr + 1, t.sc.total, t.rows.length, 1).setFormulaR1C1(tf);
+          // 隠していた行（制作時間 0）は、並び替えた位置でもう一度隠す
+          if (t.sheet.showRows) t.sheet.showRows(t.hr + 1, t.rows.length);
+          if (t.sheet.getName() !== STAFF_TAB_DONE) t.order.forEach((i, j) => { const v = t.rows[i]; if (trimStr_(v[t.sc.regNo - 1]) && staffZeroHours_(v, t.sc)) t.sheet.hideRows(t.hr + 1 + j); });
+        }
+        out.push('『' + t.sheet.getName() + '』' + (moved ? t.rows.length + '行を並び替え' : (doSort.has(t) ? 'そのまま' : '並び替えると「n回目」が変わるのでそのまま')));
+      });
+    }
+    const msg = '並び替えました：' + out.join('・');
+    console.log(msg);
+    return msg;
+  } finally { lock.releaseLock(); }
+}
+/** メニュー「登録の順に並び替える」 */
+function sortSheetsFromMenu() {
+  const msg = sortSheetsByRegistration();
+  try { SpreadsheetApp.getActiveSpreadsheet().toast(msg, '並び替え', 10); } catch (e) { /* 画面が無いとき */ }
+}
+/** 行のまとまりをキーの順に並べ替えて書き直す（純ロジック＋書き込み）。並びが変わったら true */
+function sortRowsBlock_(sheet, startRow, rows, keyOf) {
+  const idx = rows.map((v, i) => ({ i, k: keyOf(v, i) }));
+  idx.sort((a, b) => cmpKey_(a.k, b.k) || a.i - b.i);
+  if (idx.every((x, j) => x.i === j)) return false;
+  sheet.getRange(startRow, 1, rows.length, rows[0].length).setValues(idx.map(x => rows[x.i]));
+  return true;
 }
 /** 登録のときに『登録一覧』へ書く列：管理者が書く列＋社外視点名＋White・Color（『案件入力』の W・X） */
 function regWriteKeys_(rc) {
@@ -3881,21 +3995,10 @@ function syncRegistrations_(now) {
       if (g.every(c => arr[c - 1] === '')) return;
       staff.getRange(start + i, g[0], 1, g.length).setValues([g.map(c => arr[c - 1])]);
     }));
-    // 同じ案件・同じ視点（パターン違い）の行が入力前にあれば、そのすぐ下に差し込む（A・B・C が並ぶように）。無ければ最後へ
-    const keyOf = (v) => normCode_(joinCode_(v[sc.code - 1], sc.number ? v[sc.number - 1] : '')) + '::' + normCut_(trimStr_(v[sc.cut - 1]));
-    const lastBy = new Map();
-    before.vals.forEach((v, i) => { if (trimStr_(v[sc.cut - 1])) lastBy.set(keyOf(v), hr + 1 + i); });
-    const tail = [], groups = new Map();
-    appends.forEach(arr => { const a = lastBy.get(keyOf(arr)); if (a) { if (!groups.has(a)) groups.set(a, []); groups.get(a).push(arr); } else tail.push(arr); });
+    // 2026-11-12 から、入力前の最後へ足す（上が古い・下が新しい）。1回で足す行は視点の順（外観目線1〜・内観目線1〜…）
+    const sviews = viewsForSort_();
+    const tail = appends.slice().sort((a, b) => cmpKey_(viewSortKey_(a[sc.cut - 1], sc.pattern ? a[sc.pattern - 1] : '', sviews), viewSortKey_(b[sc.cut - 1], sc.pattern ? b[sc.pattern - 1] : '', sviews)));
     if (tail.length) { ensureSize_(staff, lastData + tail.length, width); writeRows(lastData + 1, tail); }
-    const totalF = staffTotalFormula_(sc);
-    Array.from(groups.keys()).sort((a, b) => b - a).forEach(a => {
-      const list = groups.get(a);
-      staff.insertRowsAfter(a, list.length);
-      writeRows(a + 1, list);
-      if (totalF && sc.total) staff.getRange(a + 1, sc.total, list.length, 1).setFormulaR1C1(totalF);
-      ['translated', 'delReq', 'waiting'].forEach(k => { if (sc[k]) staff.getRange(a + 1, sc[k], list.length, 1).setDataValidation(SpreadsheetApp.newDataValidation().requireCheckbox().build()).setValues(list.map(() => [false])); });
-    });
   }
 
   // 催促（Discord）

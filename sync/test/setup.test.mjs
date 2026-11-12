@@ -65,7 +65,7 @@ class FakeSheet {
   insertRowsAfter(after, n) { this.maxRows += n; if (this.rows.length > after) this.rows.splice(after, 0, ...Array.from({ length: n }, () => [])); if (this.hidden) this.hidden = new Set([...this.hidden].map(r => (r > after ? r + n : r))); return this; }
   getIndex() { return this.ss ? this.ss.sheets.indexOf(this) + 1 : 1; }
   hideRows(r) { (this.hidden = this.hidden || new Set()).add(r); return this; }
-  showRows(r) { if (this.hidden) this.hidden.delete(r); return this; }
+  showRows(r, n) { if (this.hidden) for (let k = 0; k < (n || 1); k++) this.hidden.delete(r + k); return this; }
   isRowHiddenByUser(r) { return !!(this.hidden && this.hidden.has(r)); }
   insertColumnsAfter(after, n) { this.maxCols += n; return this; }
   deleteColumns(c, n) { this.maxCols -= n; return this; }
@@ -338,7 +338,7 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
   };
   vm.createContext(ctx);
   const names = ['onAdminEdit', 'renderRegMessage_', 'onStaffEdit', 'syncRegistrationsNow', 'saveDiscordWebhook_', 'inNotifyHours_', 'isReminderDue_', 'calcDeadlineOf_', 'regState_', 'REG_STATE', 'quickSetup', 'createStaffInputTab', 'transferFromStaffSheet', 'autoRun', 'readSettings_', 'readStaffRows_', 'collectSourceRows_', 'findStaffHeaderRow_',
-    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'FORM_NO_COL', 'updateEntryForm', 'normRegNo_', 'formRegGroup_', 'formEnsureEditRow_', 'FORM_L', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_', 'deleteRegistrations', 'cancelDeleteRegistrations', 'writeScheduleToLink_', 'writeAssigneeTabs_', 'withBranchRoom_', 'FORM_BR', 'saveBranchViews', 'taskPackOf_', 'fsReadDay_', 'fsReadsToday_', 'AUTO_READ_BUDGET', 'deliveryYmd_', 'fillStaffDeliveryNames_', 'planRegDeletion_', 'deleteDialogHtml_', 'DELETE_DIALOG_SCRIPT', 'regHeaderMap_', 'fixClientContactAssignees', 'staffZeroHours_', 'staffDuplicatePlan_'];
+    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'FORM_NO_COL', 'updateEntryForm', 'normRegNo_', 'formRegGroup_', 'formEnsureEditRow_', 'FORM_L', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_', 'deleteRegistrations', 'cancelDeleteRegistrations', 'writeScheduleToLink_', 'writeAssigneeTabs_', 'withBranchRoom_', 'FORM_BR', 'saveBranchViews', 'taskPackOf_', 'fsReadDay_', 'fsReadsToday_', 'AUTO_READ_BUDGET', 'deliveryYmd_', 'fillStaffDeliveryNames_', 'planRegDeletion_', 'deleteDialogHtml_', 'DELETE_DIALOG_SCRIPT', 'regHeaderMap_', 'fixClientContactAssignees', 'staffZeroHours_', 'staffDuplicatePlan_', 'viewSortKey_', 'sortSheetsByRegistration'];
   env.g = vm.runInContext(src + '\n;({' + names.join(',') + '})', ctx);
   // テストは時刻に関係なく Discord を送る（知らせる時間帯を 0-24 に）。時間帯のテストは env.setHours で変える
   env.setHours = (h) => { const st = env.admin.getSheetByName('設定'); const r = st && st.rows.findIndex(x => x[0] === '催促する時間帯（ベトナム時間）'); if (r >= 0) st.set(r + 1, 2, h); };
@@ -1490,32 +1490,52 @@ test('制作時間の計算の期限：8〜12時・13〜17時（ベトナム時�
   assert.equal(at(env.g.addWorkMinutes_(vn(4, 18, 0), 90, '')), '11/4 19:30', '時間帯が無ければそのまま足す');
 });
 
-test('修正で枚数が増えたとき：足した EX1-C は『登録一覧』と入力シートで EX1-A・EX1-B のすぐ下に入る（別の案件・視点の行の後ろに離れない）', () => {
+test('登録の並び：上が古い・下が新しい。1回の登録の中は視点の順（外観目線1〜・内観目線1〜…）。並び替えで今の行もそろえる', () => {
   const admin = adminSheet();
   const eng = engineerFile();
   const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
   env.g.quickSetup();
   const base = { code: 'REN', number: '50', name: 'マンション', assignee: '', link: LINK, deadline: '', order: '', memo: '', toInterp: '' };
   const v = (cut, pattern, no) => ({ cut, pattern, request: '新規 / Mới', no: no || '' });
-  let res = env.g.submitEntryForm({ ...base, views: [v('EX1', 'A'), v('EX1', 'B'), v('IN1', '')] });
-  same(res.nos, ['R0001', 'R0002', 'R0003']);
-  res = env.g.submitEntryForm({ ...base, number: '51', views: [v('EX1', '')] });
-  same(res.nos, ['R0004']);
-  // REN.50 を直して EX1-C を足す
-  res = env.g.updateEntryForm({ ...base, views: [v('EX1', 'A', 'R0001'), v('EX1', 'B', 'R0002'), v('IN1', '', 'R0003'), v('EX1', 'C')] });
+  // 視点の順がばらばらでも、視点の順に並ぶ（IN2・EX1-B・IN1・EX1-A → EX1-A・EX1-B・IN1・IN2）
+  let res = env.g.submitEntryForm({ ...base, views: [v('IN2', ''), v('EX1', 'B'), v('IN1', ''), v('EX1', 'A')] });
   assert.equal(res.ok, true, res.msg);
-  same(res.nos.slice(-1), ['R0005']);
+  res = env.g.submitEntryForm({ ...base, number: '51', views: [v('EX1', '')] });
+  // REN.50 を直して EX1-C を足す → 新しい登録なので下へ
+  res = env.g.updateEntryForm({ ...base, views: [v('IN2', '', 'R0004'), v('EX1', 'B', 'R0002'), v('IN1', '', 'R0003'), v('EX1', 'A', 'R0001'), v('EX1', 'C')] });
+  assert.equal(res.ok, true, res.msg);
   const reg = admin.getSheetByName('登録一覧');
   const rh = reg.header();
-  const list = reg.rows.slice(1).filter(r => r[rh.indexOf('登録No')]).map(r => r[rh.indexOf('登録No')] + ' ' + r[rh.indexOf('案件番号')] + ' ' + r[rh.indexOf('視点')] + (r[rh.indexOf('パターン')] ? '-' + r[rh.indexOf('パターン')] : ''));
-  same(list, ['R0001 50 EX1-A', 'R0002 50 EX1-B', 'R0005 50 EX1-C', 'R0003 50 IN1', 'R0004 51 EX1'], '『登録一覧』で A・B・C が並ぶ');
-  const ci = rh.indexOf('社内案件名') + 1;
-  assert.ok(reg.formulas.some(f => f.col === ci && f.row === 4), '差し込んだ行にも社内案件名の式');
+  const list = () => reg.rows.slice(1).filter(r => r[rh.indexOf('登録No')]).map(r => r[rh.indexOf('案件番号')] + ' ' + r[rh.indexOf('視点')] + (r[rh.indexOf('パターン')] ? '-' + r[rh.indexOf('パターン')] : ''));
+  same(list(), ['50 EX1-A', '50 EX1-B', '50 IN1', '50 IN2', '51 EX1', '50 EX1-C'], '『登録一覧』は登録の順・視点の順');
   const tab = eng.getSheetByName('入力前');
   const sh = tab.header(2).map(h => h.split('\n')[0]);
-  const staff = tab.rows.slice(2).filter(r => r[sh.indexOf('登録No')]).map(r => r[sh.indexOf('登録No')] + ' ' + r[sh.indexOf('視点')] + (r[sh.indexOf('パターン')] ? '-' + r[sh.indexOf('パターン')] : ''));
-  same(staff, ['R0001 EX1-A', 'R0002 EX1-B', 'R0005 EX1-C', 'R0003 IN1', 'R0004 EX1'], '入力シートでも A・B・C が並ぶ');
-  assert.equal(tab.rows[4][sh.indexOf('納品名')], 'マンション_外観目線視点①_パターンC_' + env.g.deliveryYmd_());
+  const staff = () => tab.rows.slice(2).filter(r => r && r[sh.indexOf('登録No')]).map(r => r[sh.indexOf('案件番号')] + ' ' + r[sh.indexOf('視点')] + (r[sh.indexOf('パターン')] ? '-' + r[sh.indexOf('パターン')] : ''));
+  same(staff(), ['50 EX1-A', '50 EX1-B', '50 IN1', '50 IN2', '51 EX1', '50 EX1-C'], '入力シートも同じ並び');
+  // 並びが崩れた行（手で入れ替えた）を、並び替えでそろえる
+  const ri = (no) => reg.rows.findIndex(r => r[rh.indexOf('登録No')] === no);
+  const a = ri('R0001'), b = ri('R0004');
+  const tmp = reg.rows[a]; reg.rows[a] = reg.rows[b]; reg.rows[b] = tmp;
+  const ti = (no) => tab.rows.findIndex(r => r && r[sh.indexOf('登録No')] === no);
+  const c = ti('R0005'), d = ti('R0002');
+  const t2 = tab.rows[c]; tab.rows[c] = tab.rows[d]; tab.rows[d] = t2;
+  // REN.51（R0005）と、あとから足した EX1-C（R0006）は後の登録（登録日時が後）
+  reg.rows[ri('R0005')][rh.indexOf('登録日時')] = '2099-01-01 10:00';
+  reg.rows[ri('R0006')][rh.indexOf('登録日時')] = '2099-01-01 11:00';
+  const msg = env.g.sortSheetsByRegistration();
+  assert.ok(msg.includes('並び替え'), msg);
+  same(list(), ['50 EX1-A', '50 EX1-B', '50 IN1', '50 IN2', '51 EX1', '50 EX1-C'], '並び替えで『登録一覧』がそろう');
+  same(staff(), ['50 EX1-A', '50 EX1-B', '50 IN1', '50 IN2', '51 EX1', '50 EX1-C'], '並び替えで入力シートもそろう');
+  // 同じ視点の2回目（R0007）が1回目より上にあると、並び替えで「n回目」が入れ替わる → そのタブは並び替えない
+  res = env.g.submitEntryForm({ ...base, views: [v('EX1', 'A')] });
+  reg.rows[ri('R0007')][rh.indexOf('登録日時')] = '2099-01-02 10:00';
+  const e = ti('R0007'), f0 = ti('R0001');
+  const t3 = tab.rows[e]; tab.rows.splice(e, 1); tab.rows.splice(f0, 0, t3);
+  const msg2 = env.g.sortSheetsByRegistration();
+  assert.ok(msg2.includes('『入力前』並び替えると「n回目」が変わるのでそのまま'), msg2);
+  assert.equal(tab.rows[ti('R0007')], tab.rows[f0], 'R0007 は動かさない');
+  same(env.g.viewSortKey_('INB1', '', []) > env.g.viewSortKey_('IN12', '', []), true, '内観鳥瞰は内観目線の後');
+  same(env.g.viewSortKey_('EX2', '', []) < env.g.viewSortKey_('EX10', '', []), true, '番号は数の順（2 < 10）');
 });
 
 test('登録の削除：エンジニアの削除依頼 →『登録一覧』に日時・Discord／管理者が「削除」→ 確認の画面 → 入力シートの行と工程図の作業だけ消す（管理者用シートはチェックが残る）→ チェックを外すと戻る（あとの回がある行は消さない）', () => {
@@ -1782,12 +1802,12 @@ test('エンジニアが入力シート『入力前』で足した行（登録No
   assert.ok(msg.includes('入力シートで足した行を取り込み 1件'), msg);
   assert.equal(tab.rows[newRow - 1][C('登録No') - 1], 'R0004', '入力シートの行に登録No');
   assert.ok(rowB > 0);
-  // 『登録一覧』では INE4-B のすぐ下（RIC.34 の前）に入る。担当者は同じ案件の前の登録から
-  same([R(4, '登録No'), R(4, '視点'), R(4, 'パターン'), R(4, 'お客様担当者'), R(4, '管理者メモ'), R(5, '登録No')], ['R0004', 'IN4', 'C', '井戸澤様', 'エンジニア入力シート（入力前）で追加', 'R0003']);
-  assert.equal(R(4, 'Color'), 0.5);
-  assert.equal(R(4, '社外視点名'), '内観目線視点④_パターンC', '社外視点名も入る');
-  assert.equal(String(R(4, '納期')), String(new Date(2030, 0, 20)), '納期は同じ案件の前の登録から');
-  assert.equal(R(4, '状態'), '時間入力済み');
+  // 『登録一覧』では最後（新しい登録は下）に入る。お客様担当者は同じ案件の前の登録から
+  same([R(4, '登録No'), R(5, '登録No'), R(5, '視点'), R(5, 'パターン'), R(5, 'お客様担当者'), R(5, '管理者メモ')], ['R0003', 'R0004', 'IN4', 'C', '井戸澤様', 'エンジニア入力シート（入力前）で追加']);
+  assert.equal(R(5, 'Color'), 0.5);
+  assert.equal(R(5, '社外視点名'), '内観目線視点④_パターンC', '社外視点名も入る');
+  assert.equal(String(R(5, '納期')), String(new Date(2030, 0, 20)), '納期は同じ案件の前の登録から');
+  assert.equal(R(5, '状態'), '時間入力済み');
   assert.equal(tab.rows[newRow - 1][C('納品名') - 1], 'ロイヤルパークス有明_内観目線視点④_パターンC_' + env.g.deliveryYmd_(), '納品名も入る');
   // 何度動かしても二重にしない
   env.g.syncRegistrationsNow();
