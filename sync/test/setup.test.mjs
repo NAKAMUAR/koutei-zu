@@ -313,7 +313,7 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
     setProperty: (k, v) => { env.props[k] = v; },
     deleteProperty: (k) => { delete env.props[k]; },
   }) };
-  ctx.LockService = { getScriptLock: () => ({ tryLock: () => true, releaseLock() {} }) };
+  ctx.LockService = { getScriptLock: () => ({ tryLock: () => true, releaseLock() {} }), getDocumentLock: () => ({ tryLock: () => true, releaseLock() {} }) };
   ctx.ScriptApp = {
     getOAuthToken: () => 'tok',
     getProjectTriggers: () => env.triggers.slice(),

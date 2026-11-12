@@ -3440,26 +3440,42 @@ function onFormEdit_(ss, sheet, range) {
     return;
   }
   if (m.grid.some(g => hit(g.row))) {
-    const d = formRead_(sheet, m);
-    const rooms = formBranchRooms_(d.fields.branch);
-    const rows = rooms.length > 1
-      ? formListMergeAll_(d.codes, d.rows, views, rooms)
-      : formListMerge_(d.codes, d.rows, views, d.fields.branch);
-    formWriteList_(sheet, m, rows, views);
-    formSetGrid_(sheet, m, formGridCodes_(rows, rooms));
+    // チェックを続けて押すと、編集ごとの処理が同時に動く。順番に1つずつ動かし、毎回いまの①を読み直す。
+    // ①（チェック）は人が押したとおりに残し、ここでは書き戻さない（前の処理が古い①を書き戻して、押したチェックが外れていた。2026-11-12）
+    formWithLock_(() => {
+      const d = formRead_(sheet, m);
+      const rooms = formBranchRooms_(d.fields.branch);
+      const rows = rooms.length > 1
+        ? formListMergeAll_(d.codes, d.rows, views, rooms)
+        : formListMerge_(d.codes, d.rows, views, d.fields.branch);
+      formWriteList_(sheet, m, rows, views);
+      // 枝番が2つ以上のときだけ、①を「どれかの枝番にある視点」にそろえる
+      if (rooms.length > 1) formSetGrid_(sheet, m, formGridCodes_(rows, rooms));
+    });
     return;
   }
   if (r2 >= m.list1 && r1 <= m.list2) {
-    // ② を直したとき：外す・＋ を反映し、部屋名を分け、社外視点名を付け直す。①のチェックもそろえる
-    const d = formRead_(sheet, m);
-    let rows = d.rows.filter(r => !r.del);
-    for (let i = 0; i < rows.length; i++) {
-      if (rows[i].plus) { rows[i].plus = false; rows = formAddPattern_(rows, i); }
-    }
-    rows = formNormalizeRows_(rows, views);
-    formWriteList_(sheet, m, rows, views);
-    formSetGrid_(sheet, m, formGridCodes_(rows, formBranchRooms_(d.fields.branch)));
+    // ② を直したとき：外す・＋ を反映し、部屋名を分け、社外視点名を付け直す。①は「外す」で無くなった視点のチェックだけ外す
+    formWithLock_(() => {
+      const d = formRead_(sheet, m);
+      let rows = d.rows.filter(r => !r.del);
+      for (let i = 0; i < rows.length; i++) {
+        if (rows[i].plus) { rows[i].plus = false; rows = formAddPattern_(rows, i); }
+      }
+      rows = formNormalizeRows_(rows, views);
+      formWriteList_(sheet, m, rows, views);
+      const left = new Set(rows.map(r => r.code));
+      const gone = d.rows.filter(r => r.del && r.code && !left.has(r.code)).map(r => r.code);
+      if (gone.length) formSetGrid_(sheet, m, d.codes.filter(c => gone.indexOf(c) < 0));
+    });
   }
+}
+/** 『案件入力』の編集の処理を1つずつ動かす（自動実行のロックとは別のロック。待てなければそのまま動かす） */
+function formWithLock_(fn) {
+  let lock = null;
+  try { lock = LockService.getDocumentLock ? LockService.getDocumentLock() : null; if (lock && !lock.tryLock(20000)) lock = null; } catch (e) { lock = null; }
+  try { fn(); if (typeof SpreadsheetApp !== 'undefined' && SpreadsheetApp.flush) SpreadsheetApp.flush(); }
+  finally { if (lock) lock.releaseLock(); }
 }
 /** メニュー：『案件入力』タブを作り直す（視点マスタを変えたとき。書きかけの内容は消える） */
 function rebuildFormSheet() {
