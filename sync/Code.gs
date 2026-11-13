@@ -110,6 +110,9 @@ const SETTING_KEYS = {
   calcHours: '制作時間の計算に数える時間帯（ベトナム時間）',
   interpMessage: '通訳向けの連絡文',
   manualRun: '今すぐ全部連携（チェックで実行）',
+  autoHours: '自動実行する時間帯（ベトナム時間）',
+  autoBudget: '自動実行の1日の上限（分）',
+  cleanup: '削除依頼・0時間の行を毎日消す',
   lastAuto: '最後の自動実行',
 };
 const SETTING_DEFAULTS = {
@@ -134,6 +137,9 @@ const SETTING_DEFAULTS = {
   calcHours: '8-12,13-17',
   interpMessage: '{社内案件名}案件の資料を共有しますので、翻訳をお願いします。\n⇩サーバーリンク\n{サーバーリンク}\n\n制作時間の計算については{計算期限}までに記入してください。\n{通訳へのメッセージ}',
   manualRun: false,
+  autoHours: '7-19 / 土 7-13 / 日 なし',
+  autoBudget: 60,
+  cleanup: 'する',
   lastAuto: '',
 };
 const SETTING_NOTES = {
@@ -159,6 +165,9 @@ const SETTING_NOTES = {
   manualRun: 'チェックすると、その場で 案件登録→入力シート・転記・工程図への登録 をまとめて動かす（終わるとチェックは外れ、結果は「最後の自動実行」に出る）',
   notifyHours: 'Discord で知らせるのはこの時間帯だけ（例 8-18 ＝ 8時〜18時。時刻はベトナム時間）。曜日ごとに変えるときは「/」で区切って曜日を前に付ける（例 8-18 / 土 8-13 / 日 なし ＝ 平日8〜18時・土曜8〜13時・日曜は送らない）。催促・登録後の変更・削除依頼・読み取り上限のお知らせすべて。時間外の分は、時間帯に入ったら知らせる',
   lastAuto: '15分ごとの自動実行が最後に動いた日時と結果（自動で書き込み）',
+  autoHours: '15分ごとの自動実行を動かす時間帯（ベトナム時間。書き方は「催促する時間帯」と同じ）。時間帯の外は何もしない（Apps Script の1日の実行時間の上限＝90分を超えないため）。時間帯の外でも『案件入力』の「登録」や「今すぐ全部連携」は動く',
+  autoBudget: '15分ごとの自動実行が1日に使ってよい時間（分）。超えたらその日は自動実行を止め、翌日に戻る（Apps Script の上限は1日90分。編集のたびに動く処理の分を残すため 60 分を目安に）',
+  cleanup: '「する」：1日1回（その日の最初の自動実行で）エンジニア入力シートの「削除依頼」にチェックした行と、制作時間を 0 と書いた行の登録を削除する（『登録一覧』は「削除済み」・『削除済み』タブに残るので、「削除」のチェックを外せば戻る）',
 };
 
 const PROP_SERVICE_ACCOUNT = 'SERVICE_ACCOUNT_JSON';
@@ -1880,7 +1889,21 @@ function moveStaffTabRows_(from, to, rowNumbers) {
   sorted.slice().reverse().forEach(r => from.deleteRow(r));
   return sorted.length;
 }
-function autoRun() {
+function autoRun(e) {
+  const manual = !!(e && e.manual); // メニュー・「今すぐ全部連携」から（時間帯・1日の上限に関係なく動かす）
+  const started = Date.now();
+  // 時間帯の外・1日の上限を超えたら、ロックも取らずにすぐ終わる（Apps Script の1日の実行時間を使わないため）
+  if (!manual) {
+    let cfg0 = null;
+    try { cfg0 = readSettings_(); } catch (err) { cfg0 = null; }
+    if (cfg0) {
+      const gate = autoRunGate_(new Date(), cfg0, autoUsedSecs_(new Date()));
+      if (!gate.run) {
+        if (gate.note) { try { writeSettingOnce_('lastAuto', fmtDateTime_(new Date()) + '　' + gate.note); } catch (err) { console.log(gate.note); } }
+        return gate.note || '時間帯の外';
+      }
+    }
+  }
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(5000)) { console.log('ほかの処理が動いているので、今回の自動実行は見送りました'); return '見送り'; }
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1888,6 +1911,10 @@ function autoRun() {
   try {
     const cfg = readSettings_();
     let waitingKeys = [];
+    // 1日1回：入力シートの「削除依頼」と制作時間 0 の行の登録を削除する（その日の最初の自動実行で）
+    if (!manual && cfg.cleanup) {
+      try { const cl = dailyCleanup_(cfg, new Date()); if (cl) parts.push(cl); } catch (err) { parts.push('削除依頼・0時間の削除エラー：' + String(err && err.message || err)); }
+    }
     try { const fq = flushDiscordQueue_(cfg); if (fq) parts.push('時間帯の外の通知 ' + fq + '件を Discord で送った'); } catch (e) { parts.push('Discord 送信エラー：' + String(e && e.message || e)); }
     // 工程図の1日の読み取り上限：止まっている間は工程図を読まない（シートの同期・転記は続ける）。Discord で1回だけ知らせる
     if (fsQuotaBlocked_()) parts.push('工程図の読み取り上限のため、工程図への登録・削除・完了の確認は ' + fmtDateTime_(new Date(fsQuotaUntil_())) + ' ごろまで待ちます');
@@ -1966,8 +1993,75 @@ function autoRun() {
     const line = fmtDateTime_(new Date()) + '　' + parts.join(' ／ ');
     try { writeSetting_(ss, 'lastAuto', line); } catch (e) { console.log(line); }
     lock.releaseLock();
+    if (!manual) { try { autoAddUsedSecs_(new Date(), (Date.now() - started) / 1000); } catch (err) { /* 数えられなくても続ける */ } }
   }
   return parts.join(' ／ ');
+}
+
+// ============ 自動実行の時間帯・1日の上限（2026-11-13） ============
+// Apps Script（個人の Google アカウント）はトリガーで動く時間が1日90分まで。15分ごと×24時間では超えてしまうので、
+// 時間帯の外は動かさず、1日に使った時間を数えて上限（既定 60 分）を超えたらその日は止める。
+const PROP_AUTO_USED = 'AUTO_USED_SECS'; // { day: 'yyyy-MM-dd', secs }
+function vnDay_(now) { return fmtDateTime_(now).slice(0, 10); }
+function autoUsedSecs_(now) {
+  try {
+    const o = JSON.parse(PropertiesService.getScriptProperties().getProperty(PROP_AUTO_USED) || '{}');
+    return o.day === vnDay_(now) ? (Number(o.secs) || 0) : 0;
+  } catch (e) { return 0; }
+}
+function autoAddUsedSecs_(now, secs) {
+  const props = PropertiesService.getScriptProperties();
+  const day = vnDay_(now);
+  props.setProperty(PROP_AUTO_USED, JSON.stringify({ day, secs: Math.round(autoUsedSecs_(now) + Math.max(0, secs)) }));
+}
+/** 動かすか（純ロジック）。戻り値 { run, note } */
+function autoRunGate_(now, cfg, usedSecs) {
+  if (!inNotifyHours_(now, cfg.autoHours)) return { run: false, note: '' };
+  const budget = (Number(cfg.autoBudget) || 60) * 60;
+  if (usedSecs >= budget) return { run: false, note: '今日の自動実行は上限（' + Math.round(budget / 60) + '分）に達したので、明日まで止めています（『案件入力』の「登録」・「今すぐ全部連携」は動きます）' };
+  return { run: true, note: '' };
+}
+/** 『設定』の項目を、同じ内容が入っていなければ書く（上限で止めたときに毎回書かないため） */
+function writeSettingOnce_(key, line) {
+  const props = PropertiesService.getScriptProperties();
+  const tag = 'LAST_GATE_NOTE';
+  const day = vnDay_(new Date());
+  if (props.getProperty(tag) === day + key) return;
+  writeSetting_(SpreadsheetApp.getActiveSpreadsheet(), key, line);
+  props.setProperty(tag, day + key);
+}
+
+// ============ 削除依頼・0時間の行を1日1回消す（2026-11-13） ============
+const PROP_CLEANUP_DAY = 'CLEANUP_DAY';
+/** 入力シート（入力前・制作中）で「削除依頼」にチェック、または制作時間を 0 と書いた行の登録No（純ロジック）。rows＝[{ no, delReq, zero }] */
+function cleanupTargets_(rows) {
+  const out = [];
+  (rows || []).forEach(r => { if (r.no && (r.delReq || r.zero) && out.indexOf(r.no) < 0) out.push(r.no); });
+  return out;
+}
+function dailyCleanup_(cfg, now) {
+  const props = PropertiesService.getScriptProperties();
+  const day = vnDay_(now);
+  if (props.getProperty(PROP_CLEANUP_DAY) === day) return '';
+  props.setProperty(PROP_CLEANUP_DAY, day);
+  const file = SpreadsheetApp.openById(cfg.fileId);
+  const rows = [];
+  [STAFF_TAB_DEFAULT, STAFF_TAB_DOING].forEach(name => {
+    const sheet = file.getSheetByName(name);
+    if (!sheet) return;
+    const hr = findStaffHeaderRow_(sheet);
+    if (hr < 0 || sheet.getLastRow() <= hr) return;
+    const sc = mapStaffColumns_(sheet.getRange(hr, 1, 1, sheet.getLastColumn()).getValues()[0]);
+    if (!sc.regNo) return;
+    const w = Math.max.apply(null, Object.keys(sc).map(k => sc[k]));
+    sheet.getRange(hr + 1, 1, sheet.getLastRow() - hr, w).getValues().forEach(v => {
+      rows.push({ no: trimStr_(v[sc.regNo - 1]), delReq: !!(sc.delReq && isChecked_(v[sc.delReq - 1])), zero: staffZeroHours_(v, sc) });
+    });
+  });
+  const nos = cleanupTargets_(rows);
+  if (!nos.length) return '';
+  const res = deleteRegistrationsCore_(nos);
+  return '削除依頼・0時間の登録を削除 ' + nos.length + '件：' + res.msg.replace(/\n/g, ' ');
 }
 
 /** 工程図の読み取り上限に達していたら、Discord で1回だけ知らせる（戻る時刻ごとに1回） */
@@ -1985,7 +2079,7 @@ function notifyQuotaOnce_() {
 }
 /** メニュー：自動実行を今すぐ1回動かして結果を出す */
 function runAutoNow() {
-  alertOrLog_('自動実行の結果\n\n' + autoRun());
+  alertOrLog_('自動実行の結果\n\n' + autoRun({ manual: true }));
 }
 
 /** 15分ごとの自動実行を設定する（既にあれば作り直す。何度実行しても1つだけ） */
@@ -4356,7 +4450,7 @@ function onAdminEdit(e) {
       const labels = sheet.getRange(1, 1, sheet.getLastRow(), 1).getValues().map(r => trimStr_(r[0]));
       const row = labels.indexOf(SETTING_KEYS.manualRun) + 1;
       if (!row || e.range.getRow() > row || e.range.getLastRow() < row || !isChecked_(sheet.getRange(row, 2).getValue())) return;
-      try { autoRun(); } finally { sheet.getRange(row, 2).setValue(false); }
+      try { autoRun({ manual: true }); } finally { sheet.getRange(row, 2).setValue(false); }
       return;
     }
     // 『案件入力』（縦型フォーム）
@@ -4411,7 +4505,16 @@ function onAdminEdit(e) {
         if (isChecked_(v[rc.del - 1]) && !deleted) delRows.push({ r: r1 + i, v });
         if (!isChecked_(v[rc.del - 1]) && deleted) backRows.push(trimStr_(v[rc.no - 1]));
       });
-      if (delRows.length) { showDeleteDialog_(rc, delRows.map(x => x.v)); return; }
+      // 2026-11-13 から確認の画面は出さず、チェックしたらすぐ削除（外せば戻る）
+      if (delRows.length) {
+        const nos = delRows.map(x => trimStr_(x.v[rc.no - 1])).filter(Boolean);
+        if (!nos.length) { toastOrLog_('登録No の無い行は消せません（その行はそのまま消してください）'); return; }
+        let res;
+        try { res = deleteRegistrations(nos); } catch (err) { res = { ok: false, msg: String(err && err.message || err) }; }
+        if (!res.ok && /ほかの処理/.test(res.msg)) delRows.forEach(x => sheet.getRange(x.r, rc.del).setValue(false)); // 消せなかったらチェックを外す
+        toastOrLog_(res.msg);
+        return;
+      }
       if (backRows.length) {
         const ss0 = e.source || SpreadsheetApp.getActiveSpreadsheet();
         backRows.filter(Boolean).forEach(no => {
@@ -4601,7 +4704,11 @@ function showDeleteDialog_(rc, rows) {
 function deleteRegistrations(nos) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(20000)) return { ok: false, msg: 'ほかの処理が動いています。少し待ってから、もう一度「削除」にチェックしてください' };
-  try {
+  try { return deleteRegistrationsCore_(nos); } finally { lock.releaseLock(); }
+}
+/** 登録を削除する（ロックは呼ぶ側で取る） */
+function deleteRegistrationsCore_(nos) {
+  {
     const cfg = readSettings_();
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const want = (nos || []).map(trimStr_).filter(Boolean);
@@ -4688,8 +4795,6 @@ function deleteRegistrations(nos) {
     if (okNos.length) parts.push('削除しました：' + okNos.join('・') + '（入力シート ' + Array.from(bySheet.values()).reduce((a, l) => a + l.length, 0) + '行' + (fsNote ? '・' + fsNote : '') + '）。管理者用シートの行は「削除済み」として残しました');
     plan.blocked.forEach(b => parts.push('✗ ' + b.no + '：' + b.reason));
     return { ok: !plan.blocked.length, msg: parts.join('\n') };
-  } finally {
-    lock.releaseLock();
   }
 }
 /** 確認の画面で「やめる」：チェックを外す */
@@ -5799,6 +5904,14 @@ function readSettings_() {
     cfg.notifyHours = typeof Utilities !== 'undefined' ? Utilities.formatDate(d, APP_TIME_ZONE, 'M-d') : (d.getMonth() + 1) + '-' + d.getDate();
   }
   cfg.notifyHours = trimStr_(cfg.notifyHours);
+  if (Object.prototype.toString.call(cfg.autoHours) === '[object Date]') {
+    const d2 = cfg.autoHours;
+    cfg.autoHours = typeof Utilities !== 'undefined' ? Utilities.formatDate(d2, APP_TIME_ZONE, 'M-d') : (d2.getMonth() + 1) + '-' + d2.getDate();
+  }
+  cfg.autoHours = trimStr_(cfg.autoHours === undefined ? SETTING_DEFAULTS.autoHours : cfg.autoHours);
+  cfg.autoBudget = parseFloat(cfg.autoBudget);
+  if (!isFinite(cfg.autoBudget) || cfg.autoBudget <= 0) cfg.autoBudget = SETTING_DEFAULTS.autoBudget;
+  cfg.cleanup = !/^(しない|いいえ|off|no|false)$/i.test(trimStr_(cfg.cleanup === undefined ? SETTING_DEFAULTS.cleanup : cfg.cleanup));
   cfg.regMessage = String(cfg.regMessage || '').trim() ? String(cfg.regMessage) : SETTING_DEFAULTS.regMessage;
   cfg.interpMessage = String(cfg.interpMessage || '').trim() ? String(cfg.interpMessage) : SETTING_DEFAULTS.interpMessage;
   cfg.calcMinutes = Math.max(0, parseFloat(cfg.calcMinutes));

@@ -116,7 +116,7 @@ class FakeSpreadsheet {
   getSheetByName(n) { const sh = this.sheets.find(s => s.getName() === n) || null; if (sh) sh.ss = this; return sh; }
   insertSheet(name, idx) { const sh = new FakeSheet(name); if (idx === undefined) this.sheets.push(sh); else this.sheets.splice(idx, 0, sh); return sh; }
   deleteSheet(sh) { this.sheets = this.sheets.filter(x => x !== sh); }
-  toast() {}
+  toast(m) { (this.toasts = this.toasts || []).push(String(m)); }
 }
 
 const NEW_ID = '1BjPKtiHLsYuWcyKLg8FzB4zhmhq5Y5kI8Z2JOXVJuyo';
@@ -338,7 +338,7 @@ function makeEnv({ admin, files, fetchCode = 200, openFails = [], customers = KO
   };
   vm.createContext(ctx);
   const names = ['onAdminEdit', 'renderRegMessage_', 'onStaffEdit', 'syncRegistrationsNow', 'saveDiscordWebhook_', 'inNotifyHours_', 'isReminderDue_', 'calcDeadlineOf_', 'regState_', 'REG_STATE', 'quickSetup', 'createStaffInputTab', 'transferFromStaffSheet', 'autoRun', 'readSettings_', 'readStaffRows_', 'collectSourceRows_', 'findStaffHeaderRow_',
-    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'FORM_NO_COL', 'updateEntryForm', 'normRegNo_', 'formRegGroup_', 'formEnsureEditRow_', 'FORM_L', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_', 'deleteRegistrations', 'cancelDeleteRegistrations', 'writeScheduleToLink_', 'writeAssigneeTabs_', 'withBranchRoom_', 'FORM_BR', 'saveBranchViews', 'taskPackOf_', 'fsReadDay_', 'fsReadsToday_', 'AUTO_READ_BUDGET', 'deliveryYmd_', 'fillStaffDeliveryNames_', 'planRegDeletion_', 'deleteDialogHtml_', 'DELETE_DIALOG_SCRIPT', 'regHeaderMap_', 'fixClientContactAssignees', 'staffZeroHours_', 'staffDuplicatePlan_', 'viewSortKey_', 'sortSheetsByRegistration'];
+    'hasStaffInputHeaders_', 'migrateLegacyStaffSetting_', 'readCompanyCodes_', 'fmtYMD_', 'H', 'SETTING_NOTES', 'STAFF_INPUT_COLUMNS', 'STAFF_INPUT_HINT', 'REG_DIALOG_SCRIPT', 'REG_DIALOG_COPY_FAIL', 'REG_DIALOG_READY', 'changedMessage_', 'entryFormRows_', 'submitEntryForm', 'entryFormHtml_', 'formMap_', 'formListMerge_', 'formAutoExt_', 'formAddPattern_', 'formNormalizeRows_', 'formConfirmHtml_', 'FORM_CONFIRM_SCRIPT', 'submitFormSheet', 'FORM_LC', 'FORM_KEY_COL', 'FORM_NO_COL', 'updateEntryForm', 'normRegNo_', 'formRegGroup_', 'formEnsureEditRow_', 'FORM_L', 'addWorkMinutes_', 'parseWorkHours_', 'readRegInfo_', 'ensureRegSheet_', 'deleteRegistrations', 'cancelDeleteRegistrations', 'writeScheduleToLink_', 'writeAssigneeTabs_', 'withBranchRoom_', 'FORM_BR', 'saveBranchViews', 'taskPackOf_', 'fsReadDay_', 'fsReadsToday_', 'AUTO_READ_BUDGET', 'deliveryYmd_', 'fillStaffDeliveryNames_', 'planRegDeletion_', 'deleteDialogHtml_', 'DELETE_DIALOG_SCRIPT', 'regHeaderMap_', 'fixClientContactAssignees', 'staffZeroHours_', 'staffDuplicatePlan_', 'viewSortKey_', 'sortSheetsByRegistration', 'autoRunGate_', 'cleanupTargets_', 'dailyCleanup_'];
   env.g = vm.runInContext(src + '\n;({' + names.join(',') + '})', ctx);
   // テストは時刻に関係なく Discord を送る（知らせる時間帯を 0-24 に）。時間帯のテストは env.setHours で変える
   env.setHours = (h) => { const st = env.admin.getSheetByName('設定'); const r = st && st.rows.findIndex(x => x[0] === '催促する時間帯（ベトナム時間）'); if (r >= 0) st.set(r + 1, 2, h); };
@@ -679,7 +679,7 @@ test('15分ごとの自動実行：転記 → 15分たった「未送信」だ�
   const { at, set } = linkAt(admin);
 
   // 1回目：転記だけ（転記したばかりの行は15分待つ）
-  let r = env.g.autoRun();
+  let r = env.g.autoRun({ manual: true });
   assert.ok(r.indexOf('転記 追加4（要確認1）') >= 0, r);
   assert.ok(r.indexOf('自動登録 対象なし') >= 0, r);
   assert.equal(env.fs.tasks().length, 0);
@@ -688,7 +688,7 @@ test('15分ごとの自動実行：転記 → 15分たった「未送信」だ�
   // 2回目（15分後）：変わりが無ければ転記は何もしない。未送信の3行を自動登録（要確認は待つ）
   const hourAgo = new Date(Date.now() - 60 * 60000);
   for (let i = 2; i <= 5; i++) set(i, '転記日時', hourAgo);
-  r = env.g.autoRun();
+  r = env.g.autoRun({ manual: true });
   assert.ok(r.indexOf('転記 追加0・更新0') >= 0, r);
   assert.ok(r.indexOf('対象 3 行') >= 0, r);
   assert.equal(at(2, '状態'), '登録済み'); assert.equal(at(2, '工程図へ'), false); assert.ok(String(at(2, '結果')).indexOf('自動登録：') === 0);
@@ -713,7 +713,7 @@ test('15分ごとの自動実行：転記 → 15分たった「未送信」だ�
 
   // 要確認の行は、人が「工程図へ」にチェックすると次の自動実行で登録
   set(4, '工程図へ', true);
-  env.g.autoRun();
+  env.g.autoRun({ manual: true });
   assert.equal(at(4, '状態'), '登録済み');
   assert.equal(env.fs.tasks().length, 6); // EX1（ホワイト・カラー）＋モデル作成＋NEWCO の IN1（ホワイト・カラー）＋ EX1 2回目のホワイト
 
@@ -721,36 +721,36 @@ test('15分ごとの自動実行：転記 → 15分たった「未送信」だ�
   env.props.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/1/abc';
   same(filled(inTab(eng)), [], '要確認の行も登録したら制作中へ');
   doing.set(3, 8, 7); // 制作中に移った RIC.34 EX1（1回目）の White躯体
-  r = env.g.autoRun();
+  r = env.g.autoRun({ manual: true });
   assert.equal(at(2, '状態'), '更新あり');
   assert.ok(r.indexOf('登録後の変更 1件を Discord で確認依頼') >= 0, r);
   const cm = env.discord[env.discord.length - 1];
   assert.ok(cm.startsWith('⚠ 工程図に登録した後で'), cm);
   assert.ok(cm.includes('RIC.34 EX1（White 6→7）'), cm);
   const nDiscord = env.discord.length;
-  env.g.autoRun();
+  env.g.autoRun({ manual: true });
   assert.equal(env.discord.length, nDiscord, '同じ変更で何度も送らない');
   const white = () => env.fs.tasks().find(t => t.externalId === 'RIC34::EX1::1::white');
   assert.equal(white().hours, 6, 'チェックするまで工程図は変えない');
   set(2, '工程図へ', true);
-  env.g.autoRun();
+  env.g.autoRun({ manual: true });
   assert.equal(at(2, '状態'), '登録済み');
   assert.equal(white().hours, 7);
   assert.equal(env.fs.tasks().length, 6, '更新は新しいタスクを作らない');
   // 工程図で RIC.34 EX1（1回目）のタスクがすべて完了 → 『制作済み』へ。2回目（修正）は制作中のまま
   env.fs.tasks().filter(t => String(t.externalId).indexOf('RIC34::EX1::1::') === 0).forEach(t => env.fs.setTask(t.id, { status: 'done' }));
-  r = env.g.autoRun();
+  r = env.g.autoRun({ manual: true });
   assert.ok(r.indexOf('制作済みへ') < 0, '完了は予定のまとめ（アプリが書く）で見る。まとめがまだ古ければ移さない：' + r);
   // アプリが完了を予定のまとめに書く → 次の自動実行で制作済みへ（タスクは読まない）
   const snapDoc = 'workspaces/liebe-asia-team/data/scheduleSnapshot';
   env.fs.docs[snapDoc] = { value: { stringValue: JSON.stringify({ updatedAt: Date.now(), items: { 'RIC34::EX1::1': { s: null, e: null, a: '', st: '完了' }, 'RIC34::EX1::2': { st: '予定' } } }) } };
   const q0 = env.fs.taskReads || 0;
-  r = env.g.autoRun();
+  r = env.g.autoRun({ manual: true });
   assert.ok(r.indexOf('制作済みへ1件') >= 0, r);
   assert.equal(env.fs.taskReads || 0, q0, '完了の確認でタスクを読まない（Firestore の読み取りを使わない）');
   same(filled(eng.getSheetByName('制作済み')), ['RIC.34 EX1']);
   same(filled(doing), ['REN.72 EXM1', 'NEWCO.1 IN1', 'RIC.34 EX1']);
-  r = env.g.autoRun();
+  r = env.g.autoRun({ manual: true });
   assert.ok(r.indexOf('転記 追加0・更新0') >= 0, '移しても取込キー（n回目）は変わらない：' + r);
   assert.equal(at(2, '状態'), '登録済み');
   // 人が『制作済み』から『制作中』へ戻した行は、工程図で完了のままでも自動では制作済みへ戻さない
@@ -760,7 +760,7 @@ test('15分ごとの自動実行：転記 → 15分たった「未送信」だ�
   doing.rows.splice(doing.rows.findIndex((v, i) => i >= 2 && v.every(x => x === '' || x === false)) >= 0 ? doing.rows.findIndex((v, i) => i >= 2 && v.every(x => x === '' || x === false)) : doing.rows.length, 0, moved);
   doneTab.deleteRow(dIdx + 1);
   assert.ok(JSON.parse(env.props.DONE_MOVED_KEYS).includes('RIC34::EX1::1'));
-  r = env.g.autoRun();
+  r = env.g.autoRun({ manual: true });
   assert.ok(r.indexOf('制作済みへ') < 0, '戻した行は移さない：' + r);
   assert.ok(filled(doing).includes('RIC.34 EX1'));
 
@@ -769,9 +769,9 @@ test('15分ごとの自動実行：転記 → 15分たった「未送信」だ�
   const row = st.rows.findIndex(x => x[0] === '自動登録') + 1;
   st.set(row, 2, 'しない');
   put(7, ['RIC', 34, 'マンション', LINK, NEWR, 'IN3', '', 2, 1, 0, '']);
-  env.g.autoRun();
+  env.g.autoRun({ manual: true });
   set(6, '転記日時', hourAgo);
-  r = env.g.autoRun();
+  r = env.g.autoRun({ manual: true });
   assert.ok(r.indexOf('自動登録はしない設定') >= 0, r);
   assert.equal(at(6, '状態'), '未送信');
 });
@@ -870,7 +870,7 @@ test('案件登録 → 入力シートへ写す → 翻訳済み → 2時間で 
   tab.set(3, sh.indexOf('Color') + 1, 2.5);
   tab.set(3, sh.indexOf('作業の分け方') + 1, 'White＝躯体2h／家具1h');
   tab.set(3, sh.indexOf('時間入力者') + 1, 'Tú Mĩ');
-  env.g.autoRun();
+  env.g.autoRun({ manual: true });
   assert.equal(R(2, '時間入力者'), 'Tú Mĩ');
   assert.ok(isDate(R(2, '時間入力日時')) && isDate(S('時間入力日時')), '時間入力日時が自動で入る');
   assert.equal(R(2, '状態'), '時間入力済み');
@@ -1162,7 +1162,7 @@ test('『案件登録』は入力専用：「登録」にチェックした行�
   assert.equal(EV(2, '登録'), false);
   assert.ok(String(R(2, '通訳向け連絡文')).includes('REN.50案件の資料を共有しますので') && R(3, '通訳向け連絡文') === R(2, '通訳向け連絡文'), '同じ案件・同じ日の視点は1通');
   // もう一度チェックしても二重に登録しない
-  env.g.autoRun();
+  env.g.autoRun({ manual: true });
   assert.equal(staffRows(), before + 2);
   assert.equal(reg.rows.filter(r => /^R\d{4}$/.test(r[rh.indexOf('登録No')] || '')).length, 2);
   // Discord の確認文（純ロジック）
@@ -1576,25 +1576,17 @@ test('登録の削除：エンジニアの削除依頼 →『登録一覧』に�
   env.g.syncRegistrationsNow();
   assert.equal(env.discord.length, nd, '同じ依頼で何度も送らない');
 
-  // 管理者が「削除」にチェック → 確認の画面（まだ何も消さない。チェックは付いたまま）
+  // 管理者が「削除」にチェック → 確認の画面は出さず、すぐ削除（入力シートの行と工程図の作業だけ消す。管理者用シートの行は残る）
   env.dialogs.length = 0;
   setR(2, '削除', true);
   env.g.onAdminEdit({ range: reg.getRange(2, rh.indexOf('削除') + 1), source: admin });
-  assert.equal(env.dialogs.length, 1);
-  const html = env.dialogs[0].html;
-  assert.ok(html.includes('R0001') && html.includes('削除依頼あり') && html.includes('チェックを外すと'), html.slice(0, 600));
+  assert.equal(env.dialogs.length, 0, '確認の画面は出さない');
+  // 確認の画面の HTML は残っている（使わないが壊れていないこと）
+  const html = env.g.deleteDialogHtml_([{ no: 'R0001', label: 'x', state: '', req: true }]);
   new vm.Script(html.split('<script>')[1].split('</script>')[0]);
   assert.ok(!html.split('<script>')[1].includes('\\'), '画面のスクリプトにバックスラッシュが無い');
-  assert.equal(R(2, '削除'), true);
-  // 「やめる」→ チェックが外れる
-  env.g.cancelDeleteRegistrations(['R0001']);
-  assert.equal(R(2, '削除'), false);
-  setR(2, '削除', true);
-
-  // 「削除する」：入力シートの行と工程図の作業だけ消す。管理者用シートの行は残る（登録一覧は削除済み・連携は対象外）
-  const res = env.g.deleteRegistrations(['R0001']);
-  assert.equal(res.ok, true, res.msg);
-  assert.ok(res.msg.includes('削除しました：R0001') && res.msg.includes('工程図の作業 1件を削除'), res.msg);
+  const res = { ok: true, msg: '削除しました：R0001（工程図の作業 1件を削除）' };
+  assert.ok((admin.toasts || []).some(t => t.includes('削除しました：R0001') && t.includes('工程図の作業 1件を削除')), JSON.stringify(admin.toasts));
   same([R(2, '登録No'), R(2, '状態'), R(2, '削除')], ['R0001', '削除済み', true], '『登録一覧』の行は残る');
   assert.equal(rowOf('R0001'), 0, '入力シートから消える');
   assert.ok(rowOf('R0002') > 0);
@@ -1750,23 +1742,23 @@ test('工程図の1日の読み取り上限（429）：戻るまで工程図を�
   ['会社コード', '案件番号', '社外案件名', '新規or修正', '視点', 'サーバーリンク', 'White', 'Color'].forEach((h, j) => setR(2, h, ['RIC', 34, 'マンション', NEWR, 'EX1', LINK, 3, 2][j]));
   env.g.syncRegistrationsNow();
   env.fsQuota = true;
-  let r = env.g.autoRun();
+  let r = env.g.autoRun({ manual: true });
   const { at, set } = linkAt(admin);
   assert.equal(at(2, '取込キー'), 'RIC34::EX1::1', 'シートの転記は続ける：' + r);
   set(2, '転記日時', new Date(Date.now() - 3600000));
-  r = env.g.autoRun();
+  r = env.g.autoRun({ manual: true });
   assert.ok(r.includes('読み取り上限'), r);
   assert.equal(at(2, '状態'), '未送信', '上限の間は送らない');
   const quotaMsgs = () => env.discord.filter(m => m.includes('読み取り上限')).length;
   assert.equal(quotaMsgs(), 1, 'Discord で知らせる');
-  env.g.autoRun();
+  env.g.autoRun({ manual: true });
   assert.equal(quotaMsgs(), 1, '何度も知らせない');
   assert.ok(Number(env.props.FS_QUOTA_UNTIL) > Date.now());
   // 戻った
   env.fsQuota = false;
   env.props.FS_QUOTA_UNTIL = String(Date.now() - 1000);
   env.fs.listAll = 0;
-  r = env.g.autoRun();
+  r = env.g.autoRun({ manual: true });
   assert.equal(at(2, '状態'), '登録済み', r);
   assert.equal(env.fs.listAll || 0, 0, '全タスクの一覧は読まない（案件のタスクだけ runQuery で読む）');
   same(env.fs.tasks().map(t => t.externalId).sort(), ['RIC34::EX1::1::color', 'RIC34::EX1::1::white']);
@@ -1867,10 +1859,10 @@ test('Discord は知らせる時間帯（既定 8-18）の中だけ。外の通�
   assert.equal(env.discord.length, n0, '時間帯の外は送らない');
   assert.ok(msg.includes('時間帯に入ったら'), msg);
   assert.equal(JSON.parse(env.props.DISCORD_QUEUE).length, 1);
-  env.g.autoRun();
+  env.g.autoRun({ manual: true });
   assert.equal(env.discord.length, n0, 'まだ時間帯の外');
   env.setHours('0-24');
-  const r = env.g.autoRun();
+  const r = env.g.autoRun({ manual: true });
   assert.ok(r.includes('時間帯の外の通知 1件'), r);
   assert.ok(env.discord[env.discord.length - 1].includes('削除依頼'), '貯めた通知を送る');
   assert.ok(!('DISCORD_QUEUE' in env.props));
@@ -1974,22 +1966,22 @@ test('連携スクリプトの読み取りの目安：読んだ件数を数え�
   ['会社コード', '案件番号', '社外案件名', '新規or修正', '視点', 'サーバーリンク', 'White', 'Color'].forEach((h, j) => setR(2, h, ['RIC', 34, 'マンション', NEWR, 'EX1', LINK, 3, 2][j]));
   env.g.syncRegistrationsNow();
   const n0 = env.g.fsReadsToday_();
-  env.g.autoRun();
+  env.g.autoRun({ manual: true });
   assert.ok(env.g.fsReadsToday_() > n0, '読んだ件数を数える');
   const { at, set } = linkAt(admin);
   set(2, '転記日時', new Date(Date.now() - 3600000));
   env.props.FS_READS = JSON.stringify({ day: env.g.fsReadDay_(), n: env.g.AUTO_READ_BUDGET });
   const q0 = env.fs.taskReads || 0;
-  const r = env.g.autoRun();
+  const r = env.g.autoRun({ manual: true });
   assert.ok(r.includes('目安'), r);
   assert.equal(at(2, '状態'), '未送信', '目安を超えたら自動では送らない');
   assert.equal(env.fs.taskReads || 0, q0, '工程図のタスクを読まない');
   assert.equal(env.discord.filter(m => m.includes('目安')).length, 1, 'Discord で1回知らせる');
-  env.g.autoRun();
+  env.g.autoRun({ manual: true });
   assert.equal(env.discord.filter(m => m.includes('目安')).length, 1, '何度も知らせない');
   // 次の日（太平洋時間）になれば戻る
   env.props.FS_READS = JSON.stringify({ day: '2000-01-01', n: 99999 });
-  env.g.autoRun();
+  env.g.autoRun({ manual: true });
   assert.equal(at(2, '状態'), '登録済み');
 });
 
@@ -2005,10 +1997,10 @@ test('タスクのまとめ保存：スクリプトの割り振りはアプリ�
   const rh = reg.header();
   ['会社コード', '案件番号', '社外案件名', '新規or修正', '視点', 'サーバーリンク', 'White', 'Color'].forEach((h, j) => reg.set(2, rh.indexOf(h) + 1, ['RIC', 34, 'マンション', NEWR, 'EX1', LINK, 3, 2][j]));
   env.g.syncRegistrationsNow();
-  env.g.autoRun();
+  env.g.autoRun({ manual: true });
   const { at, set } = linkAt(admin);
   set(2, '転記日時', new Date(Date.now() - 3600000));
-  env.g.autoRun();
+  env.g.autoRun({ manual: true });
   assert.equal(at(2, '状態'), '登録済み');
   same(env.fs.tasks().map(t => t.externalId).sort(), ['RIC34::EX1::1::color', 'RIC34::EX1::1::white']);
   assert.equal(Object.keys(env.fs.docs).filter(k => k.indexOf('/tasks/') >= 0).length, 0, '旧 tasks には書かない');
@@ -2400,6 +2392,47 @@ test('入力シートに同じ登録No の行が何重にもできたとき：�
   const msg = env.g.syncRegistrationsNow();
   assert.ok(msg.includes('重なった行を消した 2件'), msg);
   assert.equal(tab.rows.filter(v => v && v[C('登録No') - 1] === 'R0001').length, 1, '1行だけ残る');
+});
+
+test('自動実行の時間帯・1日の上限：時間帯の外と上限超えは動かさない。手で動かす分は動く', () => {
+  const admin = adminSheet();
+  const eng = engineerFile();
+  const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
+  const cfg = { autoHours: '7-19 / 土 7-13 / 日 なし', autoBudget: 60 };
+  const at = (d, h, m = 0) => new Date(2026, 10, d, h, m); // 2026-11-13 は金曜
+  same(env.g.autoRunGate_(at(13, 8), cfg, 0).run, true, '金曜8時は動く');
+  same(env.g.autoRunGate_(at(13, 20, 30), cfg, 0).run, false, '金曜20時半は動かない');
+  same(env.g.autoRunGate_(at(14, 14), cfg, 0).run, false, '土曜14時は動かない');
+  same(env.g.autoRunGate_(at(15, 10), cfg, 0).run, false, '日曜は動かない');
+  const g = env.g.autoRunGate_(at(13, 10), cfg, 3600);
+  same([g.run, g.note.includes('上限（60分）')], [false, true], '60分使ったら止める');
+  same(env.g.cleanupTargets_([{ no: 'R1', delReq: true }, { no: 'R2', zero: true }, { no: 'R3' }, { no: '', zero: true }, { no: 'R1', zero: true }]), ['R1', 'R2']);
+});
+
+test('1日1回：入力シートの「削除依頼」と制作時間 0 の行の登録を削除する（『削除』のチェックを外せば戻る）', () => {
+  const admin = adminSheet();
+  const eng = engineerFile();
+  const env = makeEnv({ admin, files: { [NEW_ID]: eng } });
+  env.g.quickSetup();
+  const reg = admin.getSheetByName('登録一覧');
+  const rh = reg.header();
+  const setR = (r, name, v) => reg.set(r, rh.indexOf(name) + 1, v);
+  const R = (r, name) => reg.rows[r - 1][rh.indexOf(name)];
+  [2, 3, 4].forEach((r, k) => ['会社コード', '案件番号', '新規or修正', '視点', 'サーバーリンク'].forEach((h, j) => setR(r, h, ['SOCIAL', 4, NEWR, 'INE' + (k + 1), LINK][j])));
+  env.g.syncRegistrationsNow();
+  const tab = inTab(eng);
+  const sh = tab.header(2).map(h => h.split('\n')[0]);
+  const C = (name) => sh.indexOf(name) + 1;
+  const rowOf = (no) => tab.rows.findIndex(v => v && v[C('登録No') - 1] === no) + 1;
+  tab.set(rowOf('R0001'), C('削除依頼'), true);
+  tab.set(rowOf('R0002'), C('Color'), 0);
+  tab.set(rowOf('R0003'), C('Color'), 1.5);
+  const cfg = env.g.readSettings_();
+  const msg = env.g.dailyCleanup_(cfg, new Date());
+  assert.ok(msg.includes('削除 2件'), msg);
+  same([rowOf('R0001'), rowOf('R0002'), rowOf('R0003') > 0], [0, 0, true], '削除依頼と 0 の行だけ消える');
+  same([R(2, '状態'), R(3, '状態'), R(2, '削除')], ['削除済み', '削除済み', true]);
+  assert.equal(env.g.dailyCleanup_(cfg, new Date()), '', '同じ日は2回動かない');
 });
 
 console.log(`\n${passed} tests passed`);
