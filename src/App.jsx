@@ -18,7 +18,8 @@ import { MaintenanceSettings } from './components/MaintenanceSettings.jsx';
 import { InputView } from './views/InputView.jsx';
 import { EndPromptModal } from './components/modals.jsx';
 import { LoadingScreen } from './components/LoadingScreen.jsx';
-import { useScheduleSnapshot } from './lib/useScheduleSnapshot.js';
+import { useScheduleSnapshot, markLocalTaskEdit } from './lib/useScheduleSnapshot.js';
+import { planTaskUpserts } from './lib/taskDiff.js';
 // 毎日使う「案件」タブ以外のビューは、開いたときに読み込む（初回ロードを軽くする）
 const MessageView = lazy(() => import('./views/MessageView.jsx').then(m => ({ default: m.MessageView })));
 const DoneView = lazy(() => import('./views/DoneView.jsx').then(m => ({ default: m.DoneView })));
@@ -179,6 +180,8 @@ export default function App() {
 
   // 常に最新の tasks を参照するための ref（複数端末の同時編集で書き込み元になる）
   const tasksRef = useRef([]);
+  // Firestore に保存されているタスク（id → タスク。migrateTask 済み・priority は振り直す前）。購読のたびに置き換える
+  const persistedTasksRef = useRef(new Map());
 
   useEffect(() => {
     if (!auth.allowed) return;
@@ -189,6 +192,8 @@ export default function App() {
     unsubTasks = tasksStore.subscribe(
       (arr, meta) => {
         const migrated = arr.map(migrateTask);
+        // 保存されている値（振り直す前の priority）。saveTasks が差分を出すときに使う（src/lib/taskDiff.js）
+        persistedTasksRef.current = new Map(migrated.map(t => [t.id, t]));
         const normalized = normalizePriorities(migrated);
         setTasks(normalized);
         tasksRef.current = normalized;
@@ -559,7 +564,9 @@ export default function App() {
         try { const p = JSON.parse(v.value); return Array.isArray(p) ? p : []; } catch (e) { return []; }
       };
       // タスク
-      const normalized = normalizePriorities((rawTasks || []).map(migrateTask));
+      const migratedRaw = (rawTasks || []).map(migrateTask);
+      persistedTasksRef.current = new Map(migratedRaw.map(t => [t.id, t]));
+      const normalized = normalizePriorities(migratedRaw);
       setTasks(normalized);
       tasksRef.current = normalized;
       setTasksLoaded(true);
@@ -592,23 +599,22 @@ export default function App() {
     }
   };
 
-  // 差分書き込み：updater が返した newTasks と現在の tasksRef を比較し、
-  // 変更・追加されたタスクだけを per-doc で Firestore に書き込む。
+  // 差分書き込み：updater が返した newTasks と「保存されている値」（persistedTasksRef）を比較し、
+  // 変更・追加されたタスクだけを Firestore に書き込む。
   // 「ローカルに無い＝相手端末で追加されたタスク」を勝手に削除しないので、
   // 端末間で表示が乖離しない（明示削除は removeTask を使う）。
+  // 優先順位の振り直し（normalizePriorities）だけで変わったタスクは、並び順が保存されている値と同じなら書かない
+  // （完了1回で同じ会社の数百件を書き直し、1日の書き込み上限に届いたため。2026-11-26。src/lib/taskDiff.js）
   const saveTasks = async (updater) => {
     const prev = tasksRef.current;
     const newTasks = typeof updater === 'function' ? updater(prev) : updater;
     setTasks(newTasks); // 楽観的に画面を即更新
     tasksRef.current = newTasks;
 
-    const prevMap = new Map(prev.map(t => [t.id, t]));
-    const upserts = [];
-    for (const t of newTasks) {
-      const old = prevMap.get(t.id);
-      if (!old || JSON.stringify(old) !== JSON.stringify(t)) upserts.push(t);
-    }
+    const upserts = planTaskUpserts(persistedTasksRef.current, newTasks, normalizePriorities);
     if (upserts.length === 0) return;
+    upserts.forEach(t => persistedTasksRef.current.set(t.id, t));
+    markLocalTaskEdit();
     try { await tasksStore.batch(upserts, []); }
     catch (e) { console.error('タスク保存エラー:', e); }
   };
@@ -690,7 +696,13 @@ export default function App() {
   // key は視点キー（assignee::projectName::viewpointName）
   // updates: [[key, patch], ...]（まとめて1回で保存。1件ずつ保存すると後の保存が前の分を上書きする）
   const setEndPromptFor = (updates) => {
-    const eps = { ...(settings.endPromptState || {}) };
+    // 期限の切れた「確認中」は使われない（overdueViewpoints は snoozedUntil が今より後のものしか見ない）ので、保存のたびに捨てる。
+    // settings は1ドキュメントで、大きいほど1回の保存の書き込みユニットが増えるため（2026-11-26）
+    const nowTs = Date.now();
+    const eps = {};
+    for (const [key, v] of Object.entries(settings.endPromptState || {})) {
+      if (v && v.snoozedUntil && v.snoozedUntil > nowTs) eps[key] = v;
+    }
     for (const [key, patch] of updates) eps[key] = { ...(eps[key] || {}), ...patch };
     saveSettings({ ...settings, endPromptState: eps });
   };

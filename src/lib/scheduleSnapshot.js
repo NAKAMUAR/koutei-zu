@@ -88,3 +88,15 @@ export function buildAssigneePlan(scheduled, now = new Date(), days = 14) {
   rows.sort((x, y) => (x.a < y.a ? -1 : x.a > y.a ? 1 : (x.b || 0) - (y.b || 0)));
   return { from: ymdOf(start), days, rows };
 }
+
+/**
+ * 保存してあるまとめ（data/scheduleSnapshot の value。updatedAt つきの JSON 文字列）と、計算した中身（{ items, plan } の JSON）が
+ * 同じか（updatedAt は見ない）。同じなら書かない（2026-11-26・書き込みを減らすため）
+ */
+export function sameSnapshotContent(storedValue, json) {
+  try {
+    const a = JSON.parse(storedValue);
+    const b = JSON.parse(json);
+    return JSON.stringify({ items: a.items, plan: a.plan }) === JSON.stringify({ items: b.items, plan: b.plan });
+  } catch (e) { return false; }
+}
